@@ -1,0 +1,37 @@
+{
+  "name": "shoplist-fullstack",
+  "version": "1.0.0",
+  "description": "ShopList - Full Stack Inventory Management Application",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "setup": "npm run install:all && npm run backend:migrate",
+    "install:all": "npm install && npm run backend:install && npm run frontend:install",
+    "backend:install": "cd backend && npm install",
+    "frontend:install": "cd frontend && npm install",
+    "backend:start": "cd backend && npm start",
+    "backend:dev": "cd backend && npm run dev",
+    "backend:migrate": "cd backend && npm run db:migrate",
+    "frontend:start": "cd frontend && npm start",
+    "frontend:dev": "cd frontend && npm run dev",
+    "dev": "concurrently \"npm run backend:dev\" \"npm run frontend:dev\"",
+    "start": "concurrently \"npm run backend:start\" \"npm run frontend:start\"",
+    "clean": "rm -rf node_modules backend/node_modules frontend/node_modules",
+    "test": "echo 'Running tests...' && npm run backend:test && npm run frontend:test",
+    "backend:test": "cd backend && npm test",
+    "frontend:test": "cd frontend && npm test"
+  },
+  "keywords": ["inventory", "management", "fullstack", "express", "vanilla-js"],
+  "author": "ShopList Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

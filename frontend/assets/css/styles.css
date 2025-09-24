@@ -1,0 +1,517 @@
+/* Order Management Dashboard Styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f5f7fa;
+    color: #333;
+    line-height: 1.4;
+}
+
+.dashboard {
+    display: flex;
+    min-height: 100vh;
+}
+
+/* Sidebar */
+.sidebar {
+    width: 280px;
+    background: #2c3e50;
+    color: white;
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    height: 100vh;
+    left: 0;
+    top: 0;
+    z-index: 100;
+}
+
+.sidebar-header {
+    padding: 20px;
+    border-bottom: 1px solid #34495e;
+}
+
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.logo-icon {
+    width: 40px;
+    height: 40px;
+    background: #3498db;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 18px;
+    color: white;
+}
+
+.sidebar-filters {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+}
+
+.filter-section {
+    margin-bottom: 30px;
+}
+
+.filter-section h3 {
+    font-size: 11px;
+    font-weight: 600;
+    color: #bdc3c7;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+}
+
+.checkbox-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    color: #ecf0f1;
+}
+
+.checkbox-item input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #3498db;
+}
+
+.status-filters {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.status-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.status-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.status-item.active {
+    background: #3498db;
+}
+
+.status-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: #ecf0f1;
+}
+
+.status-count {
+    font-size: 12px;
+    font-weight: 600;
+    background: #34495e;
+    padding: 2px 8px;
+    border-radius: 12px;
+    min-width: 24px;
+    text-align: center;
+}
+
+.status-count.warning {
+    background: #e74c3c;
+}
+
+.status-count.primary {
+    background: #2980b9;
+}
+
+.filter-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.filter-control label {
+    font-size: 12px;
+    color: #bdc3c7;
+    margin-bottom: 6px;
+    display: block;
+}
+
+.filter-control select {
+    width: 100%;
+    padding: 8px;
+    background: #34495e;
+    border: 1px solid #4a5f7a;
+    border-radius: 4px;
+    color: white;
+    font-size: 12px;
+}
+
+.sidebar-nav {
+    padding: 20px;
+    border-top: 1px solid #34495e;
+}
+
+.nav-icons {
+    display: flex;
+    justify-content: space-around;
+}
+
+.nav-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #bdc3c7;
+    text-decoration: none;
+    border-radius: 8px;
+    transition: all 0.2s;
+}
+
+.nav-icon:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+}
+
+/* Main Content */
+.main-content {
+    flex: 1;
+    margin-left: 280px;
+    background: white;
+}
+
+.top-header {
+    background: #3498db;
+    color: white;
+    padding: 16px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.breadcrumb .current {
+    font-weight: 600;
+}
+
+.breadcrumb i {
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.search-container {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.search-input {
+    padding: 8px 12px 8px 36px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    font-size: 14px;
+    width: 200px;
+}
+
+.search-input::placeholder {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.search-container i {
+    position: absolute;
+    left: 12px;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 14px;
+}
+
+.search-dropdown {
+    background: none;
+    border: none;
+    color: white;
+    padding: 8px;
+    cursor: pointer;
+    margin-left: -1px;
+    border-left: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    text-transform: uppercase;
+    transition: all 0.2s;
+}
+
+.btn-primary {
+    background: #2ecc71;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #27ae60;
+}
+
+.btn-ghost {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.btn-ghost:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+/* Orders Table */
+.orders-table-container {
+    padding: 0;
+    background: white;
+}
+
+.orders-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.orders-table thead {
+    background: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.orders-table th {
+    padding: 12px 16px;
+    text-align: left;
+    font-weight: 600;
+    color: #6c757d;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.orders-table td {
+    padding: 16px;
+    border-bottom: 1px solid #f1f3f4;
+    vertical-align: top;
+}
+
+.orders-table tbody tr:hover {
+    background: #f8f9fa;
+}
+
+.checkbox-col {
+    width: 40px;
+    text-align: center;
+}
+
+.checkbox-col input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #3498db;
+}
+
+.icon-col {
+    width: 50px;
+    text-align: center;
+}
+
+.order-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 14px;
+    color: white;
+    margin: 0 auto;
+}
+
+.order-icon.amazon {
+    background: #ff9900;
+}
+
+.order-icon.magento {
+    background: #ee672f;
+}
+
+.order-icon.ebay {
+    background: #0064d2;
+}
+
+.order-icon.shopify {
+    background: #96bf48;
+}
+
+.order-icon.woocommerce {
+    background: #96588a;
+}
+
+.order-icon.phone {
+    background: #6c757d;
+    font-size: 16px;
+}
+
+.date-col {
+    width: 100px;
+}
+
+.date {
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 2px;
+}
+
+.time {
+    color: #6c757d;
+    font-size: 12px;
+}
+
+.status-col {
+    width: 120px;
+}
+
+.status {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.status.ready {
+    background: #d4edda;
+    color: #155724;
+}
+
+.items-col {
+    min-width: 300px;
+}
+
+.order-id {
+    color: #3498db;
+    font-weight: 600;
+    margin-bottom: 4px;
+    font-size: 12px;
+}
+
+.item-desc {
+    color: #6c757d;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.customer-col {
+    width: 150px;
+}
+
+.customer-name {
+    font-weight: 500;
+    color: #333;
+}
+
+.country-col {
+    width: 50px;
+    text-align: center;
+    font-weight: 600;
+    color: #6c757d;
+}
+
+.actions-col {
+    width: 50px;
+    text-align: center;
+}
+
+.actions-col i {
+    color: #6c757d;
+    cursor: pointer;
+}
+
+.actions-col i:hover {
+    color: #333;
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+    .sidebar {
+        width: 240px;
+    }
+
+    .main-content {
+        margin-left: 240px;
+    }
+}
+
+@media (max-width: 768px) {
+    .sidebar {
+        transform: translateX(-100%);
+        transition: transform 0.3s;
+    }
+
+    .sidebar.open {
+        transform: translateX(0);
+    }
+
+    .main-content {
+        margin-left: 0;
+    }
+
+    .orders-table-container {
+        overflow-x: auto;
+    }
+
+    .orders-table {
+        min-width: 800px;
+    }
+
+    .header-actions {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .search-input {
+        width: 150px;
+    }
+}

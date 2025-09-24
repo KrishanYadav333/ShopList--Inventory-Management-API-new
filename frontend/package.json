@@ -1,0 +1,19 @@
+{
+  "name": "shoplist-frontend",
+  "version": "1.0.0",
+  "description": "ShopList Frontend - Modern Inventory Management Interface",
+  "main": "index.html",
+  "scripts": {
+    "start": "npx http-server -p 8080 -c-1",
+    "dev": "npx live-server --port=8080 --no-browser --watch=assets,index.html",
+    "build": "echo 'No build step required for vanilla JS'",
+    "serve": "npx http-server -p 8080 -c-1 -o"
+  },
+  "keywords": ["frontend", "inventory", "management", "vanilla-js", "html", "css"],
+  "author": "ShopList Team",
+  "license": "MIT",
+  "devDependencies": {
+    "live-server": "^1.2.2",
+    "http-server": "^14.1.1"
+  }
+}
