@@ -12,6 +12,31 @@
   --soft: #f8f9fa;
 }
 body { -webkit-font-smoothing: antialiased; }
+
+/* Contrast fixes. The original palette failed WCAG 2.2 AA (white on #3498db is 3.15:1, white on
+   #2ecc71 is 2.10:1). These are the nearest colours that reach 4.5:1, so the look is unchanged. */
+:root { --blue: #2878b5; --blue-dark: #1f5f8f; --green: #1e8449; --green-dark: #196f3d; --link: #226fa8; }
+.top-header, .logo-icon, .status-item.active, .menu-fab { background: var(--blue); }
+.status-item.active .status-label { color: #fff; }
+.status-count.primary { background: #1b5d8c; }
+.status-count.warning { background: #c0392b; }
+.btn-primary { background: var(--green); }
+.btn-primary:hover:not(:disabled) { background: var(--green-dark); }
+.btn-ghost { background: rgba(0, 0, 0, 0.18); border-color: rgba(255, 255, 255, 0.55); }
+.btn-ghost:hover { background: rgba(0, 0, 0, 0.3); }
+.search-input { background: rgba(0, 0, 0, 0.18); border-color: rgba(255, 255, 255, 0.55); }
+.search-input::placeholder { color: rgba(255, 255, 255, 0.88); }
+.search-container svg { color: rgba(255, 255, 255, 0.9); }
+.top-select { background: rgba(0, 0, 0, 0.18); border-color: rgba(255, 255, 255, 0.55); }
+.order-id, .link-name:hover { color: var(--link); }
+.breadcrumb h1.current { font-size: inherit; font-weight: 600; margin: 0; }
+.skip { position: absolute; left: -9999px; top: 8px; background: #fff; color: #000; padding: 10px 14px; border-radius: 6px; z-index: 1000; font-weight: 600; }
+.skip:focus { left: 8px; }
+main:focus { outline: none; }
+:root { --muted: #5a6570; --red: #b83227; }
+.time, .hint, .tag, .item-desc, .orders-table th { color: var(--muted); }
+.tag-blue { color: #1b5d8c; }
+.delta.down { color: #c0392b; }
 button { font-family: inherit; }
 :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .top-header :focus-visible, .sidebar :focus-visible { outline-color: #fff; }
@@ -57,7 +82,7 @@ button.nav-icon { background: none; border: 0; cursor: pointer; }
 .status { display: inline-block; white-space: nowrap; }
 .status.low { background: #fff3cd; color: #856404; }
 .status.out { background: #f8d7da; color: #721c24; }
-.link-name { background: none; border: 0; padding: 0; font: inherit; color: var(--ink); font-weight: 500; cursor: pointer; text-align: left; }
+.link-name { background: none; border: 0; padding: 3px 0; min-height: 24px; font: inherit; color: var(--ink); font-weight: 500; cursor: pointer; text-align: left; }
 .link-name:hover { color: var(--blue); text-decoration: underline; }
 .qty { font-weight: 700; font-size: 15px; }
 .tag { display: inline-block; font-size: 11px; background: #eef2f5; color: var(--muted); border-radius: 10px; padding: 1px 8px; margin: 3px 4px 0 0; }

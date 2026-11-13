@@ -79,6 +79,7 @@ export function Shell() {
 
   return (
     <div className="dashboard">
+      <a className="skip" href="#main">Skip to content</a>
       <aside className={`sidebar${menuOpen ? ' open' : ''}`}>
         <div className="sidebar-header">
           <div className="logo">
@@ -151,7 +152,7 @@ export function Shell() {
       </aside>
       {menuOpen && <div className="scrim" onClick={() => setMenuOpen(false)} />}
 
-      <main className="main-content">
+      <main className="main-content" id="main" tabIndex={-1}>
         {!online && <div className="banner banner-warn" role="status">You are offline. Showing saved data; changes are disabled until you reconnect.</div>}
         <Outlet context={ctx} />
       </main>

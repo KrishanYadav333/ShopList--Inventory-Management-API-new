@@ -112,7 +112,7 @@ When a save returns `412`, the form does not discard the user's work. It shows a
 - **Tokens:** colors, spacing, radii, shadows and type as CSS variables, with light and dark themes. Theme follows the system setting and can be overridden.
 - **Type:** system font stack for speed; tabular numbers for all quantities and money so columns line up.
 - **Spacing:** 4 px base grid.
-- **Color:** one brand accent. Status colors (green in stock, amber low, red out) are always paired with an icon and text, never color alone.
+- **Color:** the dashboard palette, with the blue (`#2878b5`), green (`#1e8449`) and red (`#b83227`) darkened slightly from the original so white text reaches 4.5:1 (WCAG AA); the original blue measured 3.15:1. One brand accent. Status colors (green in stock, amber low, red out) are always paired with an icon and text, never color alone.
 - **Components:** button, input, select, dialog, toast, table, status pill, tag, command palette, stepper and chips. Plain React and CSS; the dialog traps focus and returns it on close.
 - **Motion:** 150 to 200 ms ease-out for feedback; respects `prefers-reduced-motion`.
 

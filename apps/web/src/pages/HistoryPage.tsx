@@ -20,7 +20,7 @@ export function HistoryPage() {
   return (
     <>
       <header className="top-header">
-        <div className="breadcrumb"><span>Inventory</span><Icon name="chevron" size={12} /><span className="current">Stock history</span></div>
+        <div className="breadcrumb"><span>Inventory</span><Icon name="chevron" size={12} /><h1 className="current">Stock history</h1></div>
         <div className="header-actions">
           <select className="top-select" aria-label="Reason" value={reason} onChange={(e) => setReason(e.target.value)}>
             <option value="">All reasons</option>

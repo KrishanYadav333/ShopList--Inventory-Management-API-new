@@ -47,7 +47,7 @@ export function SettingsPage() {
 
   return (
     <>
-      <header className="top-header"><div className="breadcrumb"><span>Inventory</span><Icon name="chevron" size={12} /><span className="current">Settings</span></div></header>
+      <header className="top-header"><div className="breadcrumb"><span>Inventory</span><Icon name="chevron" size={12} /><h1 className="current">Settings</h1></div></header>
       <div className="settings">
         <section className="card">
           <h2>Organization</h2>

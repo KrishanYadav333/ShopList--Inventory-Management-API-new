@@ -91,7 +91,7 @@ export function ProductsPage() {
         <div className="breadcrumb">
           <span>Inventory</span>
           <Icon name="chevron" size={12} />
-          <span className="current">Products</span>
+          <h1 className="current">Products</h1>
         </div>
         <div className="header-actions">
           <div className="search-container">
