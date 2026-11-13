@@ -3,95 +3,408 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ShopList - Inventory Management</title>
+    <title>Orders - Ready to Ship</title>
+    <link rel="stylesheet" href="assets/css/styles.css">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/inventory.css">
 </head>
 <body>
-    <header class="app-header">
-        <div class="container header-inner">
-            <div class="brand"><i class="fas fa-boxes-stacked"></i> ShopList</div>
-            <p class="tagline">Inventory management</p>
-        </div>
-    </header>
-
-    <main class="container">
-        <section class="stats" aria-label="Inventory overview">
-            <div class="stat-card">
-                <i class="fas fa-box"></i>
-                <div><div class="stat-value" id="totalProducts">0</div><div class="stat-label">Products</div></div>
-            </div>
-            <div class="stat-card">
-                <i class="fas fa-dollar-sign"></i>
-                <div><div class="stat-value" id="totalValue">$0.00</div><div class="stat-label">Inventory value</div></div>
-            </div>
-            <div class="stat-card">
-                <i class="fas fa-triangle-exclamation"></i>
-                <div><div class="stat-value" id="lowStock">0</div><div class="stat-label">Low stock (&lt; 10)</div></div>
-            </div>
-        </section>
-
-        <section class="panel">
-            <h2><i class="fas fa-plus-circle"></i> Add product</h2>
-            <form id="productForm" class="form-grid">
-                <label>Name *
-                    <input type="text" name="name" maxlength="100" required placeholder="e.g. Wireless Mouse">
-                </label>
-                <label>SKU *
-                    <input type="text" name="sku" maxlength="50" required placeholder="e.g. MOUSE-001">
-                </label>
-                <label>Price ($) *
-                    <input type="number" name="price" min="0" step="0.01" required placeholder="0.00">
-                </label>
-                <label>Quantity *
-                    <input type="number" name="quantity" min="0" step="1" required placeholder="0">
-                </label>
-                <label class="span-2">Description
-                    <textarea name="description" maxlength="500" rows="2" placeholder="Optional"></textarea>
-                </label>
-                <div class="span-2"><button type="submit" class="btn-primary"><i class="fas fa-plus"></i> Add product</button></div>
-            </form>
-        </section>
-
-        <section class="panel">
-            <div class="list-head">
-                <h2><i class="fas fa-list"></i> Inventory</h2>
-                <div class="search-box">
-                    <input type="search" id="searchInput" placeholder="Search by name or SKU (Ctrl+K)" aria-label="Search products">
-                    <button type="button" id="searchBtn" class="btn-primary" aria-label="Search"><i class="fas fa-search"></i></button>
+    <div class="dashboard">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <div class="logo-icon">VJ</div>
                 </div>
             </div>
-            <div id="productsContainer"></div>
-        </section>
-    </main>
+            
+            <div class="sidebar-filters">
+                <div class="filter-section">
+                    <h3>ORDER DATE RANGE</h3>
+                    <div class="checkbox-group">
+                        <label class="checkbox-item">
+                            <input type="checkbox" checked>
+                            <span class="checkmark"></span>
+                            All
+                        </label>
+                    </div>
+                </div>
 
-    <div id="editModal" class="modal" role="dialog" aria-modal="true" aria-label="Edit product">
-        <div class="modal-content">
-            <span class="close" role="button" aria-label="Close" tabindex="0">&times;</span>
-            <h2><i class="fas fa-edit"></i> Edit product</h2>
-            <form id="editForm" class="form-grid">
-                <input type="hidden" id="editProductId">
-                <label>Name *
-                    <input type="text" id="editProductName" maxlength="100" required>
-                </label>
-                <label>SKU *
-                    <input type="text" id="editProductSku" maxlength="50" required>
-                </label>
-                <label>Price ($) *
-                    <input type="number" id="editProductPrice" min="0" step="0.01" required>
-                </label>
-                <label>Quantity *
-                    <input type="number" id="editProductQuantity" min="0" step="1" required>
-                </label>
-                <label class="span-2">Description
-                    <textarea id="editProductDescription" maxlength="500" rows="2"></textarea>
-                </label>
-                <div class="span-2"><button type="submit" class="btn-primary"><i class="fas fa-save"></i> Save changes</button></div>
-            </form>
-        </div>
+                <div class="filter-section">
+                    <h3>SHIPPED DATE RANGE</h3>
+                    <div class="checkbox-group">
+                        <label class="checkbox-item">
+                            <input type="checkbox" checked>
+                            <span class="checkmark"></span>
+                            All
+                        </label>
+                    </div>
+                </div>
+
+                <div class="filter-section">
+                    <h3>ALL</h3>
+                    <div class="status-filters">
+                        <div class="status-item">
+                            <span class="status-label">PAYMENT REQUIRED</span>
+                            <span class="status-count">120</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">WAITING FOR STOCK</span>
+                            <span class="status-count warning">28</span>
+                        </div>
+                        <div class="status-item active">
+                            <span class="status-label">READY TO SHIP</span>
+                            <span class="status-count primary">234</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="filter-section">
+                    <h3>All</h3>
+                    <div class="filter-controls">
+                        <div class="filter-control">
+                            <label>Order Weight</label>
+                            <select>
+                                <option>Any</option>
+                            </select>
+                        </div>
+                        <div class="filter-control">
+                            <label>Number of Items</label>
+                            <select>
+                                <option>Any</option>
+                            </select>
+                        </div>
+                        <div class="filter-control">
+                            <label>Picked</label>
+                            <div class="checkbox-group">
+                                <label class="checkbox-item">
+                                    <input type="checkbox" checked>
+                                    <span class="checkmark"></span>
+                                    Yes
+                                </label>
+                                <label class="checkbox-item">
+                                    <input type="checkbox">
+                                    <span class="checkmark"></span>
+                                    No
+                                </label>
+                            </div>
+                        </div>
+                        <div class="filter-control">
+                            <label>Country</label>
+                            <select>
+                                <option>All</option>
+                            </select>
+                        </div>
+                        <div class="filter-control">
+                            <label>Shipping Area</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="nav-icons">
+                    <a href="#" class="nav-icon">
+                        <i class="fas fa-th-large"></i>
+                    </a>
+                    <a href="#" class="nav-icon">
+                        <i class="fas fa-shopping-cart"></i>
+                    </a>
+                    <a href="#" class="nav-icon">
+                        <i class="fas fa-chart-line"></i>
+                    </a>
+                    <a href="#" class="nav-icon">
+                        <i class="fas fa-cog"></i>
+                    </a>
+                </div>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Top Header -->
+            <header class="top-header">
+                <div class="breadcrumb">
+                    <span>Orders</span>
+                    <i class="fas fa-chevron-right"></i>
+                    <span class="current">Ready to Ship</span>
+                </div>
+                
+                <div class="header-actions">
+                    <div class="search-container">
+                        <input type="text" placeholder="Search..." class="search-input">
+                        <i class="fas fa-search"></i>
+                        <button class="search-dropdown">
+                            <i class="fas fa-chevron-down"></i>
+                        </button>
+                    </div>
+                    
+                    <button class="btn btn-primary">
+                        <i class="fas fa-plus"></i>
+                        NEW
+                    </button>
+                    
+                    <button class="btn btn-ghost">
+                        <i class="fas fa-download"></i>
+                        SKIP
+                    </button>
+                    
+                    <button class="btn btn-ghost">
+                        <i class="fas fa-filter"></i>
+                        PICK
+                    </button>
+                    
+                    <button class="btn btn-ghost">
+                        <i class="fas fa-print"></i>
+                        PRINT
+                    </button>
+                </div>
+            </header>
+
+            <!-- Orders Table -->
+            <div class="orders-table-container">
+                <table class="orders-table">
+                    <thead>
+                        <tr>
+                            <th class="checkbox-col">
+                                <input type="checkbox">
+                            </th>
+                            <th class="icon-col"></th>
+                            <th>DATE</th>
+                            <th>STATUS</th>
+                            <th>ORDER ITEMS</th>
+                            <th>CUSTOMER</th>
+                            <th class="actions-col">
+                                <i class="fas fa-cog"></i>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="checkbox-col">
+                                <input type="checkbox">
+                            </td>
+                            <td class="icon-col">
+                                <div class="order-icon amazon">a</div>
+                            </td>
+                            <td class="date-col">
+                                <div class="date">24/10/2017</div>
+                                <div class="time">16:47</div>
+                            </td>
+                            <td class="status-col">
+                                <span class="status ready">Ready to Ship</span>
+                            </td>
+                            <td class="items-col">
+                                <div class="order-id">#P-11741126</div>
+                                <div class="item-desc">1 x Veega T-Shirt 2018 Design<br>3 x niceShop(TM) 6 Buttons 2000 DPI Wired LED Optical Gami</div>
+                            </td>
+                            <td class="customer-col">
+                                <div class="customer-name">Jade Lundie</div>
+                            </td>
+                            <td class="country-col">GB</td>
+                        </tr>
+                        <tr>
+                            <td class="checkbox-col">
+                                <input type="checkbox">
+                            </td>
+                            <td class="icon-col">
+                                <div class="order-icon magento">M</div>
+                            </td>
+                            <td class="date-col">
+                                <div class="date">24/10/2017</div>
+                                <div class="time">16:47</div>
+                            </td>
+                            <td class="status-col">
+                                <span class="status ready">Ready to Ship</span>
+                            </td>
+                            <td class="items-col">
+                                <div class="order-id">#P-14298595</div>
+                                <div class="item-desc">1 x niceShop(TM) 6 Buttons 2000 DPI Wired LED Optical Gami</div>
+                            </td>
+                            <td class="customer-col">
+                                <div class="customer-name">Phil Reynolds</div>
+                            </td>
+                            <td class="country-col">US</td>
+                        </tr>
+                        <tr>
+                            <td class="checkbox-col">
+                                <input type="checkbox">
+                            </td>
+                            <td class="icon-col">
+                                <div class="order-icon ebay">e</div>
+                            </td>
+                            <td class="date-col">
+                                <div class="date">24/10/2017</div>
+                                <div class="time">16:47</div>
+                            </td>
+                            <td class="status-col">
+                                <span class="status ready">Ready to Ship</span>
+                            </td>
+                            <td class="items-col">
+                                <div class="order-id">#P-14182772</div>
+                                <div class="item-desc">1 x Sony Z1 Phone Case</div>
+                            </td>
+                            <td class="customer-col">
+                                <div class="customer-name">Marc Girdlestone</div>
+                            </td>
+                            <td class="country-col">GB</td>
+                        </tr>
+                        <tr>
+                            <td class="checkbox-col">
+                                <input type="checkbox">
+                            </td>
+                            <td class="icon-col">
+                                <div class="order-icon shopify">S</div>
+                            </td>
+                            <td class="date-col">
+                                <div class="date">24/10/2017</div>
+                                <div class="time">16:47</div>
+                            </td>
+                            <td class="status-col">
+                                <span class="status ready">Ready to Ship</span>
+                            </td>
+                            <td class="items-col">
+                                <div class="order-id">#P-14102373</div>
+                                <div class="item-desc">1 x Canon EF 50 mm f/1.8 EF STM for Canon</div>
+                            </td>
+                            <td class="customer-col">
+                                <div class="customer-name">Jade Gould</div>
+                            </td>
+                            <td class="country-col">GB</td>
+                        </tr>
+                        <tr>
+                            <td class="checkbox-col">
+                                <input type="checkbox">
+                            </td>
+                            <td class="icon-col">
+                                <div class="order-icon woocommerce">W</div>
+                            </td>
+                            <td class="date-col">
+                                <div class="date">24/10/2017</div>
+                                <div class="time">16:47</div>
+                            </td>
+                            <td class="status-col">
+                                <span class="status ready">Ready to Ship</span>
+                            </td>
+                            <td class="items-col">
+                                <div class="order-id">#P-14067821</div>
+                                <div class="item-desc">1 x Apple Magic Trackpad 10 x<br>1 x Apple Wireless Keyboard</div>
+                            </td>
+                            <td class="customer-col">
+                                <div class="customer-name">Matt Warren</div>
+                            </td>
+                            <td class="country-col">GB</td>
+                        </tr>
+                        <tr>
+                            <td class="checkbox-col">
+                                <input type="checkbox">
+                            </td>
+                            <td class="icon-col">
+                                <div class="order-icon amazon">a</div>
+                            </td>
+                            <td class="date-col">
+                                <div class="date">24/10/2017</div>
+                                <div class="time">16:47</div>
+                            </td>
+                            <td class="status-col">
+                                <span class="status ready">Ready to Ship</span>
+                            </td>
+                            <td class="items-col">
+                                <div class="order-id">#P-13856430</div>
+                                <div class="item-desc">1 x Sony Z1 Phone Case</div>
+                            </td>
+                            <td class="customer-col">
+                                <div class="customer-name">Calvin Hughes</div>
+                            </td>
+                            <td class="country-col">US</td>
+                        </tr>
+                        <tr>
+                            <td class="checkbox-col">
+                                <input type="checkbox">
+                            </td>
+                            <td class="icon-col">
+                                <div class="order-icon amazon">a</div>
+                            </td>
+                            <td class="date-col">
+                                <div class="date">24/10/2017</div>
+                                <div class="time">16:47</div>
+                            </td>
+                            <td class="status-col">
+                                <span class="status ready">Ready to Ship</span>
+                            </td>
+                            <td class="items-col">
+                                <div class="order-id">#P-10049768</div>
+                                <div class="item-desc">3 x Galaxy S6 32GB</div>
+                            </td>
+                            <td class="customer-col">
+                                <div class="customer-name">Vera Handile</div>
+                            </td>
+                            <td class="country-col">GB</td>
+                        </tr>
+                        <tr>
+                            <td class="checkbox-col">
+                                <input type="checkbox">
+                            </td>
+                            <td class="icon-col">
+                                <div class="order-icon phone">📞</div>
+                            </td>
+                            <td class="date-col">
+                                <div class="date">24/10/2017</div>
+                                <div class="time">16:47</div>
+                            </td>
+                            <td class="status-col">
+                                <span class="status ready">Ready to Ship</span>
+                            </td>
+                            <td class="items-col">
+                                <div class="order-id">#P-14102504</div>
+                                <div class="item-desc">1 x Canon EF 50 mm f/1.8 EF STM for Canon</div>
+                            </td>
+                            <td class="customer-col">
+                                <div class="customer-name">Matthew Ali</div>
+                            </td>
+                            <td class="country-col">GB</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </main>
     </div>
 
-    <script src="assets/js/api.js"></script>
-    <script src="assets/js/app.js"></script>
+    <script>
+        // Simple interactivity for the order management dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            // Handle checkbox selections
+            const selectAllCheckbox = document.querySelector('thead input[type="checkbox"]');
+            const rowCheckboxes = document.querySelectorAll('tbody input[type="checkbox"]');
+            
+            if (selectAllCheckbox) {
+                selectAllCheckbox.addEventListener('change', function() {
+                    rowCheckboxes.forEach(checkbox => {
+                        checkbox.checked = this.checked;
+                    });
+                });
+            }
+            
+            // Handle row hover effects
+            const tableRows = document.querySelectorAll('.orders-table tbody tr');
+            tableRows.forEach(row => {
+                row.addEventListener('mouseenter', function() {
+                    this.style.backgroundColor = '#f8f9fa';
+                });
+                
+                row.addEventListener('mouseleave', function() {
+                    this.style.backgroundColor = '';
+                });
+            });
+            
+            // Handle search input
+            const searchInput = document.querySelector('.search-input');
+            if (searchInput) {
+                searchInput.addEventListener('input', function() {
+                    // Add search functionality here
+                    console.log('Searching for:', this.value);
+                });
+            }
+        });
+    </script>
 </body>
 </html>
