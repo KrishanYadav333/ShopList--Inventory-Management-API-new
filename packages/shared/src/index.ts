@@ -32,25 +32,33 @@ const money = z.number().int().min(0).max(LIMITS.maxPriceMinor);
 const text = (max: number) => z.string().trim().min(1).max(max);
 
 // ---------------------------------------------------------------- products
+// Fields shared by create and update. No defaults here: a default would also apply to omitted
+// fields in a partial update and silently overwrite stored values (e.g. wipe a product's tags).
+const productFields = {
+  sku: text(64),
+  name: text(200),
+  description: z.string().max(5000).nullish(),
+  barcode: text(64).nullish(),
+  unit: text(20),
+  priceMinor: money,
+  costMinor: money.nullish(),
+  reorderPoint: z.number().int().min(0).max(LIMITS.maxOnHand).nullish(),
+  tags: z.array(text(40)).max(20),
+};
+
 export const productInput = z
   .object({
-    sku: text(64),
-    name: text(200),
-    description: z.string().max(5000).nullish(),
-    barcode: text(64).nullish(),
-    unit: text(20).default('each'),
-    priceMinor: money,
-    costMinor: money.nullish(),
-    reorderPoint: z.number().int().min(0).max(LIMITS.maxOnHand).nullish(),
-    tags: z.array(text(40)).max(20).default([]),
+    ...productFields,
+    unit: productFields.unit.default('each'),
+    tags: productFields.tags.default([]),
     /** Units received into the default location when the product is created. */
     initialQuantity: z.number().int().min(0).max(LIMITS.maxOnHand).default(0),
   })
   .strict();
 export type ProductInput = z.infer<typeof productInput>;
 
-export const productPatch = productInput
-  .omit({ initialQuantity: true })
+export const productPatch = z
+  .object(productFields)
   .partial()
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: 'Provide at least one field to change' });

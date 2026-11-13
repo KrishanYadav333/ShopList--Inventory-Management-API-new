@@ -7,6 +7,8 @@ export interface Bindings {
   APP_ORIGIN: string;
   /** "true" enables /auth/dev/login. Must never be set in production. */
   DEV_AUTH?: string;
+  /** "true" (together with DEV_AUTH) drops the Secure/__Host- cookie so a browser can sign in over plain http://localhost. Local use only. */
+  INSECURE_DEV_COOKIES?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   /** Random 32+ byte secret used to sign the short-lived OAuth state cookie. */

@@ -56,6 +56,16 @@ describe('products', () => {
     expect((await call(org.cookie, 'GET', `${org.base}/products/${p.id}`)).body.product.name).toBe('Edited by Anna');
   });
 
+  it('a partial update leaves every field it does not mention untouched', async () => {
+    const org = await newOrg();
+    const p = await product(org, { unit: 'box', tags: ['red', 'blue'], barcode: '777', description: 'Keep me', costMinor: 400, reorderPoint: 3 });
+    const r = await call(org.cookie, 'PATCH', `${org.base}/products/${p.id}`, { name: 'Renamed' }, { 'if-match': '"1"' });
+    expect(r.status).toBe(200);
+    expect(r.body.product).toMatchObject({ name: 'Renamed', unit: 'box', tags: ['blue', 'red'], barcode: '777', description: 'Keep me', costMinor: 400, reorderPoint: 3, priceMinor: 1000 });
+    const clear = await call(org.cookie, 'PATCH', `${org.base}/products/${p.id}`, { tags: [], barcode: null }, { 'if-match': '"2"' });
+    expect(clear.body.product).toMatchObject({ tags: [], barcode: null, unit: 'box' });
+  });
+
   it('records who changed what in the audit log', async () => {
     const org = await newOrg();
     const p = await product(org, { priceMinor: 1200 });

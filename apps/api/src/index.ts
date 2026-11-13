@@ -135,9 +135,22 @@ const caller = (c: Ctx): Caller => ({ actor: c.get('user').id, requestId: c.get(
 const inventory = (c: Ctx) => c.env.INVENTORY.get(c.env.INVENTORY.idFromName(c.get('org').id));
 const etag = (c: Ctx, version: number) => c.header('ETag', `"${version}"`);
 
+// Cookies: __Host- + Secure in production. Browsers will not store Secure cookies over plain
+// http://localhost, so local development can opt out, but only when DEV_AUTH is also on.
+const relaxed = (c: Ctx) => c.env.DEV_AUTH === 'true' && c.env.INSECURE_DEV_COOKIES === 'true';
+const cookiePrefix = (c: Ctx) => (relaxed(c) ? undefined : ('host' as const));
+function cookieOptions(c: Ctx, maxAge: number) {
+  return relaxed(c)
+    ? { httpOnly: true, sameSite: 'Lax' as const, path: '/', maxAge }
+    : { prefix: 'host' as const, httpOnly: true, secure: true, sameSite: 'Lax' as const, path: '/', maxAge };
+}
+const setSessionCookie = (c: Ctx, token: string) => setCookie(c, SESSION_COOKIE, token, cookieOptions(c, 30 * 86400));
+const readSessionCookie = (c: Ctx) => getCookie(c, SESSION_COOKIE, cookiePrefix(c));
+const clearCookie = (c: Ctx, name: string) => deleteCookie(c, name, relaxed(c) ? { path: '/' } : { prefix: 'host', path: '/', secure: true });
+
 // ---------------------------------------------------------- access control
 const requireUser: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> = async (c, next) => {
-  const user = await userFromSession(c.env, getCookie(c, SESSION_COOKIE, 'host'));
+  const user = await userFromSession(c.env, readSessionCookie(c));
   if (!user) throw new AppError(401, 'unauthenticated', 'Sign in to continue.');
   c.set('user', user);
   return next();
@@ -181,15 +194,13 @@ route('get', '/auth/oauth/github', 'public', async (c) => {
   const state = randomToken(24);
   const { verifier, challenge } = await pkcePair();
   const url = githubAuthorizeUrl(c.env, state, challenge);
-  setCookie(c, OAUTH_COOKIE, await signPayload(c.env, { state, verifier, exp: Date.now() + 10 * 60_000 }), {
-    prefix: 'host', httpOnly: true, secure: true, sameSite: 'Lax', path: '/', maxAge: 600,
-  });
+  setCookie(c, OAUTH_COOKIE, await signPayload(c.env, { state, verifier, exp: Date.now() + 10 * 60_000 }), cookieOptions(c, 600));
   return c.redirect(url, 302);
 });
 
 route('get', '/auth/oauth/github/callback', 'public', async (c) => {
-  const saved = await verifyPayload<{ state: string; verifier: string; exp: number }>(c.env, getCookie(c, OAUTH_COOKIE, 'host'));
-  deleteCookie(c, OAUTH_COOKIE, { prefix: 'host', path: '/', secure: true });
+  const saved = await verifyPayload<{ state: string; verifier: string; exp: number }>(c.env, getCookie(c, OAUTH_COOKIE, cookiePrefix(c)));
+  clearCookie(c, OAUTH_COOKIE);
   const code = c.req.query('code');
   if (!saved || saved.exp < Date.now() || !code || saved.state !== c.req.query('state')) {
     throw new AppError(400, 'oauth_failed', 'The sign-in attempt expired or was not valid. Please try again.');
@@ -197,7 +208,7 @@ route('get', '/auth/oauth/github/callback', 'public', async (c) => {
   const profile = await githubProfile(c.env, code, saved.verifier);
   const user = await upsertUser(c.env, profile, { provider: 'github', providerUserId: profile.id });
   const token = await createSession(c.env, user.id, c.req.raw);
-  setCookie(c, SESSION_COOKIE, token, { prefix: 'host', httpOnly: true, secure: true, sameSite: 'Lax', path: '/', maxAge: 30 * 86400 });
+  setSessionCookie(c, token);
   return c.redirect(c.env.APP_ORIGIN, 302);
 });
 
@@ -207,13 +218,13 @@ route('post', '/auth/dev/login', 'public', async (c) => {
   const { data } = await readJson(c, z.object({ email: z.string().email().max(254), name: z.string().max(100).optional() }).strict());
   const user = await upsertUser(c.env, { email: data.email, name: data.name ?? data.email.split('@')[0] });
   const token = await createSession(c.env, user.id, c.req.raw);
-  setCookie(c, SESSION_COOKIE, token, { prefix: 'host', httpOnly: true, secure: true, sameSite: 'Lax', path: '/', maxAge: 30 * 86400 });
+  setSessionCookie(c, token);
   return c.json({ user });
 });
 
 route('post', '/auth/logout', 'user', async (c) => {
-  await destroySession(c.env, getCookie(c, SESSION_COOKIE, 'host'));
-  deleteCookie(c, SESSION_COOKIE, { prefix: 'host', path: '/', secure: true });
+  await destroySession(c.env, readSessionCookie(c));
+  clearCookie(c, SESSION_COOKIE);
   return c.json({ ok: true });
 });
 
