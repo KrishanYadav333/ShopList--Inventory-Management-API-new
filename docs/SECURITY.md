@@ -70,6 +70,7 @@ Rules:
 |---|---|
 | CSRF | `SameSite=Lax` cookie, plus the server rejects any non-GET request whose `Origin` is not the app's own origin |
 | XSS | React escapes output; `dangerouslySetInnerHTML` is banned by lint rule; strict CSP |
+| Static asset headers | The HTML and JS/CSS are served by Workers static assets and never reach the Worker, so the same headers are set by `apps/web/public/_headers`; the API sets its own in middleware |
 | Content-Security-Policy | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https://avatars.githubusercontent.com https://lh3.googleusercontent.com; connect-src 'self'; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'` |
 | Other headers | `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy: camera=(self), geolocation=()` (camera is for barcode scanning) |
 | CORS | Not enabled for cookie-authenticated routes. API-key routes allow any origin but never accept cookies. |
