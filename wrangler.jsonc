@@ -1,0 +1,17 @@
+{
+  "name": "shoplist",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "frontend",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "shoplist_db",
+      "database_name": "shoplist-db",
+      "database_id": "0016257b-c030-49f3-a8e4-669893f85aa4",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

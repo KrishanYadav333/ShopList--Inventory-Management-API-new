@@ -261,3 +261,16 @@ PORT=3001
 ---
 
 **Happy coding! 🚀**
+## Live demo (Cloudflare)
+
+https://shoplist.technology1.workers.dev
+
+The Worker in `worker/index.js` serves `frontend/` and the same `/api/products` API as the Express backend, backed by Cloudflare D1 (SQLite). Writes are public and capped at 500 products because it is a demo.
+
+```bash
+npx wrangler d1 create shoplist-db        # put the id in wrangler.jsonc
+npx wrangler d1 migrations apply shoplist-db --remote
+npx wrangler deploy
+```
+
+Differences from the Express version: integer ids instead of UUIDs (the front end needs them), and `DELETE` returns `200 {"id": ...}` instead of `204`.
