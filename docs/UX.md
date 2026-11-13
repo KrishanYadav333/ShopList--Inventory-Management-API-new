@@ -63,7 +63,7 @@ Sign in
 
 ### Products
 
-- **Table view** on desktop (sortable columns, sticky header, virtualized rows so 50,000 products scroll smoothly). **Card view** on phones.
+- **Table view** on desktop and **card view** on phones (CSS only, same markup). The list loads 50 rows at a time with a Load more button; row virtualization is planned for very large catalogs.
 - Instant search across name, SKU, barcode and description, with matches highlighted.
 - Filters shown as removable chips: location, stock status, tags. Filters live in the URL, so a filtered view can be bookmarked or shared.
 - Multi-select with bulk actions: edit tags, adjust stock, export, delete.
@@ -113,7 +113,7 @@ When a save returns `412`, the form does not discard the user's work. It shows a
 - **Type:** system font stack for speed; tabular numbers for all quantities and money so columns line up.
 - **Spacing:** 4 px base grid.
 - **Color:** one brand accent. Status colors (green in stock, amber low, red out) are always paired with an icon and text, never color alone.
-- **Components:** button, input, select, combobox, dialog, sheet (mobile), toast, table, tabs, badge, tooltip, command palette. Built on Radix primitives for correct focus and keyboard behavior.
+- **Components:** button, input, select, dialog, toast, table, status pill, tag, command palette, stepper and chips. Plain React and CSS; the dialog traps focus and returns it on close.
 - **Motion:** 150 to 200 ms ease-out for feedback; respects `prefers-reduced-motion`.
 
 ## Keyboard

@@ -39,6 +39,23 @@ The binding limit is **rows written: 100,000 / 6 ≈ 16,000 inventory changes pe
 - A daily cron reads usage from the Cloudflare GraphQL Analytics API and alerts at 70% of any allowance.
 - When a daily allowance runs out, the API returns `503` with `Retry-After` set to the next reset, and the UI explains it. Reads of cached pages keep working.
 
+## Local development
+
+```bash
+npm install --legacy-peer-deps          # npm 10 has a peer-dependency resolver bug with vitest
+cd apps/api
+npx wrangler d1 migrations apply shoplist-control --local
+# terminal 1: the API on :8787 (dev-only flags go on the command line, not in .dev.vars,
+# because the test runner also reads .dev.vars)
+npx wrangler dev --var APP_ORIGIN:http://localhost:5173 --var DEV_AUTH:true --var INSECURE_DEV_COOKIES:true
+# terminal 2: the UI on :5173, proxying /api to :8787
+cd ../web && npx vite
+```
+
+Open **http://localhost:5173** (not 127.0.0.1; the Origin check allows only the configured origin). The login page shows a development-only email sign-in. `DEV_AUTH` enables it and `INSECURE_DEV_COOKIES` relaxes the `__Host-` Secure cookie so a browser accepts it over plain http; neither is ever set in production or in tests, so the tests exercise the real production cookie.
+
+Tests: `npm test` (runs the API suite inside the Workers runtime). Build the UI first with `npm run build -w @shoplist/web`, because the Worker's static assets directory must exist.
+
 ## Environments
 
 | Environment | Worker | Data | Deployed by |

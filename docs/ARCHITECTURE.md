@@ -26,7 +26,7 @@ flowchart LR
 
 | Component | Technology | Responsibility |
 |---|---|---|
-| Web app | React 19, TypeScript, Vite, TanStack Router + Query, Tailwind, Radix primitives | All UI. Served as static assets from the Worker. |
+| Web app | React 19, TypeScript, Vite, React Router, TanStack Query; plain CSS that extends the original orders-dashboard stylesheet | All UI. Served as static assets from the Worker. |
 | API Worker | Hono, Zod, `@hono/zod-openapi` | Routing, validation, authentication, authorization, request shaping. Stateless. |
 | Control plane | D1 (one database) | Users, OAuth links, passkeys, sessions, organizations, memberships, invitations, API keys. |
 | Data plane | One SQLite-backed Durable Object per organization (`InventoryDO`) | Products, locations, stock levels, ledger, reservations, audit log, full-text index, idempotency records. |
@@ -116,7 +116,8 @@ Each level is triggered by a measured signal, not by anticipation.
 |---|---|---|
 | Hono | Small, Workers-native, typed routing and middleware | Express: not built for Workers. Itty-router: less ecosystem. |
 | Zod + OpenAPI generation | One schema validates requests and produces the API docs and typed client | Hand-written OpenAPI: drifts from the code. |
-| React + TanStack Query | Caching, optimistic updates, retries and offline handling are solved problems | Vanilla JS (v1): every one of those would be hand-written. |
-| Tailwind + Radix primitives | Accessible behavior (focus, keyboard, ARIA) for free; styles stay local | A heavy component kit: larger bundle, harder to make distinctive. |
+| React + React Router + TanStack Query | Caching, invalidation, infinite lists and retries are solved problems | Vanilla JS (v1): every one of those would be hand-written. |
+| Plain CSS on the original dashboard stylesheet | Keeps the existing look exactly, no new styling dependency, about 4 KB gzipped of CSS | Tailwind or a component kit: would restyle the dashboard the owner wants kept. |
+| Own small `Modal` with focus trap | Dialogs are the only complex widget; ~50 lines covers Escape, focus return and Tab trapping | Radix primitives: reconsider if more complex widgets (menus, comboboxes) appear. |
 | OAuth + passkeys, no passwords | Workers caps PBKDF2 at 100,000 iterations (below OWASP's 600,000) and the free plan allows 10 ms CPU per request, so strong password hashing is not available. No passwords also means none to leak. | Email and password: weak hashing on this platform. Magic links: needs a paid email service. |
 | Prefixed random ids (`prd_`, `loc_`, `mov_`) | Readable in logs, safe in URLs, cannot be guessed or enumerated | Auto-increment integers (v1): leak volume and invite enumeration. |

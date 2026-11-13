@@ -6,7 +6,9 @@ Each phase ships to production on its own and leaves the system working. A phase
 
 Single shared product list, Worker + D1, public writes capped at 500 products. Live at https://shoplist.technology1.workers.dev.
 
-## Phase 1: Foundation
+## Phase 1: Foundation (mostly done)
+
+> **Status:** Hono API, Zod schemas shared with the UI, problem+json errors, request ids and security headers are built and tested. Still to do: OpenAPI generation at `/api/docs`, Lighthouse CI budgets, GitHub Actions pipeline and preview deployments.
 
 **Goal:** a typed, tested codebase that the rest can be built on.
 
@@ -22,7 +24,9 @@ Single shared product list, Worker + D1, public writes capped at 500 products. L
 - [ ] `/api/docs` shows generated documentation
 - [ ] Lighthouse CI and bundle size budgets enforced
 
-## Phase 2: Identity and tenancy
+## Phase 2: Identity and tenancy (partly done)
+
+> **Status:** GitHub OAuth with PKCE, sessions (hashed tokens), organizations, roles, invitations and tenant isolation are built and tested. Still to do: Google sign-in, passkeys, Turnstile on sign-in, session list and revoke UI.
 
 **Goal:** real accounts and isolated organizations.
 
@@ -38,7 +42,9 @@ Single shared product list, Worker + D1, public writes capped at 500 products. L
 - [ ] Session cookie has `__Host-`, HttpOnly, Secure, SameSite=Lax; only its hash is in D1
 - [ ] Removing a member blocks their next request
 
-## Phase 3: Correct inventory
+## Phase 3: Correct inventory (done except migration)
+
+> **Status:** Products, locations, ledger, adjust/transfer/count, idempotency, versioning, counters, audit log and integrity check are built and tested (40 tests, including 60 parallel sales against 50 units). Still to do: migrating v1 data into a Demo organization.
 
 **Goal:** stock numbers that can be trusted under concurrency.
 
@@ -53,7 +59,9 @@ Single shared product list, Worker + D1, public writes capped at 500 products. L
 - [ ] Two editors saving the same product: the second gets 412 and the conflict screen
 - [ ] Repeating a request with the same `Idempotency-Key` does not create a second movement
 
-## Phase 4: Experience
+## Phase 4: Experience (mostly done)
+
+> **Status:** Dashboard-style UI with sidebar counts, filters in the URL, search, stock adjust with undo, conflict resolution, history, settings, command palette, keyboard shortcuts, phone card layout and error boundary are built. Still to do: barcode camera scanning, bulk actions beyond CSV export, row virtualization, accessibility audit with axe, performance measurement on a real phone.
 
 **Goal:** the UI described in [UX.md](UX.md).
 
