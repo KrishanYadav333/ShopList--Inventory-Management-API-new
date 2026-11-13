@@ -71,6 +71,16 @@ function showError(message) {
 }
 
 function showEmptyState() {
+    if (appState.searchTerm) {
+        elements.productsContainer.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-magnifying-glass"></i>
+                <h3>No products match your search</h3>
+                <p>Try a different name or SKU</p>
+            </div>
+        `;
+        return;
+    }
     elements.productsContainer.innerHTML = `
         <div class="empty-state">
             <i class="fas fa-box-open"></i>
@@ -97,13 +107,22 @@ function formatCurrency(amount) {
 }
 
 // Product Management Functions
+// The API pages results (max 100 per request); stats and search need every product.
+async function fetchAllProducts() {
+    const all = [];
+    for (let page = 1; ; page++) {
+        const { products = [], total = 0 } = await api.getProducts({ page, limit: 100 });
+        all.push(...products);
+        if (all.length >= total || products.length === 0) return all;
+    }
+}
+
 async function loadProducts() {
     try {
         showLoading();
         appState.isLoading = true;
         
-        const response = await api.getProducts();
-        appState.setProducts(response.products || []);
+        appState.setProducts(await fetchAllProducts());
         renderProducts();
     } catch (error) {
         console.error('Failed to load products:', error);
