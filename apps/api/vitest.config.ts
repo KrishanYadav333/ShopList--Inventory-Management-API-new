@@ -9,7 +9,7 @@ export default defineConfig(async () => {
         wrangler: { configPath: './wrangler.jsonc' },
         miniflare: {
           // Test-only switches. DEV_AUTH is never set in the deployed config.
-          bindings: { DEV_AUTH: 'true', TEST_MIGRATIONS: migrations },
+          bindings: { DEV_AUTH: 'true', SIGNIN_MODE: 'open', SUPER_ADMIN_GITHUB_ID: '999001', TEST_MIGRATIONS: migrations },
         },
       }),
     ],

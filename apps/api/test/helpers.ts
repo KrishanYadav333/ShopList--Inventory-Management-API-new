@@ -39,11 +39,11 @@ export async function call<T = any>(
 }
 
 /** Signs in through the dev-login route and returns the cookie header value. */
-export async function login(email = `${uid()}@example.com`): Promise<string> {
+export async function login(email = `${uid()}@example.com`, superAdmin = false): Promise<string> {
   const res = await SELF.fetch(`${ORIGIN}/api/v1/auth/dev/login`, {
     method: 'POST',
     headers: { origin: ORIGIN, 'content-type': 'application/json', 'cf-connecting-ip': ip() },
-    body: JSON.stringify({ email }),
+    body: JSON.stringify(superAdmin ? { email, superAdmin: true } : { email }),
   });
   if (res.status !== 200) throw new Error(`login failed: ${res.status} ${await res.text()}`);
   const set = res.headers.get('set-cookie') ?? '';
@@ -92,3 +92,6 @@ export async function defaultLocation(org: { cookie: string; base: string }): Pr
 export function stub(orgId: string) {
   return env.INVENTORY.get(env.INVENTORY.idFromName(orgId)) as DurableObjectStub<InventoryDO>;
 }
+
+/** Signs in as the (single) super admin. Only one account holds the role at a time. */
+export const loginAdmin = (email = `${uid()}-admin@example.com`) => login(email, true);

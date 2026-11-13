@@ -26,8 +26,10 @@ import {
   destroySession,
   githubAuthorizeUrl,
   githubProfile,
+  mayUse,
   pkcePair,
   signPayload,
+  signinClosed,
   upsertUser,
   userFromSession,
   verifyPayload,
@@ -36,7 +38,7 @@ import {
 import type { Bindings } from './env';
 import { AppError, problemResponse, unwrap } from './errors';
 import type { Caller, Idem } from './inventory-do';
-import { newId, nowIso, randomToken, sha256Hex } from './util';
+import { decodeCursor, encodeCursor, newId, nowIso, randomToken, sha256Hex } from './util';
 
 export { InventoryDO } from './inventory-do';
 
@@ -152,7 +154,15 @@ const clearCookie = (c: Ctx, name: string) => deleteCookie(c, name, relaxed(c) ?
 const requireUser: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> = async (c, next) => {
   const user = await userFromSession(c.env, readSessionCookie(c));
   if (!user) throw new AppError(401, 'unauthenticated', 'Sign in to continue.');
+  // Closed deployments: every request re-checks, so a session made before the mode changed stops working.
+  if (!mayUse(c.env, user)) throw new AppError(403, 'signin_closed', 'This ShopList is private. Only the site owner can sign in.');
   c.set('user', user);
+  return next();
+};
+
+/** Platform administration. Anyone else gets 404 so the admin area is not discoverable. */
+const requireSuper: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> = async (c, next) => {
+  if (!c.get('user').isSuperAdmin) throw new AppError(404, 'not_found', 'There is nothing at this address.');
   return next();
 };
 
@@ -160,7 +170,7 @@ const requireUser: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> = 
 const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> => async (c, next) => {
   const orgId = c.req.param('orgId') ?? '';
   const row = await c.env.DB.prepare(
-    `SELECT m.role FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.org_id = ? AND m.user_id = ? AND o.deleted_at IS NULL`,
+    `SELECT m.role FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.org_id = ? AND m.user_id = ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL`,
   )
     .bind(orgId, c.get('user').id)
     .first<{ role: Role }>();
@@ -173,7 +183,7 @@ const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindin
 };
 
 // Every route must declare who may call it. The registry lets a test prove none was forgotten.
-type Access = Permission | 'user' | 'public';
+type Access = Permission | 'user' | 'super' | 'public';
 export const ROUTES: { method: string; path: string; access: Access }[] = [];
 const api = new Hono<{ Bindings: Bindings; Variables: Vars }>();
 api.use('*', rateLimit, originCheck);
@@ -181,13 +191,14 @@ api.use('*', rateLimit, originCheck);
 type Handler = (c: Ctx) => Response | Promise<Response>;
 function route(method: 'get' | 'post' | 'patch' | 'delete', path: string, access: Access, handler: Handler): void {
   ROUTES.push({ method: method.toUpperCase(), path, access });
-  const guards: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }>[] = access === 'public' ? [] : access === 'user' ? [requireUser] : [requireUser, orgAccess(access)];
+  const guards: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }>[] =
+    access === 'public' ? [] : access === 'user' ? [requireUser] : access === 'super' ? [requireUser, requireSuper] : [requireUser, orgAccess(access)];
   const handlers = [...guards, handler] as MiddlewareHandler[];
   (api[method] as (path: string, ...h: MiddlewareHandler[]) => unknown).call(api, path, ...handlers);
 }
 
 // -------------------------------------------------------------------- public
-route('get', '/health', 'public', (c) => c.json({ ok: true }));
+route('get', '/health', 'public', (c) => c.json({ ok: true, signin: signinClosed(c.env) ? 'owner-only' : 'open' }));
 
 // ---------------------------------------------------------------------- auth
 route('get', '/auth/oauth/github', 'public', async (c) => {
@@ -206,6 +217,8 @@ route('get', '/auth/oauth/github/callback', 'public', async (c) => {
     throw new AppError(400, 'oauth_failed', 'The sign-in attempt expired or was not valid. Please try again.');
   }
   const profile = await githubProfile(c.env, code, saved.verifier);
+  const isOwner = !!c.env.SUPER_ADMIN_GITHUB_ID && profile.id === c.env.SUPER_ADMIN_GITHUB_ID;
+  if (signinClosed(c.env) && !isOwner) throw new AppError(403, 'signin_closed', 'This ShopList is private. Only the site owner can sign in.');
   const user = await upsertUser(c.env, profile, { provider: 'github', providerUserId: profile.id });
   const token = await createSession(c.env, user.id, c.req.raw);
   setSessionCookie(c, token);
@@ -215,8 +228,14 @@ route('get', '/auth/oauth/github/callback', 'public', async (c) => {
 /** Local development and tests only. Refuses to run unless DEV_AUTH is exactly "true". */
 route('post', '/auth/dev/login', 'public', async (c) => {
   if (c.env.DEV_AUTH !== 'true') throw new AppError(404, 'not_found', 'There is nothing at this address.');
-  const { data } = await readJson(c, z.object({ email: z.string().email().max(254), name: z.string().max(100).optional() }).strict());
+  const { data } = await readJson(c, z.object({ email: z.string().email().max(254), name: z.string().max(100).optional(), superAdmin: z.boolean().optional() }).strict());
   const user = await upsertUser(c.env, { email: data.email, name: data.name ?? data.email.split('@')[0] });
+  if (data.superAdmin) {
+    if (!c.env.SUPER_ADMIN_GITHUB_ID) throw new AppError(400, 'no_super_admin_configured', 'Set SUPER_ADMIN_GITHUB_ID to use this.');
+    // Dev only: link this account to the configured super-admin identity (there is only ever one holder).
+    await c.env.DB.prepare(`INSERT OR REPLACE INTO oauth_accounts(provider, provider_user_id, user_id) VALUES ('github', ?, ?)`).bind(c.env.SUPER_ADMIN_GITHUB_ID, user.id).run();
+    user.isSuperAdmin = true;
+  }
   const token = await createSession(c.env, user.id, c.req.raw);
   setSessionCookie(c, token);
   return c.json({ user });
@@ -231,7 +250,7 @@ route('post', '/auth/logout', 'user', async (c) => {
 route('get', '/me', 'user', async (c) => {
   const user = c.get('user');
   const { results } = await c.env.DB.prepare(
-    `SELECT o.id, o.name, o.slug, o.currency, m.role FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.user_id = ? AND o.deleted_at IS NULL ORDER BY o.name`,
+    `SELECT o.id, o.name, o.slug, o.currency, m.role FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.user_id = ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL ORDER BY o.name`,
   ).bind(user.id).all();
   return c.json({ user, organizations: results });
 });
@@ -402,6 +421,108 @@ route('post', '/orgs/:orgId/stock/counts', 'inventory:write', async (c) => {
 route('get', '/orgs/:orgId/stock/movements', 'inventory:read', async (c) => c.json(await inventory(c).listMovements(parse(movementListQuery, c.req.query()))));
 
 route('get', '/orgs/:orgId/audit', 'org:manage', async (c) => c.json(await inventory(c).listAudit(parse(pageQuery, c.req.query()))));
+
+
+// ------------------------------------------------------- platform administration
+// The super admin manages organizations and accounts. No route below touches inventory data, and
+// the inventory routes require organization membership, so the super admin cannot read tenants' stock.
+async function platformAudit(c: Ctx, action: string, target: string | null, detail?: unknown): Promise<void> {
+  await c.env.DB.prepare(`INSERT INTO platform_audit(id, actor, action, target, detail, request_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .bind(newId('pau'), c.get('user').id, action, target, detail === undefined ? null : JSON.stringify(detail), c.get('requestId'), nowIso())
+    .run();
+}
+
+route('get', '/admin/overview', 'super', async (c) => {
+  const now = nowIso();
+  const counts = await c.env.DB.prepare(
+    `SELECT (SELECT COUNT(*) FROM users) AS users,
+            (SELECT COUNT(*) FROM users WHERE disabled_at IS NOT NULL) AS disabledUsers,
+            (SELECT COUNT(*) FROM organizations WHERE deleted_at IS NULL) AS organizations,
+            (SELECT COUNT(*) FROM organizations WHERE deleted_at IS NULL AND suspended_at IS NOT NULL) AS suspendedOrganizations,
+            (SELECT COUNT(*) FROM sessions WHERE expires_at > ?) AS activeSessions`,
+  ).bind(now).first();
+  return c.json({ ...counts, signin: signinClosed(c.env) ? 'owner-only' : 'open' });
+});
+
+route('get', '/admin/orgs', 'super', async (c) => {
+  const q = parse(pageQuery, c.req.query());
+  const cur = decodeCursor<{ c: string; i: string }>(q.cursor);
+  const { results } = await c.env.DB.prepare(
+    `SELECT o.id, o.name, o.slug, o.created_at AS createdAt, o.deleted_at AS deletedAt, o.suspended_at AS suspendedAt,
+            (SELECT COUNT(*) FROM memberships m WHERE m.org_id = o.id) AS members
+       FROM organizations o
+      ${cur ? 'WHERE (o.created_at < ? OR (o.created_at = ? AND o.id < ?))' : ''}
+      ORDER BY o.created_at DESC, o.id DESC LIMIT ?`,
+  ).bind(...(cur ? [cur.c, cur.c, cur.i] : []), q.limit + 1).all<{ id: string; createdAt: string }>();
+  const hasMore = results.length > q.limit;
+  const data = results.slice(0, q.limit);
+  const last = data[data.length - 1];
+  return c.json({ data, nextCursor: hasMore && last ? encodeCursor({ c: last.createdAt, i: last.id }) : null, hasMore });
+});
+
+route('get', '/admin/users', 'super', async (c) => {
+  const q = parse(pageQuery, c.req.query());
+  const cur = decodeCursor<{ c: string; i: string }>(q.cursor);
+  const { results } = await c.env.DB.prepare(
+    `SELECT u.id, u.email, u.name, u.created_at AS createdAt, u.disabled_at AS disabledAt,
+            (SELECT COUNT(*) FROM memberships m WHERE m.user_id = u.id) AS organizations,
+            (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id) AS lastSeenAt
+       FROM users u
+      ${cur ? 'WHERE (u.created_at < ? OR (u.created_at = ? AND u.id < ?))' : ''}
+      ORDER BY u.created_at DESC, u.id DESC LIMIT ?`,
+  ).bind(...(cur ? [cur.c, cur.c, cur.i] : []), q.limit + 1).all<{ id: string; createdAt: string }>();
+  const hasMore = results.length > q.limit;
+  const data = results.slice(0, q.limit);
+  const last = data[data.length - 1];
+  return c.json({ data, nextCursor: hasMore && last ? encodeCursor({ c: last.createdAt, i: last.id }) : null, hasMore });
+});
+
+route('post', '/admin/users/:id/disable', 'super', async (c) => {
+  const id = c.req.param('id') ?? '';
+  if (id === c.get('user').id) throw new AppError(409, 'cannot_disable_self', 'You cannot disable your own account.');
+  const res = await c.env.DB.prepare(`UPDATE users SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL`).bind(nowIso(), id).run();
+  if (!res.meta.changes) throw new AppError(404, 'user_not_found', 'That user does not exist or is already disabled.');
+  await c.env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(id).run(); // signed out immediately
+  await platformAudit(c, 'user.disable', id);
+  return c.json({ ok: true });
+});
+
+route('post', '/admin/users/:id/enable', 'super', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const res = await c.env.DB.prepare(`UPDATE users SET disabled_at = NULL WHERE id = ? AND disabled_at IS NOT NULL`).bind(id).run();
+  if (!res.meta.changes) throw new AppError(404, 'user_not_found', 'That user does not exist or is not disabled.');
+  await platformAudit(c, 'user.enable', id);
+  return c.json({ ok: true });
+});
+
+route('post', '/admin/orgs/:id/suspend', 'super', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const res = await c.env.DB.prepare(`UPDATE organizations SET suspended_at = ? WHERE id = ? AND suspended_at IS NULL AND deleted_at IS NULL`).bind(nowIso(), id).run();
+  if (!res.meta.changes) throw new AppError(404, 'org_not_found', 'That organization does not exist or is already suspended.');
+  await platformAudit(c, 'org.suspend', id);
+  return c.json({ ok: true });
+});
+
+route('post', '/admin/orgs/:id/restore', 'super', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const res = await c.env.DB.prepare(`UPDATE organizations SET suspended_at = NULL WHERE id = ? AND suspended_at IS NOT NULL`).bind(id).run();
+  if (!res.meta.changes) throw new AppError(404, 'org_not_found', 'That organization does not exist or is not suspended.');
+  await platformAudit(c, 'org.restore', id);
+  return c.json({ ok: true });
+});
+
+route('get', '/admin/audit', 'super', async (c) => {
+  const q = parse(pageQuery, c.req.query());
+  const cur = decodeCursor<{ c: string; i: string }>(q.cursor);
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, actor, action, target, detail, request_id AS requestId, created_at AS createdAt FROM platform_audit
+      ${cur ? 'WHERE (created_at < ? OR (created_at = ? AND id < ?))' : ''} ORDER BY created_at DESC, id DESC LIMIT ?`,
+  ).bind(...(cur ? [cur.c, cur.c, cur.i] : []), q.limit + 1).all<{ id: string; createdAt: string; detail: string | null }>();
+  const hasMore = results.length > q.limit;
+  const data = results.slice(0, q.limit).map((r) => ({ ...r, detail: r.detail ? JSON.parse(r.detail) : null }));
+  const last = data[data.length - 1];
+  return c.json({ data, nextCursor: hasMore && last ? encodeCursor({ c: last.createdAt, i: last.id }) : null, hasMore });
+});
 
 app.route('/api/v1', api);
 export default app;

@@ -14,7 +14,15 @@ export interface AuthUser {
   email: string;
   name: string;
   avatarUrl: string | null;
+  /** True only for the account linked to SUPER_ADMIN_GITHUB_ID. Computed per request, never stored. */
+  isSuperAdmin: boolean;
 }
+
+/** Sign-in is closed unless the deployment explicitly opts in. */
+export const signinClosed = (env: Pick<Bindings, 'SIGNIN_MODE'>) => (env.SIGNIN_MODE ?? 'admin-only') !== 'open';
+
+/** The one rule for who may use the app. Pure so it can be tested directly. */
+export const mayUse = (env: Pick<Bindings, 'SIGNIN_MODE'>, user: Pick<AuthUser, 'isSuperAdmin'>) => user.isSuperAdmin || !signinClosed(env);
 
 // ------------------------------------------------------------------ sessions
 /** Creates a session and returns the raw token. Only its SHA-256 is stored. */
@@ -41,12 +49,13 @@ export async function userFromSession(env: Bindings, token: string | undefined):
   if (!token || token.length > 100) return null;
   const hash = await sha256Hex(token);
   const row = await env.DB.prepare(
-    `SELECT u.id, u.email, u.name, u.avatar_url, s.expires_at, s.last_seen_at
+    `SELECT u.id, u.email, u.name, u.avatar_url, s.expires_at, s.last_seen_at,
+            EXISTS (SELECT 1 FROM oauth_accounts o WHERE o.user_id = u.id AND o.provider = 'github' AND o.provider_user_id = ?) AS is_super
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ? AND u.disabled_at IS NULL`,
   )
-    .bind(hash)
-    .first<{ id: string; email: string; name: string; avatar_url: string | null; expires_at: string; last_seen_at: string }>();
+    .bind(env.SUPER_ADMIN_GITHUB_ID ?? '', hash)
+    .first<{ id: string; email: string; name: string; avatar_url: string | null; expires_at: string; last_seen_at: string; is_super: number }>();
   if (!row) return null;
   const now = Date.now();
   if (Date.parse(row.expires_at) <= now || Date.parse(row.last_seen_at) + IDLE_MS <= now) {
@@ -57,7 +66,7 @@ export async function userFromSession(env: Bindings, token: string | undefined):
   if (Date.parse(row.last_seen_at) + SLIDE_AFTER_MS <= now) {
     await env.DB.prepare(`UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?`).bind(nowIso(), hash).run();
   }
-  return { id: row.id, email: row.email, name: row.name, avatarUrl: row.avatar_url };
+  return { id: row.id, email: row.email, name: row.name, avatarUrl: row.avatar_url, isSuperAdmin: row.is_super === 1 };
 }
 
 export async function destroySession(env: Bindings, token: string | undefined): Promise<void> {
@@ -67,27 +76,32 @@ export async function destroySession(env: Bindings, token: string | undefined): 
 // --------------------------------------------------------------------- users
 export async function upsertUser(env: Bindings, profile: { email: string; name: string; avatarUrl?: string | null }, link?: { provider: string; providerUserId: string }): Promise<AuthUser> {
   const email = profile.email.trim().toLowerCase();
+  type Row = { id: string; email: string; name: string; avatar_url: string | null; disabled_at: string | null };
+  const done = (r: Row): AuthUser => {
+    // A disabled account must not sign in again (and must not fall through to creating a duplicate).
+    if (r.disabled_at) throw new AppError(403, 'account_disabled', 'This account has been disabled.');
+    return { id: r.id, email: r.email, name: r.name, avatarUrl: r.avatar_url, isSuperAdmin: false };
+  };
   if (link) {
-    const hit = await env.DB.prepare(`SELECT u.id, u.email, u.name, u.avatar_url FROM oauth_accounts o JOIN users u ON u.id = o.user_id WHERE o.provider = ? AND o.provider_user_id = ? AND u.disabled_at IS NULL`)
+    const hit = await env.DB.prepare(`SELECT u.id, u.email, u.name, u.avatar_url, u.disabled_at FROM oauth_accounts o JOIN users u ON u.id = o.user_id WHERE o.provider = ? AND o.provider_user_id = ?`)
       .bind(link.provider, link.providerUserId)
-      .first<{ id: string; email: string; name: string; avatar_url: string | null }>();
-    if (hit) return { id: hit.id, email: hit.email, name: hit.name, avatarUrl: hit.avatar_url };
+      .first<Row>();
+    if (hit) return done(hit);
   }
   // Callers pass only provider-verified emails, so linking to an existing account by email is safe.
-  let user = await env.DB.prepare(`SELECT id, email, name, avatar_url FROM users WHERE email = ? AND disabled_at IS NULL`)
-    .bind(email)
-    .first<{ id: string; email: string; name: string; avatar_url: string | null }>();
+  let user = await env.DB.prepare(`SELECT id, email, name, avatar_url, disabled_at FROM users WHERE email = ?`).bind(email).first<Row>();
   if (!user) {
     const id = newId('usr');
     await env.DB.prepare(`INSERT INTO users(id, email, name, avatar_url, created_at) VALUES (?, ?, ?, ?, ?)`)
       .bind(id, email, profile.name.slice(0, 100) || email, profile.avatarUrl ?? null, nowIso())
       .run();
-    user = { id, email, name: profile.name, avatar_url: profile.avatarUrl ?? null };
+    user = { id, email, name: profile.name, avatar_url: profile.avatarUrl ?? null, disabled_at: null };
   }
+  const result = done(user);
   if (link) {
     await env.DB.prepare(`INSERT OR IGNORE INTO oauth_accounts(provider, provider_user_id, user_id) VALUES (?, ?, ?)`).bind(link.provider, link.providerUserId, user.id).run();
   }
-  return { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatar_url };
+  return result;
 }
 
 // --------------------------------------------------------- signed OAuth state
