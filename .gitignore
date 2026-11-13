@@ -116,3 +116,8 @@ temp/
 
 # Project specific
 project-structure.md
+# v2
+.wrangler/
+.dev.vars
+dist/
+worker-configuration.d.ts
