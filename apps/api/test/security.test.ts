@@ -12,7 +12,7 @@ describe('route declarations', () => {
 
   it('only health, sign-in and dev-login are public', () => {
     const open = ROUTES.filter((r) => r.access === 'public').map((r) => `${r.method} ${r.path}`).sort();
-    expect(open).toEqual(['GET /auth/oauth/github', 'GET /auth/oauth/github/callback', 'GET /health', 'POST /auth/dev/login']);
+    expect(open).toEqual(['GET /auth/oauth/github', 'GET /auth/oauth/github/callback', 'GET /health', 'POST /auth/clerk/session', 'POST /auth/dev/login']);
   });
 });
 

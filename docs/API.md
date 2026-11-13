@@ -35,8 +35,9 @@ The server checks the caller's membership and role for `{orgId}` on every reques
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/auth/oauth/{provider}` | Start GitHub or Google sign-in |
-| GET | `/auth/oauth/{provider}/callback` | Finish sign-in, set session cookie |
+| GET | `/auth/oauth/github` | Start the owner's GitHub sign-in |
+| GET | `/auth/oauth/github/callback` | Finish it; only the owner's account is accepted |
+| POST | `/auth/clerk/session` | Exchange a Clerk session token for a ShopList session (customers) |
 | POST | `/auth/passkeys/options` | Get WebAuthn registration or sign-in options |
 | POST | `/auth/passkeys/verify` | Verify a passkey, set session cookie |
 | POST | `/auth/logout` | End the current session |

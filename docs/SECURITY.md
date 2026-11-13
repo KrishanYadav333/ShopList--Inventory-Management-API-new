@@ -31,20 +31,31 @@ Target: [OWASP ASVS 4.0](https://owasp.org/www-project-application-security-veri
 
 Account linking: a new OAuth identity with an email that matches an existing user is linked **only** if the provider marks the email as verified.
 
-## Sign-in policy and the super admin
+## Two sign-in doors, and the super admin
 
-ShopList has exactly **one super admin**: the site owner. The role is not stored in the database and cannot be granted through the app. It is derived on every request by checking that the session's user is linked to the GitHub account whose numeric id is in `SUPER_ADMIN_GITHUB_ID`. The numeric id is used because logins and emails can change or be reused; the id never changes.
+| Door | For | How it works |
+|---|---|---|
+| **GitHub** | The owner only | OAuth with PKCE. The callback accepts exactly one GitHub account, matched by numeric id (`SUPER_ADMIN_GITHUB_ID`), in every mode. Everyone else is refused before any user or session exists. |
+| **Clerk** | Customers | Clerk proves identity (Google, email, passkeys, MFA). The Worker verifies Clerk's RS256 session token itself, then issues its own ShopList session, so cookies, CSRF checks and revocation stay ours. Only enabled when `SIGNIN_MODE=open`. |
 
-| Mode (`SIGNIN_MODE`) | Who can sign in |
-|---|---|
-| unset or anything other than `open` (default) | Only the super admin. Fails closed: a typo keeps the site private. |
-| `open` | Anyone with a verified primary GitHub email |
+There is exactly **one super admin**: the owner. The role is never stored and cannot be granted through the app. It is true only when **both** hold: the user is linked to the GitHub account in `SUPER_ADMIN_GITHUB_ID`, **and** the current session was created through the GitHub door. A session from the customer door carries no admin power even on the same user row.
 
-- In owner-only mode the check runs on **every request**, not just at sign-in, so sessions created before a mode change stop working at once.
-- The GitHub callback rejects other accounts before any user row or session is created.
-- The super admin manages **accounts and organizations only**: list them, suspend or restore an organization, disable or re-enable a user (which signs them out immediately), and read a platform audit log. No admin route touches inventory, and inventory routes require organization membership, so the super admin cannot read any organization's products or stock. A test proves it.
-- The admin area answers 404 to everyone else, so its existence is not discoverable. The super admin cannot disable their own account.
-- A disabled account cannot sign in again until re-enabled.
+`SIGNIN_MODE` unset (or any value other than `open`) is **owner-only**, and fails closed: a typo keeps the site private. In owner-only mode the check runs on every request, so sessions created before a mode change stop working at once.
+
+Clerk token verification (`src/clerk.ts`):
+- The algorithm is pinned to RS256; `none` and HS256 (including the public-key-as-HMAC-secret downgrade) are rejected.
+- The signature is checked against the configured public key. `iss` must equal `CLERK_ISSUER`, `exp` and `nbf` are enforced with 5 seconds of leeway, `azp` must be this app's origin, and `sub` must be a Clerk user id.
+- Nothing reaches Clerk's API for a token that fails verification.
+- The user's primary email must be **verified by Clerk**; banned or locked users are refused.
+- A Clerk identity can never attach to an account that has a GitHub identity (the owner's), even with the same verified email.
+
+What the super admin can do:
+- Manage **accounts and organizations only**: list them, suspend or restore an organization, disable or re-enable a user (which signs them out immediately), and read a platform audit log.
+- No admin route touches inventory, and inventory routes require organization membership, so the super admin cannot read any organization's products or stock. A test proves it.
+- The admin area answers 404 to everyone else. The super admin cannot disable their own account.
+- A disabled account cannot sign in again until re-enabled, through either door.
+
+The app cannot enforce a second factor for the GitHub door: enable a passkey or two-factor authentication on the owner's GitHub account. A passkey step-up inside ShopList is a possible later addition.
 
 ## Sessions
 

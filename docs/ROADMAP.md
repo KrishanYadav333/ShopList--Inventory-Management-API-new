@@ -26,7 +26,7 @@ Single shared product list, Worker + D1, public writes capped at 500 products. L
 
 ## Phase 2: Identity and tenancy (partly done)
 
-> **Status:** GitHub OAuth with PKCE, sessions (hashed tokens), organizations, roles, invitations and tenant isolation are built and tested. Also built: owner-only sign-in by default, a single super admin (platform admin screen, suspend/disable, platform audit log). Still to do: Google sign-in, passkeys, Turnstile on sign-in, session list and revoke UI.
+> **Status:** GitHub OAuth with PKCE, sessions (hashed tokens), organizations, roles, invitations and tenant isolation are built and tested. Also built: owner-only sign-in by default, a single super admin (platform admin screen, suspend/disable, platform audit log). Customer sign-in through Clerk is built on the server (token verification and session exchange, 12 tests); the browser sign-in screen needs a Clerk application. Still to do: the Clerk sign-in UI, a passkey step-up for the owner, Turnstile on sign-in, session list and revoke UI.
 
 **Goal:** real accounts and isolated organizations.
 

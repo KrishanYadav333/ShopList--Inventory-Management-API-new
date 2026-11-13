@@ -36,6 +36,7 @@ import {
   type AuthUser,
 } from './auth';
 import type { Bindings } from './env';
+import { clerkConfigured, fetchClerkProfile, verifyClerkToken } from './clerk';
 import { AppError, problemResponse, unwrap } from './errors';
 import type { Caller, Idem } from './inventory-do';
 import { decodeCursor, encodeCursor, newId, nowIso, randomToken, sha256Hex } from './util';
@@ -218,11 +219,28 @@ route('get', '/auth/oauth/github/callback', 'public', async (c) => {
   }
   const profile = await githubProfile(c.env, code, saved.verifier);
   const isOwner = !!c.env.SUPER_ADMIN_GITHUB_ID && profile.id === c.env.SUPER_ADMIN_GITHUB_ID;
-  if (signinClosed(c.env) && !isOwner) throw new AppError(403, 'signin_closed', 'This ShopList is private. Only the site owner can sign in.');
+  // GitHub is the owner's door only, in every mode. Everyone else signs in through Clerk.
+  if (!isOwner) throw new AppError(403, 'signin_closed', 'GitHub sign-in is only for the site owner. Use the main sign-in instead.');
   const user = await upsertUser(c.env, profile, { provider: 'github', providerUserId: profile.id });
-  const token = await createSession(c.env, user.id, c.req.raw);
+  const token = await createSession(c.env, user.id, c.req.raw, 'github');
   setSessionCookie(c, token);
   return c.redirect(c.env.APP_ORIGIN, 302);
+});
+
+/** Exchanges a Clerk session token for a ShopList session. Clerk proves identity; ShopList owns the session. */
+route('post', '/auth/clerk/session', 'public', async (c) => {
+  if (!clerkConfigured(c.env)) throw new AppError(503, 'clerk_not_configured', 'Sign-in is not configured on this server.');
+  const { data } = await readJson(c, z.object({ token: z.string().min(20).max(4096) }).strict());
+  const sub = await verifyClerkToken(c.env, data.token);
+  // Customers can sign in only when the deployment is open; the owner uses GitHub.
+  if (signinClosed(c.env)) throw new AppError(403, 'signin_closed', 'This ShopList is private. Only the site owner can sign in.');
+  const profile = await fetchClerkProfile(c.env, sub);
+  // The owner's account is reachable only through the owner's door. A customer-door identity must never attach to it.
+  const owner = await c.env.DB.prepare(`SELECT 1 AS x FROM users u JOIN oauth_accounts o ON o.user_id = u.id WHERE u.email = ? AND o.provider = 'github' LIMIT 1`).bind(profile.email.toLowerCase()).first();
+  if (owner) throw new AppError(409, 'email_in_use', 'That email belongs to a different kind of account. Use the other sign-in.');
+  const user = await upsertUser(c.env, profile, { provider: 'clerk', providerUserId: sub });
+  setSessionCookie(c, await createSession(c.env, user.id, c.req.raw, 'clerk'));
+  return c.json({ user });
 });
 
 /** Local development and tests only. Refuses to run unless DEV_AUTH is exactly "true". */
@@ -236,7 +254,7 @@ route('post', '/auth/dev/login', 'public', async (c) => {
     await c.env.DB.prepare(`INSERT OR REPLACE INTO oauth_accounts(provider, provider_user_id, user_id) VALUES ('github', ?, ?)`).bind(c.env.SUPER_ADMIN_GITHUB_ID, user.id).run();
     user.isSuperAdmin = true;
   }
-  const token = await createSession(c.env, user.id, c.req.raw);
+  const token = await createSession(c.env, user.id, c.req.raw, 'dev');
   setSessionCookie(c, token);
   return c.json({ user });
 });

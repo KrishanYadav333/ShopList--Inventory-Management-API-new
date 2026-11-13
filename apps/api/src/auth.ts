@@ -26,11 +26,13 @@ export const mayUse = (env: Pick<Bindings, 'SIGNIN_MODE'>, user: Pick<AuthUser, 
 
 // ------------------------------------------------------------------ sessions
 /** Creates a session and returns the raw token. Only its SHA-256 is stored. */
-export async function createSession(env: Bindings, userId: string, req: Request): Promise<string> {
+export type SessionProvider = 'github' | 'clerk' | 'dev';
+
+export async function createSession(env: Bindings, userId: string, req: Request, provider: SessionProvider): Promise<string> {
   const token = randomToken(32);
   const now = Date.now();
   await env.DB.prepare(
-    `INSERT INTO sessions(token_hash, user_id, created_at, expires_at, last_seen_at, user_agent, ip_country) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO sessions(token_hash, user_id, created_at, expires_at, last_seen_at, user_agent, ip_country, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       await sha256Hex(token),
@@ -40,6 +42,7 @@ export async function createSession(env: Bindings, userId: string, req: Request)
       new Date(now).toISOString(),
       (req.headers.get('user-agent') ?? '').slice(0, 200) || null,
       (req.headers.get('cf-ipcountry') ?? '').slice(0, 2) || null,
+      provider,
     )
     .run();
   return token;
@@ -50,7 +53,7 @@ export async function userFromSession(env: Bindings, token: string | undefined):
   const hash = await sha256Hex(token);
   const row = await env.DB.prepare(
     `SELECT u.id, u.email, u.name, u.avatar_url, s.expires_at, s.last_seen_at,
-            EXISTS (SELECT 1 FROM oauth_accounts o WHERE o.user_id = u.id AND o.provider = 'github' AND o.provider_user_id = ?) AS is_super
+            (s.provider IN ('github', 'dev') AND EXISTS (SELECT 1 FROM oauth_accounts o WHERE o.user_id = u.id AND o.provider = 'github' AND o.provider_user_id = ?)) AS is_super
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ? AND u.disabled_at IS NULL`,
   )

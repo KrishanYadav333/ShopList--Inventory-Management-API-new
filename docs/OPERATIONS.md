@@ -88,8 +88,12 @@ npx wrangler queues create shoplist-jobs
 
 # GitHub OAuth app: https://github.com/settings/developers, callback
 #   https://<your-host>/api/v1/auth/oauth/github/callback
-# Only GITHUB_CLIENT_ID and the two secrets below are needed. SUPER_ADMIN_GITHUB_ID is a plain var in
-# wrangler.jsonc (the owner's numeric GitHub id) and sign-in is owner-only unless SIGNIN_MODE=open.
+# GitHub is the owner's door. SUPER_ADMIN_GITHUB_ID is a plain var in wrangler.jsonc (the owner's numeric
+# GitHub id). Sign-in is owner-only unless SIGNIN_MODE=open.
+# Clerk is the customers' door (only used when SIGNIN_MODE=open): create an application at clerk.com, then
+#   npx wrangler secret put CLERK_SECRET_KEY
+#   npx wrangler secret put CLERK_JWT_KEY       # Dashboard > API keys > Show JWT public key (PEM)
+# and set CLERK_ISSUER (the Frontend API URL, e.g. https://example-12.clerk.accounts.dev) as a plain var.
 npx wrangler secret put GITHUB_CLIENT_ID      # not secret, but kept out of git
 npx wrangler secret put GITHUB_CLIENT_SECRET
 npx wrangler secret put TURNSTILE_SECRET
