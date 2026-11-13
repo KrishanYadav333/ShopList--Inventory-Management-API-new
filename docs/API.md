@@ -43,6 +43,19 @@ The server checks the caller's membership and role for `{orgId}` on every reques
 | GET | `/me` | Current user, organizations and roles |
 | GET / DELETE | `/me/sessions[/{id}]` | List or revoke own sessions |
 
+### Platform administration (super admin only)
+
+All answer 404 to everyone else (401 when signed out). None returns inventory data.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/admin/overview` | User, organization, suspended, disabled and active-session counts; sign-in mode |
+| GET | `/admin/orgs` | Organizations with member counts and status (cursor paged) |
+| GET | `/admin/users` | Accounts with organization counts, last seen and status (cursor paged) |
+| POST | `/admin/users/{id}/disable` · `/enable` | Disable signs the user out immediately; you cannot disable yourself |
+| POST | `/admin/orgs/{id}/suspend` · `/restore` | Suspended organizations vanish for their members |
+| GET | `/admin/audit` | Every platform action with actor and request id |
+
 ### Organizations and members
 
 | Method | Path | Role |

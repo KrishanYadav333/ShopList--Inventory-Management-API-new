@@ -10,7 +10,7 @@ export interface OrgSummary {
   role: Role;
 }
 export interface Me {
-  user: { id: string; email: string; name: string; avatarUrl: string | null };
+  user: { id: string; email: string; name: string; avatarUrl: string | null; isSuperAdmin: boolean };
   organizations: OrgSummary[];
 }
 

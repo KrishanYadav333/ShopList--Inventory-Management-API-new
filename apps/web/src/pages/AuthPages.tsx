@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../api';
 import { Icon } from '../icons';
 import { useMe } from '../queries';
@@ -10,6 +10,7 @@ export function Login() {
   const me = useMe();
   const qc = useQueryClient();
   const nav = useNavigate();
+  const health = useQuery({ queryKey: ['health'], queryFn: () => api<{ signin: 'open' | 'owner-only' }>('GET', '/health'), staleTime: 300_000 });
   const [email, setEmail] = useState('');
   const [error, setError] = useState('');
   const dev = useMutation({
@@ -25,6 +26,7 @@ export function Login() {
         <div className="logo-icon big">SL</div>
         <h1>Sign in to ShopList</h1>
         <p>Inventory you can trust: every change is recorded.</p>
+        {health.data?.signin === 'owner-only' && <p className="notice" role="note">This ShopList is private. Only the site owner can sign in.</p>}
         <a className="btn btn-github" href="/api/v1/auth/oauth/github"><Icon name="github" size={18} /> Continue with GitHub</a>
         {import.meta.env.DEV && (
           <form onSubmit={submit} className="dev-login">

@@ -235,3 +235,16 @@ button.nav-icon { background: none; border: 0; cursor: pointer; }
   .skeleton, .toast { animation: none; }
   * { scroll-behavior: auto !important; transition: none !important; }
 }
+
+.notice { background: #fff3cd; color: #664d03; border: 1px solid #ffe69c; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; padding: 24px 24px 0; }
+.tile { border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.tile .num { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
+.tile .lbl { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; }
+.admin-section { padding: 24px; display: grid; gap: 10px; }
+.admin-section h2 { font-size: 16px; }
+.admin-section .orders-table-container { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.status.off { background: #e9ecef; color: #495057; }
+.status.warn { background: #f8d7da; color: #721c24; }
+.cell-btn { text-transform: none; font-size: 12px; padding: 6px 12px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

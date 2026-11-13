@@ -31,6 +31,21 @@ Target: [OWASP ASVS 4.0](https://owasp.org/www-project-application-security-veri
 
 Account linking: a new OAuth identity with an email that matches an existing user is linked **only** if the provider marks the email as verified.
 
+## Sign-in policy and the super admin
+
+ShopList has exactly **one super admin**: the site owner. The role is not stored in the database and cannot be granted through the app. It is derived on every request by checking that the session's user is linked to the GitHub account whose numeric id is in `SUPER_ADMIN_GITHUB_ID`. The numeric id is used because logins and emails can change or be reused; the id never changes.
+
+| Mode (`SIGNIN_MODE`) | Who can sign in |
+|---|---|
+| unset or anything other than `open` (default) | Only the super admin. Fails closed: a typo keeps the site private. |
+| `open` | Anyone with a verified primary GitHub email |
+
+- In owner-only mode the check runs on **every request**, not just at sign-in, so sessions created before a mode change stop working at once.
+- The GitHub callback rejects other accounts before any user row or session is created.
+- The super admin manages **accounts and organizations only**: list them, suspend or restore an organization, disable or re-enable a user (which signs them out immediately), and read a platform audit log. No admin route touches inventory, and inventory routes require organization membership, so the super admin cannot read any organization's products or stock. A test proves it.
+- The admin area answers 404 to everyone else, so its existence is not discoverable. The super admin cannot disable their own account.
+- A disabled account cannot sign in again until re-enabled.
+
 ## Sessions
 
 - Token: 32 random bytes from `crypto.getRandomValues`, base64url encoded.

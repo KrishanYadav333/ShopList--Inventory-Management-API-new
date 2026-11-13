@@ -86,12 +86,12 @@ npx wrangler d1 migrations apply shoplist-control --remote
 npx wrangler r2 bucket create shoplist-files
 npx wrangler queues create shoplist-jobs
 
-# OAuth apps: create a GitHub OAuth app and a Google OAuth client
-# with callback https://<your-host>/api/v1/auth/oauth/<provider>/callback
-npx wrangler secret put GITHUB_CLIENT_ID
+# GitHub OAuth app: https://github.com/settings/developers, callback
+#   https://<your-host>/api/v1/auth/oauth/github/callback
+# Only GITHUB_CLIENT_ID and the two secrets below are needed. SUPER_ADMIN_GITHUB_ID is a plain var in
+# wrangler.jsonc (the owner's numeric GitHub id) and sign-in is owner-only unless SIGNIN_MODE=open.
+npx wrangler secret put GITHUB_CLIENT_ID      # not secret, but kept out of git
 npx wrangler secret put GITHUB_CLIENT_SECRET
-npx wrangler secret put GOOGLE_CLIENT_ID
-npx wrangler secret put GOOGLE_CLIENT_SECRET
 npx wrangler secret put TURNSTILE_SECRET
 openssl rand -base64 32 | npx wrangler secret put COOKIE_SIGNING_KEY
 
