@@ -54,6 +54,8 @@ cd ../web && npx vite
 
 Open **http://localhost:5173** (not 127.0.0.1; the Origin check allows only the configured origin). The login page shows a development-only email sign-in. `DEV_AUTH` enables it and `INSECURE_DEV_COOKIES` relaxes the `__Host-` Secure cookie so a browser accepts it over plain http; neither is ever set in production or in tests, so the tests exercise the real production cookie.
 
+Load and correctness check against a running local server (400 parallel sales of 10 units must sell exactly 10; 100 identical retries must create one movement; counters must match a recount): `node apps/api/scripts/loadtest.mjs`.
+
 Tests: `npm test` (runs the API suite inside the Workers runtime). Build the UI first with `npm run build -w @shoplist/web`, because the Worker's static assets directory must exist.
 
 ## Environments
