@@ -44,7 +44,7 @@ export function AdminPage() {
     <div className="dashboard">
       <a className="skip" href="#main">Skip to content</a>
       <aside className="sidebar open">
-        <div className="sidebar-header"><div className="logo"><div className="logo-icon">SL</div><strong>Platform admin</strong></div></div>
+        <div className="sidebar-header"><div className="logo"><img className="brand-mark" src="/logo-symbol-white.png" alt="ShopList" width="40" height="43" /><strong>Platform admin</strong></div></div>
         <div className="sidebar-filters">
           <div className="filter-section">
             <h3>Sign-in</h3>

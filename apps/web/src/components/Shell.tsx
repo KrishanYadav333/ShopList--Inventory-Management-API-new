@@ -87,7 +87,7 @@ export function Shell() {
       <aside className={`sidebar${menuOpen ? ' open' : ''}`}>
         <div className="sidebar-header">
           <div className="logo">
-            <div className="logo-icon">SL</div>
+            <img className="brand-mark" src="/logo-symbol-white.png" alt="ShopList" width="40" height="43" />
             <select className="org-switch" aria-label="Organization" value={orgId} onChange={(e) => e.target.value === '__new' ? nav('/') : nav(`/o/${e.target.value}/orders`)}>
               {me.data!.organizations.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
               <option value="__new">+ New organization…</option>

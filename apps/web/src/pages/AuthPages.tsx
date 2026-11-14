@@ -24,7 +24,7 @@ export function Login() {
   return (
     <div className="auth">
       <div className="auth-card">
-        <div className="logo-icon big">SL</div>
+        <img className="brand-lockup" src="/logo-lockup.png" alt="ShopList" width="280" height="83" />
         <h1>Sign in to ShopList</h1>
         <p>Inventory you can trust: every change is recorded.</p>
         {health.data?.signin === 'owner-only' && <p className="notice" role="note">This ShopList is private. Only the site owner can sign in.</p>}
@@ -63,7 +63,7 @@ export function Home() {
   return (
     <div className="auth">
       <form className="auth-card" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
-        <div className="logo-icon big">SL</div>
+        <img className="brand-mark-lg" src="/logo-symbol.png" alt="ShopList" width="56" height="60" />
         <h1>{orgs.length ? 'New organization' : `Welcome, ${me.data.user.name.split(' ')[0]}`}</h1>
         <p>An organization holds one business’s products, locations and team.</p>
         <div className="field"><label htmlFor="o-name">Organization name</label><input id="o-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={100} placeholder="e.g. Acme Hardware" /></div>
@@ -88,7 +88,7 @@ export function Invite() {
   return (
     <div className="auth">
       <div className="auth-card">
-        <div className="logo-icon big">SL</div>
+        <img className="brand-mark-lg" src="/logo-symbol.png" alt="ShopList" width="56" height="60" />
         <h1>You’ve been invited</h1>
         <p>Join as <strong>{me.data.user.email}</strong>. The invitation only works for this email address.</p>
         <button className="btn btn-primary full" onClick={() => accept.mutate()} disabled={accept.isPending}>{accept.isPending ? 'Joining…' : 'Accept invitation'}</button>
