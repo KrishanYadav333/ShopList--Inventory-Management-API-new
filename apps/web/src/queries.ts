@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import type { Dashboard, Location, Movement, Page, Product, Role, StockLevel } from '@shoplist/shared';
+import type { Dashboard, Location, Movement, Order, OrderState, Page, Product, Role, StockLevel } from '@shoplist/shared';
 import { api, ApiError } from './api';
 
 export interface OrgSummary {
@@ -77,3 +77,18 @@ export const useMovements = (orgId: string, f: { productId?: string; locationId?
 
 export const canWrite = (role: Role) => role !== 'viewer';
 export const canAdmin = (role: Role) => role === 'admin' || role === 'owner';
+
+export const useOrders = (orgId: string, f: { q?: string; state?: OrderState }) =>
+  useInfiniteQuery({
+    queryKey: ['org', orgId, 'orders', f],
+    queryFn: ({ pageParam }) => {
+      const p = new URLSearchParams({ limit: '50' });
+      if (f.q) p.set('q', f.q);
+      if (f.state) p.set('state', f.state);
+      if (pageParam) p.set('cursor', pageParam);
+      return api<Page<Order>>('GET', `/orgs/${orgId}/orders?${p}`);
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    placeholderData: (prev) => prev,
+  });

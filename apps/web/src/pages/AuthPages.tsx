@@ -53,13 +53,13 @@ export function Home() {
   const [name, setName] = useState('');
   const create = useMutation({
     mutationFn: () => api<{ organization: { id: string } }>('POST', '/orgs', { body: { name } }),
-    onSuccess: async (r) => { await qc.invalidateQueries({ queryKey: ['me'] }); nav(`/o/${r.organization.id}/products`); },
+    onSuccess: async (r) => { await qc.invalidateQueries({ queryKey: ['me'] }); nav(`/o/${r.organization.id}/orders`); },
     onError: (e: ApiError) => toast({ kind: 'error', text: e.message }),
   });
   if (me.isLoading) return <div className="boot">Loading…</div>;
   if (me.isError || !me.data) return <Navigate to="/login" replace />;
   const orgs = me.data.organizations;
-  if (orgs.length && !location.search.includes('new')) return <Navigate to={`/o/${orgs[0].id}/products`} replace />;
+  if (orgs.length && !location.search.includes('new')) return <Navigate to={`/o/${orgs[0].id}/orders`} replace />;
   return (
     <div className="auth">
       <form className="auth-card" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
@@ -68,7 +68,7 @@ export function Home() {
         <p>An organization holds one business’s products, locations and team.</p>
         <div className="field"><label htmlFor="o-name">Organization name</label><input id="o-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={100} placeholder="e.g. Acme Hardware" /></div>
         <button className="btn btn-primary full" disabled={!name.trim() || create.isPending}>{create.isPending ? 'Creating…' : 'Create organization'}</button>
-        {orgs.length > 0 && <button type="button" className="btn btn-outline full" onClick={() => nav(`/o/${orgs[0].id}/products`)}>Cancel</button>}
+        {orgs.length > 0 && <button type="button" className="btn btn-outline full" onClick={() => nav(`/o/${orgs[0].id}/orders`)}>Cancel</button>}
       </form>
     </div>
   );
@@ -81,7 +81,7 @@ export function Invite() {
   const qc = useQueryClient();
   const accept = useMutation({
     mutationFn: () => api<{ organizationId: string }>('POST', `/invitations/${token}/accept`, { body: {} }),
-    onSuccess: async (r) => { await qc.invalidateQueries({ queryKey: ['me'] }); nav(`/o/${r.organizationId}/products`); },
+    onSuccess: async (r) => { await qc.invalidateQueries({ queryKey: ['me'] }); nav(`/o/${r.organizationId}/orders`); },
   });
   if (me.isLoading) return <div className="boot">Loading…</div>;
   if (!me.data) return <Navigate to="/login" replace />;

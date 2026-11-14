@@ -5,18 +5,20 @@ import { api } from '../api';
 import { Icon } from '../icons';
 import { useDashboard, useLocations, useMe, canWrite, type OrgSummary } from '../queries';
 import { AdjustDialog } from './AdjustDialog';
+import { OrderDialog } from './OrderDialog';
 import { CommandPalette } from './CommandPalette';
 import { ProductDialog } from './ProductDialog';
 
 export interface ShellContext {
   org: OrgSummary;
   openNew: () => void;
+  openOrder: () => void;
   openAdjust: (productId?: string) => void;
   openEdit: (productId: string) => void;
 }
 export const useShell = () => useOutletContext<ShellContext>();
 
-type Dialog = { kind: 'new' } | { kind: 'edit'; id: string } | { kind: 'adjust'; productId?: string } | { kind: 'palette' } | null;
+type Dialog = { kind: 'order' } | { kind: 'new' } | { kind: 'edit'; id: string } | { kind: 'adjust'; productId?: string } | { kind: 'palette' } | null;
 
 export function Shell() {
   const { orgId = '' } = useParams();
@@ -45,7 +47,7 @@ export function Shell() {
       const typing = /input|textarea|select/i.test((e.target as HTMLElement)?.tagName ?? '') || (e.target as HTMLElement)?.isContentEditable;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setDialog({ kind: 'palette' }); }
       else if (!typing && !e.metaKey && !e.ctrlKey && e.key === '/') { e.preventDefault(); document.querySelector<HTMLInputElement>('.search-input')?.focus(); }
-      else if (!typing && !e.metaKey && !e.ctrlKey && e.key === 'n' && org && canWrite(org.role)) { e.preventDefault(); setDialog({ kind: 'new' }); }
+      else if (!typing && !e.metaKey && !e.ctrlKey && e.key === 'n' && org && canWrite(org.role)) { e.preventDefault(); setDialog({ kind: location.pathname.endsWith('/orders') ? 'order' : 'new' } as Dialog); }
     };
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);
@@ -62,6 +64,7 @@ export function Shell() {
     );
   }
 
+  const isOrders = location.pathname.endsWith('/orders');
   const stock = params.get('stock');
   const setFilter = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
@@ -73,6 +76,7 @@ export function Shell() {
   const ctx: ShellContext = {
     org,
     openNew: () => setDialog({ kind: 'new' }),
+    openOrder: () => setDialog({ kind: 'order' }),
     openAdjust: (productId) => setDialog({ kind: 'adjust', productId }),
     openEdit: (id) => setDialog({ kind: 'edit', id }),
   };
@@ -84,7 +88,7 @@ export function Shell() {
         <div className="sidebar-header">
           <div className="logo">
             <div className="logo-icon">SL</div>
-            <select className="org-switch" aria-label="Organization" value={orgId} onChange={(e) => e.target.value === '__new' ? nav('/') : nav(`/o/${e.target.value}/products`)}>
+            <select className="org-switch" aria-label="Organization" value={orgId} onChange={(e) => e.target.value === '__new' ? nav('/') : nav(`/o/${e.target.value}/orders`)}>
               {me.data!.organizations.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
               <option value="__new">+ New organization…</option>
             </select>
@@ -92,6 +96,27 @@ export function Shell() {
         </div>
 
         <div className="sidebar-filters">
+          {isOrders ? (
+            <div className="filter-section">
+              <h3>Orders</h3>
+              <div className="status-filters" role="group" aria-label="Order status">
+                {([
+                  [null, 'All orders', d ? Object.values(d.orders).reduce((x, y) => x + y, 0) : undefined, ''],
+                  ['payment_required', 'Payment required', d?.orders.payment_required, 'primary'],
+                  ['waiting_for_stock', 'Waiting for stock', d?.orders.waiting_for_stock, 'warning'],
+                  ['ready_to_ship', 'Ready to ship', d?.orders.ready_to_ship, 'primary'],
+                  ['shipped', 'Shipped', d?.orders.shipped, ''],
+                  ['cancelled', 'Cancelled', d?.orders.cancelled, ''],
+                ] as const).map(([value, label, count, tone]) => (
+                  <button key={label} className={`status-item${(params.get('state') ?? null) === value ? ' active' : ''}`} aria-pressed={(params.get('state') ?? null) === value} onClick={() => setFilter('state', value)}>
+                    <span className="status-label">{label}</span>
+                    <span className={`status-count ${tone}`}>{count ?? '–'}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <>
           <div className="filter-section">
             <h3>Stock status</h3>
             <div className="status-filters" role="group" aria-label="Stock status">
@@ -139,10 +164,13 @@ export function Shell() {
               <div className="side-value">{new Intl.NumberFormat(undefined, { style: 'currency', currency: org.currency }).format(d.inventoryValueMinor / 100)}</div>
             </div>
           )}
+                    </>
+          )}
         </div>
 
         <nav className="sidebar-nav" aria-label="Main">
           <div className="nav-icons">
+            <NavLink to={`/o/${orgId}/orders`} className="nav-icon" title="Orders" aria-label="Orders"><Icon name="cart" size={18} /></NavLink>
             <NavLink to={`/o/${orgId}/products`} className="nav-icon" title="Products" aria-label="Products"><Icon name="grid" size={18} /></NavLink>
             <NavLink to={`/o/${orgId}/history`} className="nav-icon" title="Stock history" aria-label="Stock history"><Icon name="clock" size={18} /></NavLink>
             <NavLink to={`/o/${orgId}/settings`} className="nav-icon" title="Settings" aria-label="Settings"><Icon name="cog" size={18} /></NavLink>
@@ -158,6 +186,7 @@ export function Shell() {
         <Outlet context={ctx} />
       </main>
 
+      {dialog?.kind === 'order' && <OrderDialog org={org} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'new' && <ProductDialog org={org} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'edit' && <ProductDialog org={org} productId={dialog.id} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'adjust' && <AdjustDialog org={org} productId={dialog.productId} onClose={() => setDialog(null)} />}
