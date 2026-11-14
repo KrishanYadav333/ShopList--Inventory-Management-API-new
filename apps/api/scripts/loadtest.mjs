@@ -1,5 +1,5 @@
 // Load and correctness test against a running local server.
-const B = 'http://localhost:8787';
+const B = process.env.BASE_URL ?? 'http://localhost:8787';
 const ORIGIN = B;
 let n = 0;
 const ip = () => `10.${(n >> 16) & 255}.${(n >> 8) & 255}.${n++ & 255}`;
@@ -26,8 +26,8 @@ const timed = async (fn) => { const t = performance.now(); const r = await fn();
 
 // --- setup
 const email = `load-${Date.now()}@example.com`;
-const login = await fetch(B + '/api/v1/auth/dev/login', { method: 'POST', headers: { origin: ORIGIN, 'content-type': 'application/json', 'cf-connecting-ip': ip() }, body: JSON.stringify({ email }) });
-const cookie = login.headers.get('set-cookie').match(/(__Host-sl_session=[^;]+)/)[1];
+const login = await fetch(B + '/api/v1/auth/dev/login', { method: 'POST', headers: { origin: ORIGIN, 'content-type': 'application/json', 'cf-connecting-ip': ip() }, body: JSON.stringify(process.env.SUPER_ADMIN ? { email, superAdmin: true } : { email }) });
+const cookie = login.headers.get('set-cookie').match(/((?:__Host-)?sl_session=[^;]+)/)[1];
 const org = (await req(cookie, 'POST', '/orgs', { name: 'Load Test' })).json.organization.id;
 const base = `/orgs/${org}`;
 const loc = (await req(cookie, 'GET', `${base}/locations`)).json.data[0].id;

@@ -56,6 +56,8 @@ Open **http://localhost:5173** (not 127.0.0.1; the Origin check allows only the 
 
 Load and correctness check against a running local server (400 parallel sales of 10 units must sell exactly 10; 100 identical retries must create one movement; counters must match a recount): `node apps/api/scripts/loadtest.mjs`.
 
+`wrangler dev --remote` no longer supports Durable Objects, so production-runtime behaviour (full-text search, transactions, the 100-parameter limit, parallel writes) is verified with a temporary key-protected Worker that calls the inventory object directly, then deletes itself. The v2 deployment passed 21 such checks on 2026-11-14.
+
 Tests: `npm test` (runs the API suite inside the Workers runtime). Build the UI first with `npm run build -w @shoplist/web`, because the Worker's static assets directory must exist.
 
 ## Environments

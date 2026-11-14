@@ -6,6 +6,10 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
 
+  // Served only on the workers.dev address. Per-version preview URLs are off so old builds are not reachable.
+  "workers_dev": true,
+  "preview_urls": false,
+
   // The React app is built into apps/web/dist and served by this Worker as static assets
   // (free and unmetered). Only /api/* runs Worker code.
   "assets": {
@@ -22,7 +26,7 @@
     {
       "binding": "DB",
       "database_name": "shoplist-control",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "da6bb237-8d72-4fe1-bc18-b974e22dbefc",
       "migrations_dir": "migrations/control"
     }
   ],

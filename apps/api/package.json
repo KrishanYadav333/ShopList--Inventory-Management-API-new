@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "wrangler deploy --var APP_ORIGIN:https://shoplist-v2.technology1.workers.dev",
     "types": "wrangler types",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
