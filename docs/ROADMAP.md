@@ -101,3 +101,9 @@ Single shared product list, Worker + D1, public writes capped at 500 products. L
 - Product variants (size, color)
 - Offline stock changes on mobile
 - Shopify and WooCommerce connectors
+
+## Status, 2026-11-14
+
+Built and tested: orders with stock reservations, API keys, CSV import, webhooks, barcode scanning, generated API docs (`/api/docs`, `/api/v1/openapi.json`) and a CI pipeline (`.github/workflows/ci.yml`: typecheck, tests, bundle budget, audit).
+
+Not built: Google sign-in, passkeys, Turnstile, the Clerk sign-in screen, session list and revoke UI, row virtualization, automated preview deployments, the v1 to v2 data migration and cutover.

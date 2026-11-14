@@ -10,9 +10,9 @@ describe('route declarations', () => {
     for (const r of orgRoutes) expect(['public', 'user'], `${r.method} ${r.path}`).not.toContain(r.access);
   });
 
-  it('only health, sign-in and dev-login are public', () => {
+  it('only health, the API description, and sign-in routes are public', () => {
     const open = ROUTES.filter((r) => r.access === 'public').map((r) => `${r.method} ${r.path}`).sort();
-    expect(open).toEqual(['GET /auth/oauth/github', 'GET /auth/oauth/github/callback', 'GET /health', 'POST /auth/clerk/session', 'POST /auth/dev/login']);
+    expect(open).toEqual(['GET /auth/oauth/github', 'GET /auth/oauth/github/callback', 'GET /health', 'GET /openapi.json', 'POST /auth/clerk/session', 'POST /auth/dev/login']);
   });
 });
 

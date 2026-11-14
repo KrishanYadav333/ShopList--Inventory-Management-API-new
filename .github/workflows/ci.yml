@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # npm 10 has a peer-dependency resolver bug with vitest, hence --legacy-peer-deps
+      - run: npm ci --legacy-peer-deps
+      - name: Build the web app (the Worker's static assets directory must exist for tests)
+        run: npm run build -w @shoplist/web
+      - name: Typecheck
+        run: |
+          npm run typecheck -w @shoplist/api
+          npm run typecheck -w @shoplist/web
+      - name: Tests (inside the Workers runtime)
+        run: npm test
+      - name: Bundle size budget (170 KB gzipped JavaScript)
+        run: |
+          size=$(cat apps/web/dist/assets/*.js | gzip -9 | wc -c)
+          echo "gzipped JS: $size bytes"
+          test "$size" -le 174080
+      - name: Dependency audit
+        run: npm audit --omit=dev --audit-level=high

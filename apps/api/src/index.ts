@@ -47,6 +47,7 @@ import {
   type AuthUser,
 } from './auth';
 import type { Bindings } from './env';
+import { buildOpenApi, renderDocsPage } from './docs';
 import { checkWebhookUrl, flushEvents, forgetHooks, handleQueue, sendTestEvent, type DeliveryJob } from './webhooks';
 import { clerkConfigured, fetchClerkProfile, verifyClerkToken } from './clerk';
 import { AppError, problemResponse, unwrap } from './errors';
@@ -74,7 +75,7 @@ app.use('*', async (c, next) => {
   h.set('Permissions-Policy', 'camera=(self), geolocation=()');
   if (new URL(c.req.url).pathname.startsWith('/api/')) {
     h.set('Cache-Control', 'no-store');
-    h.set('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+    if (!h.has('Content-Security-Policy')) h.set('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
   }
 });
 
@@ -251,6 +252,8 @@ function route(method: 'get' | 'post' | 'patch' | 'delete', path: string, access
 }
 
 // -------------------------------------------------------------------- public
+route('get', '/openapi.json', 'public', (c) => c.json(buildOpenApi(ROUTES, new URL(c.req.url).origin)));
+
 route('get', '/health', 'public', (c) => c.json({ ok: true, signin: signinClosed(c.env) ? 'owner-only' : 'open' }));
 
 // ---------------------------------------------------------------------- auth
@@ -736,6 +739,13 @@ route('get', '/admin/audit', 'super', async (c) => {
   const data = results.slice(0, q.limit).map((r) => ({ ...r, detail: r.detail ? JSON.parse(r.detail) : null }));
   const last = data[data.length - 1];
   return c.json({ data, nextCursor: hasMore && last ? encodeCursor({ c: last.createdAt, i: last.id }) : null, hasMore });
+});
+
+// Human-readable reference, generated from the same route table. Script-free; its only style block uses a per-response nonce.
+app.get('/api/docs', (c) => {
+  const nonce = randomToken(16);
+  c.header('Content-Security-Policy', `default-src 'none'; style-src 'nonce-${nonce}'; frame-ancestors 'none'`);
+  return c.html(renderDocsPage(buildOpenApi(ROUTES, new URL(c.req.url).origin), nonce));
 });
 
 app.route('/api/v1', api);
