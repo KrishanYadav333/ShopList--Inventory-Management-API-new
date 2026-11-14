@@ -12,9 +12,10 @@ export function Login() {
   const nav = useNavigate();
   const health = useQuery({ queryKey: ['health'], queryFn: () => api<{ signin: 'open' | 'owner-only' }>('GET', '/health'), staleTime: 300_000 });
   const [email, setEmail] = useState('');
+  const [asAdmin, setAsAdmin] = useState(false);
   const [error, setError] = useState('');
   const dev = useMutation({
-    mutationFn: () => api('POST', '/auth/dev/login', { body: { email } }),
+    mutationFn: () => api('POST', '/auth/dev/login', { body: asAdmin ? { email, superAdmin: true } : { email } }),
     onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['me'] }); nav('/'); },
     onError: (e: ApiError) => setError(e.message),
   });
@@ -32,6 +33,7 @@ export function Login() {
           <form onSubmit={submit} className="dev-login">
             <div className="hint">Development only</div>
             <input type="email" required placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} aria-label="Email for development sign-in" />
+            <label className="check"><input type="checkbox" checked={asAdmin} onChange={(e) => setAsAdmin(e.target.checked)} /> Sign in as super admin</label>
             <button className="btn btn-outline" disabled={dev.isPending}>Dev sign-in</button>
           </form>
         )}

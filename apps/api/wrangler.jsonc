@@ -18,9 +18,10 @@
     "run_worker_first": ["/api/*"]
   },
 
+  // GITHUB_CLIENT_ID is public (it appears in the sign-in URL); the client secret is a Wrangler secret.
   // SUPER_ADMIN_GITHUB_ID is the numeric id of the one GitHub account that owns this site (public information).
   // SIGNIN_MODE is deliberately unset: the default is owner-only. Set it to "open" only to let anyone sign in.
-  "vars": { "APP_ORIGIN": "http://localhost:8787", "SUPER_ADMIN_GITHUB_ID": "132331252" },
+  "vars": { "APP_ORIGIN": "http://localhost:8787", "SUPER_ADMIN_GITHUB_ID": "132331252", "GITHUB_CLIENT_ID": "Ov23liAkxPOJSDHkTVDk" },
 
   "d1_databases": [
     {

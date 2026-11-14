@@ -248,3 +248,4 @@ button.nav-icon { background: none; border: 0; cursor: pointer; }
 .status.warn { background: #f8d7da; color: #721c24; }
 .cell-btn { text-transform: none; font-size: 12px; padding: 6px 12px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; text-align: left; }
