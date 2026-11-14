@@ -6,6 +6,8 @@ import {
   ROLE_RANK,
   countInput,
   apiKeyInput,
+  importRequest,
+  importRow,
   inviteInput,
   locationInput,
   memberPatch,
@@ -20,6 +22,7 @@ import {
   productListQuery,
   productPatch,
   transferInput,
+  type ImportResult,
   type Permission,
   type Role,
 } from '@shoplist/shared';
@@ -442,6 +445,28 @@ route('post', '/orgs/:orgId/products', 'inventory:write', async (c) => {
   const out = unwrap(await inventory(c).createProduct(caller(c), await idemFrom(c, raw), data));
   etag(c, out.body.product.version);
   return c.json(out.body, out.status as 201);
+});
+
+route('post', '/orgs/:orgId/products/import', 'inventory:write', async (c) => {
+  const { data, raw } = await readJson(c, importRequest);
+  // Validate each row on its own so a bad row is reported without rejecting the batch.
+  const valid: { index: number; row: ReturnType<typeof importRow.parse> }[] = [];
+  const results: ImportResult[] = [];
+  data.rows.forEach((candidate, index) => {
+    const r = importRow.safeParse(candidate);
+    if (r.success) valid.push({ index, row: r.data });
+    else {
+      const sku = typeof (candidate as { sku?: unknown } | null)?.sku === 'string' ? (candidate as { sku: string }).sku : '';
+      results.push({ index, sku, status: 'error', error: r.error.issues.map((i) => `${i.path.join('.') || 'row'}: ${i.message}`).join('; ') });
+    }
+  });
+  if (valid.length) {
+    const out = unwrap(await inventory(c).importProducts(caller(c), await idemFrom(c, raw), data.mode, valid));
+    results.push(...out.body.results);
+  } else await idemFrom(c, raw); // still require the header, so clients behave the same either way
+  results.sort((a, b) => a.index - b.index);
+  const count = (s: ImportResult['status']) => results.filter((r) => r.status === s).length;
+  return c.json({ results, summary: { created: count('created'), updated: count('updated'), unchanged: count('unchanged'), errors: count('error') } });
 });
 
 route('get', '/orgs/:orgId/products/lookup', 'inventory:read', async (c) => {

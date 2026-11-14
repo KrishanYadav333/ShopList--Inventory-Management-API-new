@@ -159,6 +159,35 @@ export const locationInput = z
   .strict();
 export type LocationInput = z.infer<typeof locationInput>;
 
+// ---------------------------------------------------------------- import
+export const IMPORT_MAX_ROWS = 100;
+export const importRow = z
+  .object({
+    sku: text(64),
+    name: text(200),
+    priceMinor: money,
+    costMinor: money.nullish(),
+    barcode: text(64).nullish(),
+    unit: text(20).optional(),
+    reorderPoint: z.number().int().min(0).max(LIMITS.maxOnHand).nullish(),
+    tags: z.array(text(40)).max(20).optional(),
+    description: z.string().max(5000).nullish(),
+    /** Desired on-hand quantity at the default location. */
+    quantity: z.number().int().min(0).max(LIMITS.maxOnHand).optional(),
+  })
+  .strict();
+export type ImportRow = z.infer<typeof importRow>;
+export const importRequest = z
+  .object({ mode: z.enum(['create', 'upsert']), rows: z.array(z.unknown()).min(1).max(IMPORT_MAX_ROWS) })
+  .strict();
+export interface ImportResult {
+  index: number;
+  sku: string;
+  status: 'created' | 'updated' | 'unchanged' | 'error';
+  id?: string;
+  error?: string;
+}
+
 export const API_KEY_SCOPES = ['inventory:read', 'inventory:write'] as const;
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
 export const apiKeyInput = z

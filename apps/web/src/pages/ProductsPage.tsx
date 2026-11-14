@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Product } from '@shoplist/shared';
 import { api, ApiError, newKey } from '../api';
+import { ImportDialog } from '../components/ImportDialog';
 import { useShell } from '../components/Shell';
 import { avatarClass, csvCell, dateParts, money } from '../format';
 import { Icon } from '../icons';
@@ -25,6 +26,7 @@ export function ProductsPage() {
   const [params, setParams] = useSearchParams();
   const [text, setText] = useState(params.get('q') ?? '');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [importing, setImporting] = useState(false);
   const write = canWrite(org.role);
 
   // Debounce typing into the URL so filtered views are shareable.
@@ -100,6 +102,7 @@ export function ProductsPage() {
           </div>
           {write && <button className="btn btn-primary" onClick={openNew}><Icon name="plus" size={14} /> New</button>}
           {write && <button className="btn btn-ghost" onClick={() => openAdjust()}><Icon name="swap" size={14} /> Adjust</button>}
+          {write && <button className="btn btn-ghost" onClick={() => setImporting(true)}><Icon name="upload" size={14} /> Import</button>}
           <button className="btn btn-ghost" onClick={exportCsv} disabled={!rows.length}><Icon name="download" size={14} /> {selected.size ? `Export ${selected.size}` : 'Export'}</button>
         </div>
       </header>
@@ -168,6 +171,7 @@ export function ProductsPage() {
           </>
         )}
       </div>
+      {importing && <ImportDialog org={org} onClose={() => setImporting(false)} />}
     </>
   );
 }

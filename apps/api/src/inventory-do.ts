@@ -8,6 +8,8 @@ import {
   type Movement,
   type MovementInput,
   type MovementListQuery,
+  type ImportResult,
+  type ImportRow,
   type MovementReason,
   type Order,
   type OrderCounts,
@@ -537,7 +539,11 @@ export class InventoryDO extends DurableObject<Bindings> {
 
   // ----------------------------------------------------------- products
   createProduct(c: Caller, idem: Idem | undefined, input: ProductInput): Result<Out<{ product: Product }>> {
-    return this.tx(idem, c, () => {
+    return this.tx(idem, c, () => this.doCreate(c, input));
+  }
+
+  private doCreate(c: Caller, input: ProductInput): Out<{ product: Product }> {
+    {
       this.assertUnique(input.sku, input.barcode ?? null);
       const id = newId('prd');
       const now = nowIso();
@@ -556,11 +562,15 @@ export class InventoryDO extends DurableObject<Bindings> {
       }
       this.audit(c, 'product.create', 'product', id, { sku: input.sku, name: input.name });
       return { status: 201, body: { product: this.view(this.one<ProductRow>(`SELECT * FROM products WHERE id = ?`, id)!) } };
-    });
+    }
   }
 
   updateProduct(c: Caller, idem: Idem | undefined, id: string, expectedVersion: number, patch: ProductPatch): Result<Out<{ product: Product }>> {
-    return this.tx(idem, c, () => {
+    return this.tx(idem, c, () => this.doUpdate(c, id, expectedVersion, patch));
+  }
+
+  private doUpdate(c: Caller, id: string, expectedVersion: number, patch: ProductPatch): Out<{ product: Product }> {
+    {
       const before = this.liveProduct(id);
       if (before.version !== expectedVersion) {
         throw new Fail(412, 'version_conflict', 'Someone else changed this product. Review their changes before saving.', { current: this.view(before) });
@@ -600,7 +610,7 @@ export class InventoryDO extends DurableObject<Bindings> {
       this.applyCounters(before, after);
       this.audit(c, 'product.update', 'product', id, changes);
       return { status: 200, body: { product: this.view(after) } };
-    });
+    }
   }
 
   deleteProduct(c: Caller, id: string, expectedVersion: number): Result<Out<{ id: string }>> {
@@ -835,6 +845,74 @@ export class InventoryDO extends DurableObject<Bindings> {
       nextCursor: hasMore && last ? encodeCursor({ c: last.created_at, i: last.id }) : null,
       hasMore,
     };
+  }
+
+  // ------------------------------------------------------------------ import
+  private defaultLocationId(): string {
+    const def = this.one<{ id: string }>(`SELECT id FROM locations WHERE is_default = 1 AND archived_at IS NULL`);
+    if (!def) throw new Fail(409, 'no_default_location', 'Create a location before importing stock.');
+    return def.id;
+  }
+
+  /** Brings a product's stock at the default location to `quantity` by recording the difference. */
+  private setImportedQuantity(c: Caller, productId: string, quantity: number): boolean {
+    const loc = this.defaultLocationId();
+    const onHand = this.one<{ on_hand: number }>(`SELECT on_hand FROM stock_levels WHERE product_id = ? AND location_id = ?`, productId, loc)?.on_hand ?? 0;
+    if (quantity === onHand) return false;
+    this.move(c, productId, loc, quantity - onHand, 'import', 'CSV import', null);
+    return true;
+  }
+
+  private importRow(c: Caller, mode: 'create' | 'upsert', index: number, row: ImportRow): ImportResult {
+    const existing = this.one<ProductRow>(`SELECT * FROM products WHERE sku = ? AND deleted_at IS NULL`, row.sku);
+    if (!existing) {
+      const made = this.doCreate(c, {
+        sku: row.sku, name: row.name, description: row.description ?? null, barcode: row.barcode ?? null, unit: row.unit ?? 'each', priceMinor: row.priceMinor,
+        costMinor: row.costMinor ?? null, reorderPoint: row.reorderPoint ?? null, tags: row.tags ?? [], initialQuantity: 0,
+      }).body.product;
+      if (row.quantity) this.setImportedQuantity(c, made.id, row.quantity);
+      return { index, sku: row.sku, status: 'created', id: made.id };
+    }
+    if (mode === 'create') throw new Fail(409, 'duplicate_sku', `SKU ${row.sku} already exists. Choose "create or update" to change it.`);
+    const patch: ProductPatch = { name: row.name, priceMinor: row.priceMinor };
+    if (row.description !== undefined) patch.description = row.description;
+    if (row.barcode !== undefined) patch.barcode = row.barcode;
+    if (row.unit !== undefined) patch.unit = row.unit;
+    if (row.costMinor !== undefined) patch.costMinor = row.costMinor;
+    if (row.reorderPoint !== undefined) patch.reorderPoint = row.reorderPoint;
+    if (row.tags !== undefined) patch.tags = row.tags;
+    const updated = this.doUpdate(c, existing.id, existing.version, patch).body.product;
+    let changed = updated.version !== existing.version;
+    if (row.quantity !== undefined && this.setImportedQuantity(c, existing.id, row.quantity)) changed = true;
+    return { index, sku: row.sku, status: changed ? 'updated' : 'unchanged', id: existing.id };
+  }
+
+  /**
+   * Imports up to 100 rows. Each row is its own transaction, so one bad row never blocks the others.
+   * Replaying the same Idempotency-Key returns the original results without repeating anything.
+   */
+  importProducts(c: Caller, idem: Idem | undefined, mode: 'create' | 'upsert', rows: { index: number; row: ImportRow }[]): Result<Out<{ results: ImportResult[] }>> {
+    const key = idem ? `${c.actor}:${idem.key}` : null;
+    if (idem && key) {
+      const hit = this.one<{ request_hash: string; status: number; response: string }>(`SELECT request_hash, status, response FROM idempotency_keys WHERE key = ?`, key);
+      if (hit) {
+        if (hit.request_hash !== idem.hash) return { ok: false, status: 422, code: 'idempotency_key_reused', detail: 'This Idempotency-Key was already used with a different request.' };
+        return ok({ status: hit.status, body: JSON.parse(hit.response) as { results: ImportResult[] } });
+      }
+    }
+    const results: ImportResult[] = rows.map(({ index, row }) => {
+      try {
+        return this.ctx.storage.transactionSync(() => this.importRow(c, mode, index, row));
+      } catch (e) {
+        if (e instanceof Fail) return { index, sku: row.sku, status: 'error' as const, error: e.detail };
+        throw e;
+      }
+    });
+    const out = { status: 200, body: { results } };
+    if (idem && key) {
+      this.run(`INSERT INTO idempotency_keys(key, request_hash, status, response, created_at) VALUES (?, ?, ?, ?, ?)`, key, idem.hash, out.status, JSON.stringify(out.body), nowIso());
+    }
+    return ok(out);
   }
 
   // ------------------------------------------------------------- orders

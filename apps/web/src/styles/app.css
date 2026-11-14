@@ -283,3 +283,13 @@ button.nav-icon { background: none; border: 0; cursor: pointer; }
 }
 .row-actions { display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
 .orders-table td.row-actions { display: table-cell; text-align: right; white-space: nowrap; }
+
+/* Import */
+.bar { height: 12px; background: #e9ecef; border-radius: 999px; overflow: hidden; }
+.bar > div { height: 100%; background: var(--green); transition: width 0.3s; }
+.modes { border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; display: grid; gap: 8px; }
+.modes legend { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; padding: 0 6px; }
+.summary-line { padding: 10px 12px; background: var(--soft); border-radius: 8px; }
+.row-bad td { background: #fdecea; }
+.preview td, .preview th { white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.tiles.inner { padding: 0; }
