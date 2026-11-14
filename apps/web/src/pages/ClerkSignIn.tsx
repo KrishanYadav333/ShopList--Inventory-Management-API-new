@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { ClerkLoaded, ClerkLoading, ClerkProvider, SignIn, useAuth } from '@clerk/react';
+import { ClerkLoaded, ClerkLoading, ClerkProvider, SignIn, SignUp, useAuth } from '@clerk/react';
 import { api, ApiError } from '../api';
 
 const KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
+const ERROR_KEY = 'sl_signin_error';
 
 /** Where to go after sign-in. Only same-site invitation and organization paths, so this cannot become an open redirect. */
 function returnPath(): string {
@@ -14,13 +15,18 @@ function returnPath(): string {
   return '/';
 }
 
+/** A message left by a failed attempt. Reading is pure; it is removed in an effect, because React may render more than once before committing. */
+function readError(): string {
+  try { return sessionStorage.getItem(ERROR_KEY) ?? ''; } catch { return ''; }
+}
+
 /**
  * Clerk proves who the person is; ShopList owns the session. Once Clerk reports a signed-in user, trade its
  * short-lived token for a ShopList session cookie, then sign out of Clerk so there is only one session.
+ * Clerk's sign-out is given the destination itself, so it is the only redirect and cannot race another.
  */
 function Bridge() {
   const { isSignedIn, getToken, signOut } = useAuth();
-  const [error, setError] = useState('');
   const started = useRef(false);
 
   useEffect(() => {
@@ -31,21 +37,28 @@ function Bridge() {
         const token = await getToken();
         if (!token) throw new ApiError({ status: 401, detail: 'Could not read your sign-in. Please try again.' });
         await api('POST', '/auth/clerk/session', { body: { token } });
-        await signOut();
-        location.assign(returnPath());
+        await signOut({ redirectUrl: returnPath() });
       } catch (e) {
-        await signOut().catch(() => undefined); // let them try another account
-        setError(e instanceof ApiError ? e.message : 'Sign-in failed. Please try again.');
-        started.current = false;
+        try { sessionStorage.setItem(ERROR_KEY, e instanceof ApiError ? e.message : 'Sign-in failed. Please try again.'); } catch { /* storage unavailable */ }
+        await signOut({ redirectUrl: '/sign-in' }); // lets them try another account, and brings the message back
       }
     })();
   }, [isSignedIn]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (error) return <div className="notice" role="alert">{error} <a href="/sign-in">Try again</a></div>;
   return isSignedIn ? <p className="hint" role="status">Signing you in…</p> : null;
 }
 
+/** Path routing: /sign-in/... and /sign-up/... are real addresses, which is what Clerk's components expect. */
+function Widget() {
+  const looks = { elements: { rootBox: { width: '100%' }, card: { boxShadow: 'none', border: 0, width: '100%' } } };
+  return location.pathname.startsWith('/sign-up')
+    ? <SignUp routing="path" path="/sign-up" signInUrl="/sign-in" appearance={looks} />
+    : <SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" appearance={looks} />;
+}
+
 export default function ClerkSignIn() {
+  const [error] = useState(readError);
+  useEffect(() => { try { sessionStorage.removeItem(ERROR_KEY); } catch { /* storage unavailable */ } }, []);
   if (!KEY) {
     return <div className="auth"><div className="auth-card"><h1>Client sign-in is not set up</h1><p>This deployment has no Clerk key configured.</p><a className="btn btn-outline full" href="/login">Back</a></div></div>;
   }
@@ -53,11 +66,12 @@ export default function ClerkSignIn() {
     <div className="auth">
       <div className="auth-card clerk-card">
         <img className="brand-lockup" src="/logo-lockup.png" alt="ShopList" width="280" height="83" />
-        <ClerkProvider publishableKey={KEY} afterSignOutUrl="/login">
+        {error && <div className="notice" role="alert">{error}</div>}
+        <ClerkProvider publishableKey={KEY} signInUrl="/sign-in" signUpUrl="/sign-up" afterSignOutUrl="/sign-in">
           <ClerkLoading><p className="hint" role="status">Loading sign-in…</p></ClerkLoading>
           <ClerkLoaded>
             <Bridge />
-            <SignIn routing="hash" signUpUrl="#/sign-up" appearance={{ elements: { rootBox: { width: '100%' }, card: { boxShadow: 'none', border: 0, width: '100%' } } }} />
+            <Widget />
           </ClerkLoaded>
         </ClerkProvider>
         <a className="fine" href="/login">Back to the main sign-in</a>
