@@ -15,6 +15,7 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/owner" element={<Login owner />} />
       <Route path="/sign-in/*" element={<Suspense fallback={<div className="boot">Loading…</div>}><ClerkSignIn /></Suspense>} />
       <Route path="/sign-up/*" element={<Suspense fallback={<div className="boot">Loading…</div>}><ClerkSignIn /></Suspense>} />
       <Route path="/invite/:token" element={<Invite />} />

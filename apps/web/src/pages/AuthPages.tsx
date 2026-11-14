@@ -6,7 +6,8 @@ import { Icon } from '../icons';
 import { useMe } from '../queries';
 import { useToast } from '../toast';
 
-export function Login() {
+/** `/login` is for clients (Clerk); `/owner` is the owner's separate GitHub door. */
+export function Login({ owner = false }: { owner?: boolean }) {
   const me = useMe();
   const qc = useQueryClient();
   const nav = useNavigate();
@@ -25,14 +26,22 @@ export function Login() {
     <div className="auth">
       <div className="auth-card">
         <img className="brand-lockup" src="/logo-lockup.png" alt="ShopList" width="280" height="83" />
-        <h1>Sign in to ShopList</h1>
-        <p>Inventory you can trust: every change is recorded.</p>
-        {health.data?.signin === 'owner-only' && <p className="notice" role="note">This ShopList is private. Only the site owner can sign in.</p>}
-        {health.data?.signin === 'invite-only' && <p className="notice" role="note">Access is by invitation. Use the email address your invitation was sent to.</p>}
-        {health.data?.signin !== 'owner-only' && import.meta.env.VITE_CLERK_PUBLISHABLE_KEY && (
-          <a className="btn btn-primary full" href="/sign-in">Sign in with email or Google</a>
+        <h1>{owner ? 'Owner sign-in' : 'Sign in to ShopList'}</h1>
+        {owner ? (
+          <>
+            <p>Platform owner only.</p>
+            <a className="btn btn-github" href="/api/v1/auth/oauth/github"><Icon name="github" size={18} /> Continue with GitHub</a>
+          </>
+        ) : (
+          <>
+            <p>Inventory you can trust: every change is recorded.</p>
+            {health.data?.signin === 'owner-only' && <p className="notice" role="note">This ShopList is private right now.</p>}
+            {health.data?.signin === 'invite-only' && <p className="notice" role="note">Access is by invitation. Use the email address your invitation was sent to.</p>}
+            {health.data?.signin !== 'owner-only' && import.meta.env.VITE_CLERK_PUBLISHABLE_KEY && (
+              <a className="btn btn-primary full" href="/sign-in">Sign in with email or Google</a>
+            )}
+          </>
         )}
-        <a className="btn btn-github" href="/api/v1/auth/oauth/github"><Icon name="github" size={18} /> Owner sign-in with GitHub</a>
         {import.meta.env.DEV && (
           <form onSubmit={submit} className="dev-login">
             <div className="hint">Development only</div>
@@ -42,7 +51,7 @@ export function Login() {
           </form>
         )}
         {error && <div className="field-error" role="alert">{error}</div>}
-        <p className="fine">We never see or store a password. Sign-in is handled by Clerk (clients) and GitHub (owner).</p>
+        <p className="fine">We never see or store a password.</p>
       </div>
     </div>
   );
