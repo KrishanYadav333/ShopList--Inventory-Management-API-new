@@ -179,3 +179,30 @@ export async function githubProfile(env: Bindings, code: string, verifier: strin
   if (!primary) throw new AppError(400, 'email_not_verified', 'Your GitHub account needs a verified primary email address.');
   return { id: String(user.id), email: primary.email, name: user.name || user.login, avatarUrl: user.avatar_url };
 }
+
+// ------------------------------------------------------------------- API keys
+export const KEY_PREFIX = 'sl_live_';
+
+export interface ApiKeyPrincipal {
+  id: string;
+  orgId: string;
+  name: string;
+  scopes: string[];
+}
+
+/** Resolves a bearer API key. Only the SHA-256 of the key is stored, and revoked or expired keys stop working at once. */
+export async function keyFromBearer(env: Bindings, bearer: string): Promise<ApiKeyPrincipal> {
+  const bad = () => new AppError(401, 'invalid_api_key', 'That API key is not valid. It may have been revoked or expired.');
+  if (!bearer.startsWith(KEY_PREFIX) || bearer.length > 120) throw bad();
+  const hash = await sha256Hex(bearer);
+  const row = await env.DB.prepare(`SELECT id, org_id, name, scopes, expires_at, revoked_at, last_used_at FROM api_keys WHERE secret_hash = ?`)
+    .bind(hash)
+    .first<{ id: string; org_id: string; name: string; scopes: string; expires_at: string | null; revoked_at: string | null; last_used_at: string | null }>();
+  if (!row || row.revoked_at || (row.expires_at && Date.parse(row.expires_at) <= Date.now())) throw bad();
+  // Record use at most once an hour, to keep D1 writes low.
+  const hourAgo = new Date(Date.now() - 3600_000).toISOString();
+  if (!row.last_used_at || row.last_used_at < hourAgo) {
+    await env.DB.prepare(`UPDATE api_keys SET last_used_at = ? WHERE id = ?`).bind(nowIso(), row.id).run();
+  }
+  return { id: row.id, orgId: row.org_id, name: row.name, scopes: JSON.parse(row.scopes) as string[] };
+}

@@ -40,6 +40,17 @@ export function SettingsPage() {
     onError: fail,
   });
 
+  interface ApiKeyRow { id: string; name: string; prefix: string; scopes: string[]; createdAt: string; lastUsedAt: string | null; expiresAt: string | null; revokedAt: string | null }
+  const keys = useQuery({ enabled: admin, queryKey: ['org', org.id, 'api-keys'], queryFn: () => api<{ data: ApiKeyRow[] }>('GET', `/orgs/${org.id}/api-keys`).then((r) => r.data) });
+  const [keyForm, setKeyForm] = useState({ name: '', write: false, days: '' });
+  const [newKey, setNewKey] = useState('');
+  const makeKey = useMutation({
+    mutationFn: () => api<{ key: string }>('POST', `/orgs/${org.id}/api-keys`, { body: { name: keyForm.name, scopes: keyForm.write ? ['inventory:read', 'inventory:write'] : ['inventory:read'], expiresInDays: keyForm.days ? Number(keyForm.days) : null } }),
+    onSuccess: (r) => { setNewKey(r.key); setKeyForm({ name: '', write: false, days: '' }); refresh(); },
+    onError: fail,
+  });
+  const revokeKey = useMutation({ mutationFn: (id: string) => api('DELETE', `/orgs/${org.id}/api-keys/${id}`), onSuccess: () => { refresh(); toast({ text: 'API key revoked' }); }, onError: fail });
+
   const audit = useQuery({ enabled: admin, queryKey: ['org', org.id, 'audit'], queryFn: () => api<{ data: { id: string; action: string; entity: string; changes: unknown; actor: string; createdAt: string }[] }>('GET', `/orgs/${org.id}/audit?limit=25`).then((r) => r.data) });
   const del = useMutation({ mutationFn: () => api('DELETE', `/orgs/${org.id}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['me'] }); nav('/'); }, onError: fail });
 
@@ -108,6 +119,38 @@ export function SettingsPage() {
             </div>
           )}
         </section>
+
+        {admin && (
+          <section className="card" aria-labelledby="h-keys">
+            <h2 id="h-keys">API keys</h2>
+            <p className="hint">For other systems, such as a web shop or a scanner. A key belongs to this organization only and can read or write inventory, nothing else. Send it as <code>Authorization: Bearer &lt;key&gt;</code>.</p>
+            {keys.data?.length ? (
+              <ul className="list">
+                {keys.data.map((k) => (
+                  <li key={k.id}>
+                    <span><strong>{k.name}</strong> <span className="tag">{k.prefix}…</span><span className="tag">{k.scopes.includes('inventory:write') ? 'read + write' : 'read only'}</span>{k.revokedAt && <span className="tag">revoked</span>}
+                      <div className="time">Last used: {k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString() : 'never'}{k.expiresAt ? ` · expires ${new Date(k.expiresAt).toLocaleDateString()}` : ''}</div></span>
+                    {!k.revokedAt && <button className="btn btn-outline" onClick={() => { if (confirm(`Revoke ${k.name}? Anything using it stops working immediately.`)) revokeKey.mutate(k.id); }}>Revoke</button>}
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="hint">No keys yet.</p>}
+            <form className="inline-form" onSubmit={submit(() => makeKey.mutate())}>
+              <div className="field"><label htmlFor="k-name">New key name</label><input id="k-name" placeholder="e.g. Shopify connector" value={keyForm.name} onChange={(e) => setKeyForm({ ...keyForm, name: e.target.value })} maxLength={60} /></div>
+              <div className="field narrow"><label htmlFor="k-days">Expires in (days)</label><input id="k-days" inputMode="numeric" placeholder="never" value={keyForm.days} onChange={(e) => setKeyForm({ ...keyForm, days: e.target.value.replace(/\D/g, '') })} /></div>
+              <label className="check"><input type="checkbox" checked={keyForm.write} onChange={(e) => setKeyForm({ ...keyForm, write: e.target.checked })} /> Allow writing</label>
+              <button className="btn btn-primary" disabled={makeKey.isPending || !keyForm.name.trim()}>Create key</button>
+            </form>
+            {newKey && (
+              <div className="invite-link" role="status">
+                <p><strong>Copy this key now.</strong> It is shown only once and cannot be recovered; if you lose it, revoke it and make a new one.</p>
+                <input readOnly value={newKey} onFocus={(e) => e.target.select()} aria-label="New API key" />
+                <button className="btn btn-outline" onClick={() => navigator.clipboard.writeText(newKey).then(() => toast({ kind: 'success', text: 'Key copied' }))}>Copy</button>
+                <button className="btn btn-outline" onClick={() => setNewKey('')}>I have saved it</button>
+              </div>
+            )}
+          </section>
+        )}
 
         {admin && (
           <section className="card">

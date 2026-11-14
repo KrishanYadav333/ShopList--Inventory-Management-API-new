@@ -5,6 +5,7 @@ import {
   PERMISSIONS,
   ROLE_RANK,
   countInput,
+  apiKeyInput,
   inviteInput,
   locationInput,
   memberPatch,
@@ -29,6 +30,8 @@ import {
   destroySession,
   githubAuthorizeUrl,
   githubProfile,
+  KEY_PREFIX,
+  keyFromBearer,
   mayUse,
   pkcePair,
   signPayload,
@@ -36,6 +39,7 @@ import {
   upsertUser,
   userFromSession,
   verifyPayload,
+  type ApiKeyPrincipal,
   type AuthUser,
 } from './auth';
 import type { Bindings } from './env';
@@ -46,7 +50,7 @@ import { decodeCursor, encodeCursor, newId, nowIso, randomToken, sha256Hex } fro
 
 export { InventoryDO } from './inventory-do';
 
-type Vars = { requestId: string; user: AuthUser; org: { id: string; role: Role } };
+type Vars = { requestId: string; user: AuthUser; org: { id: string; role: Role }; apiKey?: ApiKeyPrincipal };
 type Ctx = Context<{ Bindings: Bindings; Variables: Vars }>;
 
 const MAX_BODY = 64 * 1024;
@@ -72,6 +76,8 @@ app.use('*', async (c, next) => {
 /** CSRF defence in depth: SameSite=Lax cookie plus an Origin check on every state-changing request. */
 const originCheck: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> = async (c, next) => {
   if (['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) return next();
+  // An API-key client sends no cookies, so there is nothing for a cross-site page to ride on.
+  if (c.req.header('authorization')?.startsWith(`Bearer ${KEY_PREFIX}`) && !c.req.header('cookie')) return next();
   const origin = c.req.header('origin');
   const allowed = new Set([new URL(c.req.url).origin, new URL(c.env.APP_ORIGIN).origin]);
   if (!origin || !allowed.has(origin)) throw new AppError(403, 'bad_origin', 'This request did not come from the ShopList app.');
@@ -155,12 +161,27 @@ const readSessionCookie = (c: Ctx) => getCookie(c, SESSION_COOKIE, cookiePrefix(
 const clearCookie = (c: Ctx, name: string) => deleteCookie(c, name, relaxed(c) ? { path: '/' } : { prefix: 'host', path: '/', secure: true });
 
 // ---------------------------------------------------------- access control
+/** Cookie sessions only. Used by every route that API keys must never reach. */
 const requireUser: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> = async (c, next) => {
-  const user = await userFromSession(c.env, readSessionCookie(c));
+  const session = readSessionCookie(c);
+  if (!session && c.req.header('authorization')?.startsWith(`Bearer ${KEY_PREFIX}`)) {
+    throw new AppError(403, 'key_not_allowed', 'API keys can only be used for inventory. This needs a signed-in session.');
+  }
+  const user = await userFromSession(c.env, session);
   if (!user) throw new AppError(401, 'unauthenticated', 'Sign in to continue.');
   // Closed deployments: every request re-checks, so a session made before the mode changed stops working.
   if (!mayUse(c.env, user)) throw new AppError(403, 'signin_closed', 'This ShopList is private. Only the site owner can sign in.');
   c.set('user', user);
+  return next();
+};
+
+/** Cookie session or an organization API key (`Authorization: Bearer sl_live_...`). Inventory routes only. */
+const requireAuth: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> = async (c, next) => {
+  const header = c.req.header('authorization');
+  if (!header?.startsWith('Bearer ')) return requireUser(c, next);
+  const key = await keyFromBearer(c.env, header.slice(7).trim());
+  c.set('apiKey', key);
+  c.set('user', { id: `key_${key.id}`, email: '', name: key.name, avatarUrl: null, isSuperAdmin: false });
   return next();
 };
 
@@ -173,6 +194,22 @@ const requireSuper: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> =
 /** The org id in the URL is checked against the caller's memberships before any Durable Object is touched. */
 const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> => async (c, next) => {
   const orgId = c.req.param('orgId') ?? '';
+  const key = c.get('apiKey');
+  if (key) {
+    // A key is bound to one organization and can only read or write inventory.
+    if (key.orgId !== orgId) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
+    // Inventory only: never members, invitations, the activity log or organization settings.
+    const area = new URL(c.req.url).pathname.split('/')[5] ?? '';
+    if (!['products', 'locations', 'stock', 'orders', 'dashboard'].includes(area)) throw new AppError(403, 'forbidden', 'API keys can only be used for inventory.');
+    const live = await c.env.DB.prepare(`SELECT 1 AS x FROM organizations WHERE id = ? AND deleted_at IS NULL AND suspended_at IS NULL`).bind(orgId).first();
+    if (!live) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
+    const granted: Role = key.scopes.includes('inventory:write') ? 'editor' : 'viewer';
+    if (permission === 'org:manage' || permission === 'org:owner' || ROLE_RANK[granted] < ROLE_RANK[PERMISSIONS[permission]]) {
+      throw new AppError(403, 'forbidden', 'This API key does not have permission to do that.');
+    }
+    c.set('org', { id: orgId, role: granted });
+    return next();
+  }
   const row = await c.env.DB.prepare(
     `SELECT m.role FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.org_id = ? AND m.user_id = ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL`,
   )
@@ -196,7 +233,7 @@ type Handler = (c: Ctx) => Response | Promise<Response>;
 function route(method: 'get' | 'post' | 'patch' | 'delete', path: string, access: Access, handler: Handler): void {
   ROUTES.push({ method: method.toUpperCase(), path, access });
   const guards: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }>[] =
-    access === 'public' ? [] : access === 'user' ? [requireUser] : access === 'super' ? [requireUser, requireSuper] : [requireUser, orgAccess(access)];
+    access === 'public' ? [] : access === 'user' ? [requireUser] : access === 'super' ? [requireUser, requireSuper] : access === 'org:manage' || access === 'org:owner' ? [requireUser, orgAccess(access)] : [requireAuth, orgAccess(access)];
   const handlers = [...guards, handler] as MiddlewareHandler[];
   (api[method] as (path: string, ...h: MiddlewareHandler[]) => unknown).call(api, path, ...handlers);
 }
@@ -363,6 +400,36 @@ route('post', '/invitations/:token/accept', 'user', async (c) => {
     c.env.DB.prepare(`UPDATE invitations SET accepted_at = ? WHERE token_hash = ?`).bind(nowIso(), hash),
   ]);
   return c.json({ organizationId: inv.org_id, role: inv.role });
+});
+
+
+// ------------------------------------------------------------------ API keys
+route('get', '/orgs/:orgId/api-keys', 'org:manage', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, name, prefix, scopes, created_at AS createdAt, last_used_at AS lastUsedAt, expires_at AS expiresAt, revoked_at AS revokedAt
+       FROM api_keys WHERE org_id = ? ORDER BY created_at DESC`,
+  ).bind(c.get('org').id).all<{ scopes: string }>();
+  return c.json({ data: results.map((r) => ({ ...r, scopes: JSON.parse(r.scopes) as string[] })) });
+});
+
+route('post', '/orgs/:orgId/api-keys', 'org:manage', async (c) => {
+  const { data } = await readJson(c, apiKeyInput);
+  const count = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM api_keys WHERE org_id = ? AND revoked_at IS NULL`).bind(c.get('org').id).first<{ n: number }>();
+  if ((count?.n ?? 0) >= 20) throw new AppError(409, 'key_limit', 'An organization can have at most 20 active API keys. Revoke one first.');
+  const secret = `${KEY_PREFIX}${randomToken(30)}`;
+  const id = newId('key');
+  const now = nowIso();
+  await c.env.DB.prepare(`INSERT INTO api_keys(id, org_id, name, prefix, secret_hash, scopes, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(id, c.get('org').id, data.name, secret.slice(0, 12), await sha256Hex(secret), JSON.stringify([...new Set(data.scopes)]), c.get('user').id, now, data.expiresInDays ? new Date(Date.now() + data.expiresInDays * 86400_000).toISOString() : null)
+    .run();
+  // The full key is shown exactly once; only its hash is stored.
+  return c.json({ id, name: data.name, prefix: secret.slice(0, 12), scopes: data.scopes, key: secret }, 201);
+});
+
+route('delete', '/orgs/:orgId/api-keys/:id', 'org:manage', async (c) => {
+  const res = await c.env.DB.prepare(`UPDATE api_keys SET revoked_at = ? WHERE id = ? AND org_id = ? AND revoked_at IS NULL`).bind(nowIso(), c.req.param('id') ?? '', c.get('org').id).run();
+  if (!res.meta.changes) throw new AppError(404, 'key_not_found', 'That key does not exist or is already revoked.');
+  return c.json({ ok: true });
 });
 
 // ----------------------------------------------------------------- inventory

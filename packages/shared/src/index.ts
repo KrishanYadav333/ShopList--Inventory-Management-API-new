@@ -159,6 +159,16 @@ export const locationInput = z
   .strict();
 export type LocationInput = z.infer<typeof locationInput>;
 
+export const API_KEY_SCOPES = ['inventory:read', 'inventory:write'] as const;
+export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
+export const apiKeyInput = z
+  .object({
+    name: text(60),
+    scopes: z.array(z.enum(API_KEY_SCOPES)).min(1, 'Choose at least one permission').max(2),
+    expiresInDays: z.number().int().min(1).max(365).nullish(),
+  })
+  .strict();
+
 export const orgInput = z.object({ name: text(100) }).strict();
 
 export const inviteInput = z
