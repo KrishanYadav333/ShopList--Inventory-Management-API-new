@@ -312,3 +312,7 @@ code { background: #eef2f5; padding: 1px 5px; border-radius: 4px; font-size: 12p
 .scan-line { position: absolute; left: 8%; right: 8%; top: 50%; height: 2px; background: rgba(46, 204, 113, 0.9); box-shadow: 0 0 8px rgba(46, 204, 113, 0.9); }
 @media (prefers-reduced-motion: no-preference) { .scan-line { animation: sweep 2s ease-in-out infinite alternate; } }
 @keyframes sweep { from { top: 25%; } to { top: 75%; } }
+
+.clerk-card { width: min(440px, 100%); }
+.clerk-card a.fine { color: var(--muted); }
+a.btn { text-decoration: none; }

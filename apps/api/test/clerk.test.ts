@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { call, ip, ORIGIN, uid } from './helpers';
+import { clerkAdmission, signinMode } from '../src/auth';
+import { call, ip, newOrg, ORIGIN, uid } from './helpers';
 
 const enc = new TextEncoder();
 const b64 = (b: ArrayBuffer | Uint8Array | string) => {
@@ -174,5 +175,48 @@ describe('Clerk sign-in exchange', () => {
   it('requires the Origin check like every other write', async () => {
     const r = await call(null, 'POST', '/auth/clerk/session', { token: await mint() }, { origin: 'https://evil.example', 'cf-connecting-ip': ip() });
     expect(r.status).toBe(403);
+  });
+});
+
+describe('invite-only access for customers', () => {
+  const modeEnv = (SIGNIN_MODE?: string) => ({ ...(env as unknown as { DB: D1Database }), SIGNIN_MODE }) as Parameters<typeof clerkAdmission>[0];
+
+  it('reads the mode strictly: anything unknown means owner-only', () => {
+    expect(signinMode({})).toBe('admin-only');
+    expect(signinMode({ SIGNIN_MODE: 'invite' })).toBe('invite');
+    expect(signinMode({ SIGNIN_MODE: 'open' })).toBe('open');
+    for (const typo of ['Invite', 'invite-only', 'OPEN', ' open', 'true', '']) expect(signinMode({ SIGNIN_MODE: typo }), typo).toBe('admin-only');
+  });
+
+  it('owner-only refuses every customer, open admits anyone', async () => {
+    expect(await clerkAdmission(modeEnv(undefined), 'anyone@example.com')).toBe('owner_only');
+    expect(await clerkAdmission(modeEnv('open'), 'anyone@example.com')).toBe('allowed');
+  });
+
+  it('invite-only admits an uninvited email never, an invited one once invited, and existing users always', async () => {
+    const owner = await newOrg();
+    const email = `${uid()}-client@example.com`;
+    expect(await clerkAdmission(modeEnv('invite'), email)).toBe('not_invited');
+
+    const inv = await call(owner.cookie, 'POST', `${owner.base}/invitations`, { email, role: 'editor' });
+    expect(inv.status).toBe(201);
+    expect(await clerkAdmission(modeEnv('invite'), email)).toBe('allowed');
+    expect(await clerkAdmission(modeEnv('invite'), email.toUpperCase())).toBe('allowed'); // emails compare case-insensitively
+    expect(await clerkAdmission(modeEnv('invite'), `other-${email}`)).toBe('not_invited'); // an invitation is for one address only
+
+    // An expired invitation no longer admits anyone.
+    await env.DB.prepare(`UPDATE invitations SET expires_at = ? WHERE email = ?`).bind(new Date(Date.now() - 1000).toISOString(), email).run();
+    expect(await clerkAdmission(modeEnv('invite'), email)).toBe('not_invited');
+
+    // An accepted invitation does not admit a new sign-up, but the person now has an account.
+    const second = `${uid()}-second@example.com`;
+    const inv2 = await call(owner.cookie, 'POST', `${owner.base}/invitations`, { email: second, role: 'viewer' });
+    const cookie = (await call(null, 'POST', '/auth/dev/login', { email: second })).headers.get('set-cookie')!.match(/__Host-sl_session=[^;]+/)![0];
+    expect((await call(cookie, 'POST', `/invitations/${inv2.body.token}/accept`, {})).status).toBe(200);
+    expect(await clerkAdmission(modeEnv('invite'), second)).toBe('allowed'); // existing user
+  });
+
+  it('the health endpoint names the mode for the login page', async () => {
+    expect((await call(null, 'GET', '/health')).body.signin).toBe('open'); // this test deployment is open
   });
 });

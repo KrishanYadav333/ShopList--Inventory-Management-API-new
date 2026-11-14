@@ -18,8 +18,27 @@ export interface AuthUser {
   isSuperAdmin: boolean;
 }
 
-/** Sign-in is closed unless the deployment explicitly opts in. */
-export const signinClosed = (env: Pick<Bindings, 'SIGNIN_MODE'>) => (env.SIGNIN_MODE ?? 'admin-only') !== 'open';
+export type SigninMode = 'admin-only' | 'invite' | 'open';
+
+/** Anything other than an exact, known value means owner-only, so a typo fails closed. */
+export const signinMode = (env: Pick<Bindings, 'SIGNIN_MODE'>): SigninMode => (env.SIGNIN_MODE === 'open' ? 'open' : env.SIGNIN_MODE === 'invite' ? 'invite' : 'admin-only');
+
+/** True when only the owner may use the app. */
+export const signinClosed = (env: Pick<Bindings, 'SIGNIN_MODE'>) => signinMode(env) === 'admin-only';
+
+/**
+ * Whether a customer (Clerk) sign-in may proceed for a verified email.
+ * invite-only: the person already has an account, or the owner (or an admin) has a pending invitation for that email.
+ */
+export async function clerkAdmission(env: Pick<Bindings, 'SIGNIN_MODE' | 'DB'>, email: string): Promise<'allowed' | 'owner_only' | 'not_invited'> {
+  const mode = signinMode(env);
+  if (mode === 'open') return 'allowed';
+  if (mode === 'admin-only') return 'owner_only';
+  const e = email.trim().toLowerCase();
+  if (await env.DB.prepare(`SELECT 1 AS x FROM users WHERE email = ?`).bind(e).first()) return 'allowed'; // a disabled account is refused later, with the right message
+  const invited = await env.DB.prepare(`SELECT 1 AS x FROM invitations WHERE email = ? AND accepted_at IS NULL AND expires_at > ?`).bind(e, nowIso()).first();
+  return invited ? 'allowed' : 'not_invited';
+}
 
 /** The one rule for who may use the app. Pure so it can be tested directly. */
 export const mayUse = (env: Pick<Bindings, 'SIGNIN_MODE'>, user: Pick<AuthUser, 'isSuperAdmin'>) => user.isSuperAdmin || !signinClosed(env);

@@ -6,7 +6,7 @@ import { Icon } from '../icons';
 import { useMe } from '../queries';
 import { useToast } from '../toast';
 
-interface Overview { users: number; disabledUsers: number; organizations: number; suspendedOrganizations: number; activeSessions: number; signin: 'open' | 'owner-only' }
+interface Overview { users: number; disabledUsers: number; organizations: number; suspendedOrganizations: number; activeSessions: number; signin: 'open' | 'owner-only' | 'invite-only' }
 interface AdminOrg { id: string; name: string; slug: string; createdAt: string; deletedAt: string | null; suspendedAt: string | null; members: number }
 interface AdminUser { id: string; email: string; name: string; createdAt: string; disabledAt: string | null; organizations: number; lastSeenAt: string | null }
 interface AuditRow { id: string; action: string; target: string | null; createdAt: string; requestId: string }
@@ -48,7 +48,7 @@ export function AdminPage() {
         <div className="sidebar-filters">
           <div className="filter-section">
             <h3>Sign-in</h3>
-            <div className="side-value" style={{ fontSize: 16 }}>{o ? (o.signin === 'owner-only' ? 'Owner only' : 'Open to anyone') : '–'}</div>
+            <div className="side-value" style={{ fontSize: 16 }}>{o ? ({ 'owner-only': 'Owner only', 'invite-only': 'By invitation', open: 'Open to anyone' }[o.signin]) : '–'}</div>
           </div>
           <div className="filter-section">
             <h3>Scope</h3>

@@ -5,6 +5,13 @@
   Permissions-Policy: camera=(self), geolocation=()
   Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https://avatars.githubusercontent.com https://lh3.googleusercontent.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
 
+# Only the client sign-in page loads Clerk's widget, so only it gets a wider policy: Clerk's own origin for
+# scripts and API calls, Cloudflare's bot check, and inline styles (the widget injects its own).
+# "!" removes the strict policy set above for this path before the wider one is applied.
+/sign-in
+  ! Content-Security-Policy
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://diverse-snake-7211.clerk.accounts.dev https://*.protect.clerk.com https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://img.clerk.com https://avatars.githubusercontent.com https://lh3.googleusercontent.com; connect-src 'self' https://diverse-snake-7211.clerk.accounts.dev https://*.protect.clerk.com https://*.protect.clerk.com:* https://clerk-telemetry.com; frame-src https://challenges.cloudflare.com; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
+
 # Hashed build files never change, so cache them for a year.
 /assets/*
   Cache-Control: public, max-age=31536000, immutable

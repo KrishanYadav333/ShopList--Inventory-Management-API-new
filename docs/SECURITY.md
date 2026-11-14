@@ -40,7 +40,15 @@ Account linking: a new OAuth identity with an email that matches an existing use
 
 There is exactly **one super admin**: the owner. The role is never stored and cannot be granted through the app. It is true only when **both** hold: the user is linked to the GitHub account in `SUPER_ADMIN_GITHUB_ID`, **and** the current session was created through the GitHub door. A session from the customer door carries no admin power even on the same user row.
 
-`SIGNIN_MODE` unset (or any value other than `open`) is **owner-only**, and fails closed: a typo keeps the site private. In owner-only mode the check runs on every request, so sessions created before a mode change stop working at once.
+`SIGNIN_MODE` has three values, and anything else (including a typo) means **owner-only**, so it fails closed:
+
+| Value | Who can sign in |
+|---|---|
+| unset / unknown | Only the owner, through GitHub. |
+| `invite` | The owner, plus customers through Clerk **only if** they already have an account or the owner or an admin has a pending, unexpired invitation for their verified email. Nobody else gets an account created. This is the production setting. |
+| `open` | Anyone with a verified Clerk email. Never set in production configuration; a test enforces that. |
+
+In owner-only mode the check runs on every request, so sessions created before a mode change stop working at once.
 
 Clerk token verification (`src/clerk.ts`):
 - The algorithm is pinned to RS256; `none` and HS256 (including the public-key-as-HMAC-secret downgrade) are rejected.

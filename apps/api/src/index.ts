@@ -36,10 +36,12 @@ import {
   githubProfile,
   KEY_PREFIX,
   keyFromBearer,
+  clerkAdmission,
   mayUse,
   pkcePair,
   signPayload,
   signinClosed,
+  signinMode,
   upsertUser,
   userFromSession,
   verifyPayload,
@@ -254,7 +256,7 @@ function route(method: 'get' | 'post' | 'patch' | 'delete', path: string, access
 // -------------------------------------------------------------------- public
 route('get', '/openapi.json', 'public', (c) => c.json(buildOpenApi(ROUTES, new URL(c.req.url).origin)));
 
-route('get', '/health', 'public', (c) => c.json({ ok: true, signin: signinClosed(c.env) ? 'owner-only' : 'open' }));
+route('get', '/health', 'public', (c) => c.json({ ok: true, signin: ({ 'admin-only': 'owner-only', invite: 'invite-only', open: 'open' } as const)[signinMode(c.env)] }));
 
 // ---------------------------------------------------------------------- auth
 route('get', '/auth/oauth/github', 'public', async (c) => {
@@ -287,9 +289,12 @@ route('post', '/auth/clerk/session', 'public', async (c) => {
   if (!clerkConfigured(c.env)) throw new AppError(503, 'clerk_not_configured', 'Sign-in is not configured on this server.');
   const { data } = await readJson(c, z.object({ token: z.string().min(20).max(4096) }).strict());
   const sub = await verifyClerkToken(c.env, data.token);
-  // Customers can sign in only when the deployment is open; the owner uses GitHub.
   if (signinClosed(c.env)) throw new AppError(403, 'signin_closed', 'This ShopList is private. Only the site owner can sign in.');
   const profile = await fetchClerkProfile(c.env, sub);
+  // By invitation: no account is created for someone the owner has not invited.
+  if ((await clerkAdmission(c.env, profile.email)) === 'not_invited') {
+    throw new AppError(403, 'not_invited', 'This ShopList is by invitation. Ask the owner to invite this email address, then sign in again.');
+  }
   // The owner's account is reachable only through the owner's door. A customer-door identity must never attach to it.
   const owner = await c.env.DB.prepare(`SELECT 1 AS x FROM users u JOIN oauth_accounts o ON o.user_id = u.id WHERE u.email = ? AND o.provider = 'github' LIMIT 1`).bind(profile.email.toLowerCase()).first();
   if (owner) throw new AppError(409, 'email_in_use', 'That email belongs to a different kind of account. Use the other sign-in.');
@@ -658,7 +663,7 @@ route('get', '/admin/overview', 'super', async (c) => {
             (SELECT COUNT(*) FROM organizations WHERE deleted_at IS NULL AND suspended_at IS NOT NULL) AS suspendedOrganizations,
             (SELECT COUNT(*) FROM sessions WHERE expires_at > ?) AS activeSessions`,
   ).bind(now).first();
-  return c.json({ ...counts, signin: signinClosed(c.env) ? 'owner-only' : 'open' });
+  return c.json({ ...counts, signin: ({ 'admin-only': 'owner-only', invite: 'invite-only', open: 'open' } as const)[signinMode(c.env)] });
 });
 
 route('get', '/admin/orgs', 'super', async (c) => {

@@ -92,7 +92,7 @@ npx wrangler queues create shoplist-jobs
 #   https://<your-host>/api/v1/auth/oauth/github/callback
 # GitHub is the owner's door. SUPER_ADMIN_GITHUB_ID is a plain var in wrangler.jsonc (the owner's numeric
 # GitHub id). Sign-in is owner-only unless SIGNIN_MODE=open.
-# Clerk is the customers' door (only used when SIGNIN_MODE=open): create an application at clerk.com, then
+# Clerk is the customers' door (used when SIGNIN_MODE is invite or open): create an application at clerk.com, then
 #   npx wrangler secret put CLERK_SECRET_KEY
 #   npx wrangler secret put CLERK_JWT_KEY       # Dashboard > API keys > Show JWT public key (PEM)
 # and set CLERK_ISSUER (the Frontend API URL, e.g. https://example-12.clerk.accounts.dev) as a plain var.
@@ -179,3 +179,15 @@ A restore is rehearsed quarterly into the preview environment and the result rec
 **Leaked API key or webhook secret**
 1. Revoke the key or rotate the secret in Settings; takes effect immediately.
 2. Review audit entries for that key's actor id.
+
+## Clerk (customer sign-in)
+
+The sign-in screen at `/sign-in` uses Clerk's widget, loaded on demand. Its scripts and API come from the Clerk instance's own origin, so that one page has a wider Content-Security-Policy (`apps/web/public/_headers`); every other page keeps the strict one.
+
+Setup for a new instance:
+1. Create a Clerk application. In **User & authentication**, enable **Email address** (verification code) and **Google**. Make phone number and username **optional or off**, and password optional: required fields make sign-up heavy for shop clients.
+2. Put the publishable key in `apps/web/.env` as `VITE_CLERK_PUBLISHABLE_KEY` (it is public) and the Frontend API URL in `CLERK_ISSUER` in `wrangler.jsonc`.
+3. `npx wrangler secret put CLERK_SECRET_KEY` and `npx wrangler secret put CLERK_JWT_KEY` (the instance's public signing key as PEM; from `https://<frontend-api>/.well-known/jwks.json`).
+4. Update the origins in the `/sign-in` rule in `_headers` if the Frontend API host changes.
+
+A development instance (`pk_test_`) works on any address but is limited and shows a "Development mode" badge. A production instance needs a domain you control, because Clerk verifies it with DNS records.

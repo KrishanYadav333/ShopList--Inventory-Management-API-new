@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@clerk/react": "^6.18.8",
     "@shoplist/shared": "*",
     "@tanstack/react-query": "^5.107.1",
     "react": "^19.3.1",

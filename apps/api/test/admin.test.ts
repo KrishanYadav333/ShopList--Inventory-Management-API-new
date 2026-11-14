@@ -165,7 +165,8 @@ describe('sign-in policy', () => {
     const keys = Object.keys(config.vars);
     expect(keys).not.toContain('DEV_AUTH');
     expect(keys).not.toContain('INSECURE_DEV_COOKIES');
-    expect(keys).not.toContain('SIGNIN_MODE'); // unset, so the safe default (owner-only) applies
+    expect(['invite', undefined]).toContain(config.vars.SIGNIN_MODE); // invitation-only or owner-only, never open
+    expect(config.vars.SIGNIN_MODE).not.toBe('open');
     expect(config.vars.SUPER_ADMIN_GITHUB_ID).toMatch(/^\d+$/); // a numeric id, never an email or login
   });
 });

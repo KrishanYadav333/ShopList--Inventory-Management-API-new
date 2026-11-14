@@ -10,7 +10,7 @@ export function Login() {
   const me = useMe();
   const qc = useQueryClient();
   const nav = useNavigate();
-  const health = useQuery({ queryKey: ['health'], queryFn: () => api<{ signin: 'open' | 'owner-only' }>('GET', '/health'), staleTime: 300_000 });
+  const health = useQuery({ queryKey: ['health'], queryFn: () => api<{ signin: 'open' | 'owner-only' | 'invite-only' }>('GET', '/health'), staleTime: 300_000 });
   const [email, setEmail] = useState('');
   const [asAdmin, setAsAdmin] = useState(false);
   const [error, setError] = useState('');
@@ -28,7 +28,11 @@ export function Login() {
         <h1>Sign in to ShopList</h1>
         <p>Inventory you can trust: every change is recorded.</p>
         {health.data?.signin === 'owner-only' && <p className="notice" role="note">This ShopList is private. Only the site owner can sign in.</p>}
-        <a className="btn btn-github" href="/api/v1/auth/oauth/github"><Icon name="github" size={18} /> Continue with GitHub</a>
+        {health.data?.signin === 'invite-only' && <p className="notice" role="note">Access is by invitation. Use the email address your invitation was sent to.</p>}
+        {health.data?.signin !== 'owner-only' && import.meta.env.VITE_CLERK_PUBLISHABLE_KEY && (
+          <a className="btn btn-primary full" href="/sign-in">Sign in with email or Google</a>
+        )}
+        <a className="btn btn-github" href="/api/v1/auth/oauth/github"><Icon name="github" size={18} /> Owner sign-in with GitHub</a>
         {import.meta.env.DEV && (
           <form onSubmit={submit} className="dev-login">
             <div className="hint">Development only</div>
@@ -38,7 +42,7 @@ export function Login() {
           </form>
         )}
         {error && <div className="field-error" role="alert">{error}</div>}
-        <p className="fine">We never see or store a password. Sign-in is handled by GitHub.</p>
+        <p className="fine">We never see or store a password. Sign-in is handled by Clerk (clients) and GitHub (owner).</p>
       </div>
     </div>
   );
@@ -84,7 +88,10 @@ export function Invite() {
     onSuccess: async (r) => { await qc.invalidateQueries({ queryKey: ['me'] }); nav(`/o/${r.organizationId}/orders`); },
   });
   if (me.isLoading) return <div className="boot">Loading…</div>;
-  if (!me.data) return <Navigate to="/login" replace />;
+  if (!me.data) {
+    try { sessionStorage.setItem('sl_return', location.pathname); } catch { /* storage unavailable */ }
+    return <Navigate to="/login" replace />;
+  }
   return (
     <div className="auth">
       <div className="auth-card">
