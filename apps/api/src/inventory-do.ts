@@ -9,6 +9,11 @@ import {
   type MovementInput,
   type MovementListQuery,
   type MovementReason,
+  type Order,
+  type OrderCounts,
+  type OrderInput,
+  type OrderListQuery,
+  type OrderState,
   type Page,
   type Product,
   type ProductInput,
@@ -112,6 +117,42 @@ const MIGRATIONS: string[][] = [
     `CREATE TABLE counters (name TEXT PRIMARY KEY, value INTEGER NOT NULL)`,
     `INSERT INTO counters(name, value) VALUES ('products', 0), ('low_stock', 0), ('out_of_stock', 0), ('inventory_value_minor', 0)`,
   ],
+  // Step 2: orders. An order reserves stock when created; shipping turns the reservation into a sale.
+  [
+    `CREATE TABLE orders (
+       id TEXT PRIMARY KEY,
+       number TEXT NOT NULL UNIQUE,
+       channel TEXT NOT NULL DEFAULT 'manual',
+       customer_name TEXT NOT NULL,
+       customer_email TEXT,
+       country TEXT,
+       note TEXT,
+       location_id TEXT NOT NULL REFERENCES locations(id),
+       paid INTEGER NOT NULL DEFAULT 0,
+       state TEXT NOT NULL CHECK (state IN ('payment_required', 'waiting_for_stock', 'ready_to_ship', 'shipped', 'cancelled')),
+       version INTEGER NOT NULL DEFAULT 1,
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL,
+       shipped_at TEXT
+     )`,
+    `CREATE INDEX orders_state ON orders(state, created_at DESC, id DESC)`,
+    `CREATE INDEX orders_created ON orders(created_at DESC, id DESC)`,
+    `CREATE INDEX orders_customer ON orders(customer_name COLLATE NOCASE)`,
+    `CREATE TABLE order_lines (
+       id TEXT PRIMARY KEY,
+       order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+       product_id TEXT NOT NULL REFERENCES products(id),
+       quantity INTEGER NOT NULL CHECK (quantity > 0),
+       reserved INTEGER NOT NULL DEFAULT 0 CHECK (reserved >= 0 AND reserved <= quantity),
+       unit_price_minor INTEGER NOT NULL,
+       sku TEXT NOT NULL,
+       name TEXT NOT NULL,
+       open INTEGER NOT NULL DEFAULT 1
+     )`,
+    `CREATE INDEX order_lines_order ON order_lines(order_id)`,
+    `CREATE INDEX order_lines_waiting ON order_lines(product_id) WHERE open = 1 AND reserved < quantity`,
+    `INSERT INTO counters(name, value) VALUES ('order_seq', 1000)`,
+  ],
 ];
 
 // ---------------------------------------------------------------------------
@@ -170,6 +211,37 @@ interface ProductRow {
   updated_at: string;
   deleted_at: string | null;
 }
+
+interface OrderRow {
+  id: string;
+  number: string;
+  channel: string;
+  customer_name: string;
+  customer_email: string | null;
+  country: string | null;
+  note: string | null;
+  location_id: string;
+  paid: number;
+  state: OrderState;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  shipped_at: string | null;
+}
+interface LineRow {
+  id: string;
+  order_id: string;
+  product_id: string;
+  quantity: number;
+  reserved: number;
+  unit_price_minor: number;
+  sku: string;
+  name: string;
+}
+
+/** What the customer-facing state of an open order is, from payment and how much stock is held. */
+const openState = (paid: boolean, lines: { quantity: number; reserved: number }[]): OrderState =>
+  !paid ? 'payment_required' : lines.some((l) => l.reserved < l.quantity) ? 'waiting_for_stock' : 'ready_to_ship';
 
 const PATCH_COLUMNS: Record<string, string> = {
   sku: 'sku',
@@ -418,10 +490,49 @@ export class InventoryDO extends DurableObject<Bindings> {
     const after: ProductRow = { ...product, on_hand_total: product.on_hand_total + delta };
     this.run(`UPDATE products SET on_hand_total = ?, attention = ? WHERE id = ?`, after.on_hand_total, needsAttention(after), productId);
     this.applyCounters(product, after);
+    // New stock goes to the oldest waiting orders first.
+    if (delta > 0) this.allocateWaiting(productId, locationId);
+    const reservedNow = this.one<{ reserved: number }>(`SELECT reserved FROM stock_levels WHERE product_id = ? AND location_id = ?`, productId, locationId)!.reserved;
     return {
       movement: { id: movementId, productId, locationId, delta, reason, reference, note, balance: next, actor: c.actor, createdAt: now },
-      stock: { productId, locationId, onHand: next, reserved: level.reserved, available: next - level.reserved },
+      stock: { productId, locationId, onHand: next, reserved: reservedNow, available: next - reservedNow },
     };
+  }
+
+  // ------------------------------------------------------------- reservations
+  /** Holds up to `want` available units for an order. Returns how many were held. */
+  private reserveUpTo(productId: string, locationId: string, want: number): number {
+    this.run(`INSERT OR IGNORE INTO stock_levels(product_id, location_id, on_hand, reserved, updated_at) VALUES (?, ?, 0, 0, ?)`, productId, locationId, nowIso());
+    const lvl = this.one<{ on_hand: number; reserved: number }>(`SELECT on_hand, reserved FROM stock_levels WHERE product_id = ? AND location_id = ?`, productId, locationId)!;
+    const take = Math.max(0, Math.min(lvl.on_hand - lvl.reserved, want));
+    if (take > 0) this.run(`UPDATE stock_levels SET reserved = reserved + ? WHERE product_id = ? AND location_id = ?`, take, productId, locationId);
+    return take;
+  }
+
+  /** Gives free units to waiting order lines, oldest order first, then refreshes those orders' states. */
+  private allocateWaiting(productId: string, locationId: string): void {
+    const waiting = this.all<{ id: string; order_id: string; quantity: number; reserved: number }>(
+      `SELECT l.id, l.order_id, l.quantity, l.reserved FROM order_lines l JOIN orders o ON o.id = l.order_id
+        WHERE l.open = 1 AND l.reserved < l.quantity AND l.product_id = ? AND o.location_id = ?
+        ORDER BY o.created_at ASC, l.id ASC`,
+      productId, locationId,
+    );
+    const touched = new Set<string>();
+    for (const l of waiting) {
+      const got = this.reserveUpTo(productId, locationId, l.quantity - l.reserved);
+      if (got === 0) break;
+      this.run(`UPDATE order_lines SET reserved = reserved + ? WHERE id = ?`, got, l.id);
+      touched.add(l.order_id);
+    }
+    for (const id of touched) this.refreshOrderState(id);
+  }
+
+  private refreshOrderState(orderId: string): void {
+    const o = this.one<OrderRow>(`SELECT * FROM orders WHERE id = ?`, orderId);
+    if (!o || o.state === 'shipped' || o.state === 'cancelled') return;
+    const next = openState(o.paid === 1, this.all<LineRow>(`SELECT * FROM order_lines WHERE order_id = ?`, orderId));
+    // Automatic changes do not bump the version, so a user's pending Ship click is not rejected as stale.
+    if (next !== o.state) this.run(`UPDATE orders SET state = ?, updated_at = ? WHERE id = ?`, next, nowIso(), orderId);
   }
 
   // ----------------------------------------------------------- products
@@ -497,6 +608,9 @@ export class InventoryDO extends DurableObject<Bindings> {
       const before = this.liveProduct(id);
       if (before.version !== expectedVersion) {
         throw new Fail(412, 'version_conflict', 'Someone else changed this product. Review their changes before deleting.', { current: this.view(before) });
+      }
+      if (this.one(`SELECT 1 AS x FROM order_lines WHERE product_id = ? AND open = 1 LIMIT 1`, id)) {
+        throw new Fail(409, 'product_in_use', 'This product is on open orders. Ship or cancel them first.');
       }
       this.run(`UPDATE products SET deleted_at = ?, version = version + 1, updated_at = ? WHERE id = ?`, nowIso(), nowIso(), id);
       this.run(`DELETE FROM products_fts WHERE product_id = ?`, id);
@@ -590,6 +704,7 @@ export class InventoryDO extends DurableObject<Bindings> {
     const counters = Object.fromEntries(this.all<{ name: string; value: number }>(`SELECT name, value FROM counters`).map((r) => [r.name, r.value]));
     const attention = this.all<ProductRow>(`SELECT * FROM products WHERE attention = 1 AND deleted_at IS NULL ORDER BY on_hand_total ASC, id ASC LIMIT 10`);
     return {
+      orders: this.orderCounts(),
       products: counters.products ?? 0,
       lowStock: counters.low_stock ?? 0,
       outOfStock: counters.out_of_stock ?? 0,
@@ -722,6 +837,143 @@ export class InventoryDO extends DurableObject<Bindings> {
     };
   }
 
+  // ------------------------------------------------------------- orders
+  private orderViews(rows: OrderRow[]): Order[] {
+    if (!rows.length) return [];
+    const byOrder = new Map<string, LineRow[]>();
+    for (const l of this.all<LineRow>(`SELECT * FROM order_lines WHERE order_id IN (SELECT value FROM json_each(?)) ORDER BY id`, JSON.stringify(rows.map((r) => r.id)))) {
+      const list = byOrder.get(l.order_id) ?? [];
+      list.push(l);
+      byOrder.set(l.order_id, list);
+    }
+    return rows.map((r) => {
+      const lines = byOrder.get(r.id) ?? [];
+      return {
+        id: r.id, number: r.number, channel: r.channel, customerName: r.customer_name, customerEmail: r.customer_email, country: r.country, note: r.note,
+        locationId: r.location_id, paid: r.paid === 1, state: r.state,
+        totalMinor: lines.reduce((sum, l) => sum + l.quantity * l.unit_price_minor, 0),
+        lines: lines.map((l) => ({ id: l.id, productId: l.product_id, sku: l.sku, name: l.name, quantity: l.quantity, reserved: l.reserved, unitPriceMinor: l.unit_price_minor })),
+        version: r.version, createdAt: r.created_at, updatedAt: r.updated_at, shippedAt: r.shipped_at,
+      };
+    });
+  }
+
+  private orderRow(id: string): OrderRow {
+    const row = this.one<OrderRow>(`SELECT * FROM orders WHERE id = ?`, id);
+    if (!row) throw new Fail(404, 'order_not_found', 'That order does not exist.');
+    return row;
+  }
+
+  private orderCounts(): OrderCounts {
+    const counts: OrderCounts = { payment_required: 0, waiting_for_stock: 0, ready_to_ship: 0, shipped: 0, cancelled: 0 };
+    for (const r of this.all<{ state: OrderState; n: number }>(`SELECT state, COUNT(*) AS n FROM orders GROUP BY state`)) counts[r.state] = r.n;
+    return counts;
+  }
+
+  createOrder(c: Caller, idem: Idem | undefined, input: OrderInput): Result<Out<{ order: Order }>> {
+    return this.tx(idem, c, () => {
+      const locationId = input.locationId ?? this.one<{ id: string }>(`SELECT id FROM locations WHERE is_default = 1 AND archived_at IS NULL`)?.id;
+      if (!locationId) throw new Fail(409, 'no_default_location', 'Create a location first.');
+      this.activeLocation(locationId);
+      const id = newId('ord');
+      const now = nowIso();
+      this.run(`UPDATE counters SET value = value + 1 WHERE name = 'order_seq'`);
+      const number = `ORD-${this.one<{ value: number }>(`SELECT value FROM counters WHERE name = 'order_seq'`)!.value}`;
+      this.run(
+        `INSERT INTO orders(id, number, channel, customer_name, customer_email, country, note, location_id, paid, state, version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'payment_required', 1, ?, ?)`,
+        id, number, input.channel, input.customerName, input.customerEmail ?? null, input.country ?? null, input.note ?? null, locationId, input.paid ? 1 : 0, now, now,
+      );
+      const made: { quantity: number; reserved: number }[] = [];
+      for (const line of input.lines) {
+        const p = this.liveProduct(line.productId);
+        const reserved = this.reserveUpTo(p.id, locationId, line.quantity);
+        this.run(`INSERT INTO order_lines(id, order_id, product_id, quantity, reserved, unit_price_minor, sku, name, open) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`, newId('oln'), id, p.id, line.quantity, reserved, p.price_minor, p.sku, p.name);
+        made.push({ quantity: line.quantity, reserved });
+      }
+      this.run(`UPDATE orders SET state = ? WHERE id = ?`, openState(input.paid, made), id);
+      this.audit(c, 'order.create', 'order', id, { number, customer: input.customerName, lines: input.lines.length });
+      return { status: 201, body: { order: this.orderViews([this.orderRow(id)])[0] } };
+    });
+  }
+
+  getOrder(id: string): Result<{ order: Order }> {
+    const row = this.one<OrderRow>(`SELECT * FROM orders WHERE id = ?`, id);
+    if (!row) return { ok: false, status: 404, code: 'order_not_found', detail: 'That order does not exist.' };
+    return ok({ order: this.orderViews([row])[0] });
+  }
+
+  listOrders(q: OrderListQuery): Page<Order> {
+    const where: string[] = [];
+    const args: SqlStorageValue[] = [];
+    if (q.state) { where.push('o.state = ?'); args.push(q.state); }
+    if (q.q) {
+      const like = `${q.q.replace(/[\\%_]/g, '\\$&')}%`;
+      where.push("(o.number LIKE ? ESCAPE '\\' OR o.customer_name LIKE ? ESCAPE '\\')");
+      args.push(like, like);
+    }
+    const cur = decodeCursor<{ c: string; i: string }>(q.cursor);
+    if (cur) { where.push('(o.created_at < ? OR (o.created_at = ? AND o.id < ?))'); args.push(cur.c, cur.c, cur.i); }
+    const rows = this.all<OrderRow>(`SELECT o.* FROM orders o ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY o.created_at DESC, o.id DESC LIMIT ?`, ...args, q.limit + 1);
+    const hasMore = rows.length > q.limit;
+    const page = rows.slice(0, q.limit);
+    const last = page[page.length - 1];
+    return { data: this.orderViews(page), nextCursor: hasMore && last ? encodeCursor({ c: last.created_at, i: last.id }) : null, hasMore };
+  }
+
+  private guardOrder(id: string, version: number): OrderRow {
+    const row = this.orderRow(id);
+    if (row.version !== version) {
+      throw new Fail(412, 'version_conflict', 'This order changed. Review it and try again.', { current: this.orderViews([row])[0] });
+    }
+    if (row.state === 'shipped' || row.state === 'cancelled') throw new Fail(409, 'order_closed', `This order is already ${row.state}.`);
+    return row;
+  }
+
+  setOrderPaid(c: Caller, id: string, version: number, paid: boolean): Result<Out<{ order: Order }>> {
+    return this.tx(undefined, c, () => {
+      const row = this.guardOrder(id, version);
+      this.run(`UPDATE orders SET paid = ?, version = version + 1, updated_at = ? WHERE id = ?`, paid ? 1 : 0, nowIso(), id);
+      this.refreshOrderState(id);
+      this.audit(c, paid ? 'order.paid' : 'order.unpaid', 'order', id, { number: row.number });
+      return { status: 200, body: { order: this.orderViews([this.orderRow(id)])[0] } };
+    });
+  }
+
+  shipOrder(c: Caller, id: string, version: number): Result<Out<{ order: Order }>> {
+    return this.tx(undefined, c, () => {
+      const row = this.guardOrder(id, version);
+      if (row.state !== 'ready_to_ship') {
+        throw new Fail(409, 'not_ready', row.state === 'payment_required' ? 'Mark the order as paid before shipping it.' : 'Some items are not in stock yet. Receive stock first.');
+      }
+      for (const l of this.all<LineRow>(`SELECT * FROM order_lines WHERE order_id = ? ORDER BY id`, id)) {
+        // Release the hold, then record the sale; both in this transaction.
+        this.run(`UPDATE stock_levels SET reserved = reserved - ? WHERE product_id = ? AND location_id = ?`, l.reserved, l.product_id, row.location_id);
+        this.move(c, l.product_id, row.location_id, -l.quantity, 'sale', row.number, null);
+        this.run(`UPDATE order_lines SET open = 0 WHERE id = ?`, l.id);
+      }
+      this.run(`UPDATE orders SET state = 'shipped', shipped_at = ?, version = version + 1, updated_at = ? WHERE id = ?`, nowIso(), nowIso(), id);
+      this.audit(c, 'order.ship', 'order', id, { number: row.number });
+      return { status: 200, body: { order: this.orderViews([this.orderRow(id)])[0] } };
+    });
+  }
+
+  cancelOrder(c: Caller, id: string, version: number): Result<Out<{ order: Order }>> {
+    return this.tx(undefined, c, () => {
+      const row = this.guardOrder(id, version);
+      const lines = this.all<LineRow>(`SELECT * FROM order_lines WHERE order_id = ?`, id);
+      for (const l of lines) {
+        if (l.reserved > 0) this.run(`UPDATE stock_levels SET reserved = reserved - ? WHERE product_id = ? AND location_id = ?`, l.reserved, l.product_id, row.location_id);
+        this.run(`UPDATE order_lines SET reserved = 0, open = 0 WHERE id = ?`, l.id);
+      }
+      this.run(`UPDATE orders SET state = 'cancelled', version = version + 1, updated_at = ? WHERE id = ?`, nowIso(), id);
+      // Freed units may now satisfy orders that were waiting.
+      for (const l of lines) this.allocateWaiting(l.product_id, row.location_id);
+      this.audit(c, 'order.cancel', 'order', id, { number: row.number });
+      return { status: 200, body: { order: this.orderViews([this.orderRow(id)])[0] } };
+    });
+  }
+
   // ---------------------------------------------------------- integrity
   /** Verifies invariants I1 and I6. Run nightly; any drift is a sev-1 incident. */
   verifyIntegrity(): { ok: boolean; drift: string[] } {
@@ -736,6 +988,13 @@ export class InventoryDO extends DurableObject<Bindings> {
       `SELECT p.id AS product_id, p.on_hand_total AS total, COALESCE(SUM(s.on_hand), 0) AS levels
        FROM products p LEFT JOIN stock_levels s ON s.product_id = p.id GROUP BY p.id HAVING total <> levels`,
     )) drift.push(JSON.stringify({ invariant: 'I1-total', ...r }));
+    for (const r of this.all(
+      `SELECT s.product_id, s.location_id, s.reserved AS level, COALESCE(r.total, 0) AS lines
+       FROM stock_levels s LEFT JOIN (
+         SELECT l.product_id, o.location_id, SUM(l.reserved) AS total FROM order_lines l JOIN orders o ON o.id = l.order_id WHERE l.open = 1 GROUP BY l.product_id, o.location_id
+       ) r ON r.product_id = s.product_id AND r.location_id = s.location_id
+       WHERE s.reserved <> COALESCE(r.total, 0)`,
+    )) drift.push(JSON.stringify({ invariant: 'I3', ...r }));
     const live = this.all<ProductRow>(`SELECT * FROM products WHERE deleted_at IS NULL`);
     const want = live.reduce((acc, p) => {
       const k = contribution(p);

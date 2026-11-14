@@ -10,8 +10,11 @@ import {
   memberPatch,
   movementInput,
   movementListQuery,
+  orderInput,
+  orderListQuery,
   orgInput,
   pageQuery,
+  paidInput,
   productInput,
   productListQuery,
   productPatch,
@@ -434,6 +437,43 @@ route('post', '/orgs/:orgId/stock/counts', 'inventory:write', async (c) => {
   const { data, raw } = await readJson(c, countInput);
   const out = unwrap(await inventory(c).count(caller(c), await idemFrom(c, raw), data));
   return c.json(out.body, out.status as 201);
+});
+
+
+// -------------------------------------------------------------------- orders
+route('get', '/orgs/:orgId/orders', 'inventory:read', async (c) => c.json(await inventory(c).listOrders(parse(orderListQuery, c.req.query()))));
+
+route('post', '/orgs/:orgId/orders', 'inventory:write', async (c) => {
+  const { data, raw } = await readJson(c, orderInput);
+  const out = unwrap(await inventory(c).createOrder(caller(c), await idemFrom(c, raw), data));
+  etag(c, out.body.order.version);
+  return c.json(out.body, out.status as 201);
+});
+
+route('get', '/orgs/:orgId/orders/:id', 'inventory:read', async (c) => {
+  const r = unwrap(await inventory(c).getOrder(c.req.param('id') ?? ''));
+  etag(c, r.order.version);
+  return c.json(r);
+});
+
+route('post', '/orgs/:orgId/orders/:id/paid', 'inventory:write', async (c) => {
+  const version = ifMatch(c);
+  const { data } = await readJson(c, paidInput);
+  const out = unwrap(await inventory(c).setOrderPaid(caller(c), c.req.param('id') ?? '', version, data.paid));
+  etag(c, out.body.order.version);
+  return c.json(out.body, out.status as 200);
+});
+
+route('post', '/orgs/:orgId/orders/:id/ship', 'inventory:write', async (c) => {
+  const out = unwrap(await inventory(c).shipOrder(caller(c), c.req.param('id') ?? '', ifMatch(c)));
+  etag(c, out.body.order.version);
+  return c.json(out.body, out.status as 200);
+});
+
+route('post', '/orgs/:orgId/orders/:id/cancel', 'inventory:write', async (c) => {
+  const out = unwrap(await inventory(c).cancelOrder(caller(c), c.req.param('id') ?? '', ifMatch(c)));
+  etag(c, out.body.order.version);
+  return c.json(out.body, out.status as 200);
 });
 
 route('get', '/orgs/:orgId/stock/movements', 'inventory:read', async (c) => c.json(await inventory(c).listMovements(parse(movementListQuery, c.req.query()))));

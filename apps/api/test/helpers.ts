@@ -24,7 +24,7 @@ export async function call<T = any>(
   const h: Record<string, string> = { origin: ORIGIN, 'cf-connecting-ip': ip(), ...headers };
   if (cookie) h.cookie = cookie;
   if (body !== undefined) h['content-type'] = 'application/json';
-  if (method === 'POST' && !('idempotency-key' in headers) && /\/(products|stock\/(movements|transfers|counts))$/.test(path)) {
+  if (method === 'POST' && !('idempotency-key' in headers) && /\/(products|orders|stock\/(movements|transfers|counts))$/.test(path)) {
     h['idempotency-key'] = crypto.randomUUID();
   }
   const res = await SELF.fetch(`${ORIGIN}/api/v1${path}`, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) });

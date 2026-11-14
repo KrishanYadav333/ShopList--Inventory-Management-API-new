@@ -198,7 +198,78 @@ export interface Page<T> {
   hasMore: boolean;
 }
 
+// ---------------------------------------------------------------- orders
+export const ORDER_STATES = ['payment_required', 'waiting_for_stock', 'ready_to_ship', 'shipped', 'cancelled'] as const;
+export type OrderState = (typeof ORDER_STATES)[number];
+export const ORDER_CHANNELS = ['manual', 'shopify', 'amazon', 'ebay', 'woocommerce', 'magento', 'phone', 'other'] as const;
+
+export const orderInput = z
+  .object({
+    customerName: text(120),
+    customerEmail: z.string().trim().toLowerCase().email().max(254).nullish(),
+    country: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, 'Use a two-letter country code').nullish(),
+    channel: z.enum(ORDER_CHANNELS).default('manual'),
+    note: z.string().trim().max(500).nullish(),
+    locationId: text(40).nullish(),
+    paid: z.boolean().default(false),
+    lines: z
+      .array(z.object({ productId: text(40), quantity: z.number().int().min(1).max(100_000) }).strict())
+      .min(1, 'Add at least one item')
+      .max(50)
+      .refine((l) => new Set(l.map((x) => x.productId)).size === l.length, 'Each product can appear once'),
+  })
+  .strict();
+export type OrderInput = z.infer<typeof orderInput>;
+
+export const orderListQuery = z.object({
+  limit,
+  cursor: z.string().max(500).optional(),
+  state: z.enum(ORDER_STATES).optional(),
+  q: z.string().trim().max(100).optional(),
+});
+export type OrderListQuery = z.infer<typeof orderListQuery>;
+
+export const paidInput = z.object({ paid: z.boolean() }).strict();
+
+export interface OrderLine {
+  id: string;
+  productId: string;
+  sku: string;
+  name: string;
+  quantity: number;
+  reserved: number;
+  unitPriceMinor: number;
+}
+
+export interface Order {
+  id: string;
+  number: string;
+  channel: string;
+  customerName: string;
+  customerEmail: string | null;
+  country: string | null;
+  note: string | null;
+  locationId: string;
+  paid: boolean;
+  state: OrderState;
+  totalMinor: number;
+  lines: OrderLine[];
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  shippedAt: string | null;
+}
+
+export interface OrderCounts {
+  payment_required: number;
+  waiting_for_stock: number;
+  ready_to_ship: number;
+  shipped: number;
+  cancelled: number;
+}
+
 export interface Dashboard {
+  orders: OrderCounts;
   products: number;
   lowStock: number;
   outOfStock: number;
