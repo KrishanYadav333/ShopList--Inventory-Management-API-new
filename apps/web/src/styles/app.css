@@ -316,3 +316,7 @@ code { background: #eef2f5; padding: 1px 5px; border-radius: 4px; font-size: 12p
 .clerk-card { width: min(440px, 100%); }
 .clerk-card a.fine { color: var(--muted); }
 a.btn { text-decoration: none; }
+
+/* Virtualized rows: keep every row one height so the spacer maths holds. */
+.products-table .item-desc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 28rem; }
+.products-table tr.spacer, .products-table tr.spacer:hover { background: none; }

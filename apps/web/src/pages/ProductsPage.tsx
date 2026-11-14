@@ -9,6 +9,7 @@ import { avatarClass, csvCell, dateParts, money } from '../format';
 import { Icon } from '../icons';
 import { canWrite, useProducts, type ProductFilters } from '../queries';
 import { useToast } from '../toast';
+import { useVirtualRows } from '../virtual';
 
 const STATUS = { in: ['ready', 'In stock'], low: ['low', 'Low stock'], out: ['out', 'Out of stock'] } as const;
 
@@ -48,6 +49,7 @@ export function ProductsPage() {
   };
   const query = useProducts(org.id, filters);
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.data) ?? [], [query.data]);
+  const v = useVirtualRows(rows.length);
   const filtered = !!(filters.q || filters.stock || filters.location || filters.tag);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['org', org.id] });
@@ -137,8 +139,9 @@ export function ProductsPage() {
                   <th className="actions-col" />
                 </tr>
               </thead>
-              <tbody>
-                {rows.map((p) => {
+              <tbody ref={v.bodyRef}>
+                {v.before > 0 && <tr className="spacer" aria-hidden="true" style={{ height: v.before }} />}
+                {rows.slice(v.start, v.end).map((p) => {
                   const { date, time } = dateParts(p.updatedAt);
                   const [cls, label] = STATUS[p.status];
                   return (
@@ -162,6 +165,7 @@ export function ProductsPage() {
                     </tr>
                   );
                 })}
+                {v.after > 0 && <tr className="spacer" aria-hidden="true" style={{ height: v.after }} />}
               </tbody>
             </table>
             <div className="table-foot">
