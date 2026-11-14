@@ -34,11 +34,11 @@ export function HistoryPage() {
       </header>
       <div className="orders-table-container">
         {q.isError ? (
-          <div className="state"><Icon name="alert" size={28} /><h3>Could not load history</h3><p>{(q.error as ApiError).message}</p><button className="btn btn-primary" onClick={() => q.refetch()}>Try again</button></div>
+          <div className="state"><Icon name="alert" size={28} /><h2>Could not load history</h2><p>{(q.error as ApiError).message}</p><button className="btn btn-primary" onClick={() => q.refetch()}>Try again</button></div>
         ) : q.isLoading || (rows.length === 0 && q.isFetching) ? (
           <table className="orders-table"><tbody>{Array.from({ length: 8 }, (_, i) => <tr key={i} className="skeleton-row"><td colSpan={6}><div className="skeleton" /></td></tr>)}</tbody></table>
         ) : !rows.length ? (
-          <div className="state"><Icon name="clock" size={32} /><h3>No stock movements yet</h3><p>Every change to stock is recorded here, with who did it and why.</p></div>
+          <div className="state"><Icon name="clock" size={32} /><h2>No stock movements yet</h2><p>Every change to stock is recorded here, with who did it and why.</p></div>
         ) : (
           <>
             <table className="orders-table history-table">

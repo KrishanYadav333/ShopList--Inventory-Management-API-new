@@ -23,7 +23,7 @@ export function Login({ owner = false }: { owner?: boolean }) {
   if (me.data) return <Navigate to="/" replace />;
   const submit = (e: FormEvent) => { e.preventDefault(); setError(''); dev.mutate(); };
   return (
-    <div className="auth">
+    <main className="auth">
       <div className="auth-card">
         <img className="brand-lockup" src="/logo-lockup.png" alt="ShopList" width="280" height="83" />
         <h1>{owner ? 'Owner sign-in' : 'Sign in to ShopList'}</h1>
@@ -53,7 +53,7 @@ export function Login({ owner = false }: { owner?: boolean }) {
         {error && <div className="field-error" role="alert">{error}</div>}
         <p className="fine">We never see or store a password.</p>
       </div>
-    </div>
+    </main>
   );
 }
 
@@ -74,7 +74,7 @@ export function Home() {
   const orgs = me.data.organizations;
   if (orgs.length && !location.search.includes('new')) return <Navigate to={`/o/${orgs[0].id}/orders`} replace />;
   return (
-    <div className="auth">
+    <main className="auth">
       <form className="auth-card" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
         <img className="brand-mark-lg" src="/logo-symbol.png" alt="ShopList" width="56" height="60" />
         <h1>{orgs.length ? 'New organization' : `Welcome, ${me.data.user.name.split(' ')[0]}`}</h1>
@@ -83,7 +83,7 @@ export function Home() {
         <button className="btn btn-primary full" disabled={!name.trim() || create.isPending}>{create.isPending ? 'Creating…' : 'Create organization'}</button>
         {orgs.length > 0 && <button type="button" className="btn btn-outline full" onClick={() => nav(`/o/${orgs[0].id}/orders`)}>Cancel</button>}
       </form>
-    </div>
+    </main>
   );
 }
 
@@ -102,7 +102,7 @@ export function Invite() {
     return <Navigate to="/login" replace />;
   }
   return (
-    <div className="auth">
+    <main className="auth">
       <div className="auth-card">
         <img className="brand-mark-lg" src="/logo-symbol.png" alt="ShopList" width="56" height="60" />
         <h1>You’ve been invited</h1>
@@ -110,6 +110,6 @@ export function Invite() {
         <button className="btn btn-primary full" onClick={() => accept.mutate()} disabled={accept.isPending}>{accept.isPending ? 'Joining…' : 'Accept invitation'}</button>
         {accept.error && <div className="field-error" role="alert">{(accept.error as ApiError).message}</div>}
       </div>
-    </div>
+    </main>
   );
 }

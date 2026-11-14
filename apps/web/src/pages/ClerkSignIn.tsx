@@ -60,10 +60,10 @@ export default function ClerkSignIn() {
   const [error] = useState(readError);
   useEffect(() => { try { sessionStorage.removeItem(ERROR_KEY); } catch { /* storage unavailable */ } }, []);
   if (!KEY) {
-    return <div className="auth"><div className="auth-card"><h1>Client sign-in is not set up</h1><p>This deployment has no Clerk key configured.</p><a className="btn btn-outline full" href="/login">Back</a></div></div>;
+    return <main className="auth"><div className="auth-card"><h1>Client sign-in is not set up</h1><p>This deployment has no Clerk key configured.</p><a className="btn btn-outline full" href="/login">Back</a></div></main>;
   }
   return (
-    <div className="auth">
+    <main className="auth">
       <div className="auth-card clerk-card">
         <img className="brand-lockup" src="/logo-lockup.png" alt="ShopList" width="280" height="83" />
         {error && <div className="notice" role="alert">{error}</div>}
@@ -76,6 +76,6 @@ export default function ClerkSignIn() {
         </ClerkProvider>
         <a className="fine" href="/login">Back to the main sign-in</a>
       </div>
-    </div>
+    </main>
   );
 }

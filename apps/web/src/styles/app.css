@@ -72,7 +72,7 @@ button.nav-icon { background: none; border: 0; cursor: pointer; }
 /* Header additions */
 .search-container svg { position: absolute; left: 12px; color: rgba(255, 255, 255, 0.7); pointer-events: none; }
 .search-input { -webkit-appearance: none; appearance: none; width: 240px; }
-.top-select { background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.35); color: #fff; padding: 8px; border-radius: 4px; font-size: 13px; }
+.top-select { background: rgba(0, 0, 0, 0.22); border: 1px solid rgba(255, 255, 255, 0.55); color: #fff; padding: 8px; border-radius: 4px; font-size: 13px; }
 .top-select option { color: #000; }
 .btn-ghost:disabled:hover { background: rgba(255, 255, 255, 0.1); }
 
@@ -101,7 +101,7 @@ button.nav-icon { background: none; border: 0; cursor: pointer; }
 @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
 
 .state { text-align: center; padding: 72px 24px; color: var(--muted); display: grid; justify-items: center; gap: 8px; }
-.state h3 { color: var(--ink); font-size: 18px; }
+.state h2, .state h3 { color: var(--ink); font-size: 18px; }
 .state-actions { display: flex; gap: 10px; margin-top: 10px; }
 
 /* Modal */

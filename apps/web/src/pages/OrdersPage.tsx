@@ -94,14 +94,14 @@ export function OrdersPage() {
 
       <div className="orders-table-container">
         {query.isError ? (
-          <div className="state"><Icon name="alert" size={28} /><h3>Could not load orders</h3><p>{(query.error as ApiError).message}</p><button className="btn btn-primary" onClick={() => query.refetch()}>Try again</button></div>
+          <div className="state"><Icon name="alert" size={28} /><h2>Could not load orders</h2><p>{(query.error as ApiError).message}</p><button className="btn btn-primary" onClick={() => query.refetch()}>Try again</button></div>
         ) : query.isLoading || (rows.length === 0 && query.isFetching) ? (
           <table className="orders-table" aria-busy="true"><tbody>{Array.from({ length: 8 }, (_, i) => <tr key={i} className="skeleton-row"><td colSpan={8}><div className="skeleton" /></td></tr>)}</tbody></table>
         ) : rows.length === 0 ? (
           <div className="state">
             <Icon name="cart" size={32} />
-            {empty ? (<><h3>No orders yet</h3><p>Orders hold stock for a customer. Create one, then ship it to turn the held stock into a sale.</p>{write && <button className="btn btn-primary" onClick={openOrder}><Icon name="plus" size={14} /> New order</button>}</>)
-              : (<><h3>No orders match</h3><p>Try another status or search.</p><button className="btn btn-primary" onClick={() => { setText(''); setParams({}, { replace: true }); }}>Clear filters</button></>)}
+            {empty ? (<><h2>No orders yet</h2><p>Orders hold stock for a customer. Create one, then ship it to turn the held stock into a sale.</p>{write && <button className="btn btn-primary" onClick={openOrder}><Icon name="plus" size={14} /> New order</button>}</>)
+              : (<><h2>No orders match</h2><p>Try another status or search.</p><button className="btn btn-primary" onClick={() => { setText(''); setParams({}, { replace: true }); }}>Clear filters</button></>)}
           </div>
         ) : (
           <>
@@ -109,7 +109,7 @@ export function OrdersPage() {
               <thead>
                 <tr>
                   <th className="checkbox-col"><input type="checkbox" aria-label="Select all" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(rows.map((r) => r.id)))} /></th>
-                  <th className="icon-col" /><th>Date</th><th>Status</th><th>Order items</th><th>Customer</th><th className="country-col">Country</th><th className="actions-col" />
+                  <th className="icon-col"><span className="sr-only">Icon</span></th><th>Date</th><th>Status</th><th>Order items</th><th>Customer</th><th className="country-col">Country</th><th className="actions-col"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody>

@@ -111,16 +111,16 @@ export function ProductsPage() {
 
       <div className="orders-table-container">
         {query.isError ? (
-          <div className="state"><Icon name="alert" size={28} /><h3>Could not load products</h3><p>{(query.error as ApiError).message}</p><button className="btn btn-primary" onClick={() => query.refetch()}>Try again</button></div>
+          <div className="state"><Icon name="alert" size={28} /><h2>Could not load products</h2><p>{(query.error as ApiError).message}</p><button className="btn btn-primary" onClick={() => query.refetch()}>Try again</button></div>
         ) : query.isLoading || (rows.length === 0 && query.isFetching) ? (
           <table className="orders-table" aria-busy="true"><tbody>{Array.from({ length: 8 }, (_, i) => <tr key={i} className="skeleton-row"><td colSpan={8}><div className="skeleton" /></td></tr>)}</tbody></table>
         ) : rows.length === 0 ? (
           <div className="state">
             <Icon name="box" size={32} />
             {filtered ? (
-              <><h3>No products match{filters.q ? ` “${filters.q}”` : ' these filters'}</h3><p>Try a different search or clear the filters.</p><button className="btn btn-primary" onClick={() => { setText(''); setParams({}, { replace: true }); }}>Clear filters</button></>
+              <><h2>No products match{filters.q ? ` “${filters.q}”` : ' these filters'}</h2><p>Try a different search or clear the filters.</p><button className="btn btn-primary" onClick={() => { setText(''); setParams({}, { replace: true }); }}>Clear filters</button></>
             ) : (
-              <><h3>Your inventory is empty</h3><p>Add your first product, or load a few samples to explore.</p>
+              <><h2>Your inventory is empty</h2><p>Add your first product, or load a few samples to explore.</p>
                 {write && <div className="state-actions"><button className="btn btn-primary" onClick={openNew}><Icon name="plus" size={14} /> New product</button><button className="btn btn-outline" onClick={() => seed.mutate()} disabled={seed.isPending}>{seed.isPending ? 'Adding…' : 'Load sample data'}</button></div>}</>
             )}
           </div>
@@ -130,13 +130,13 @@ export function ProductsPage() {
               <thead>
                 <tr>
                   <th className="checkbox-col"><input type="checkbox" aria-label="Select all" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(rows.map((r) => r.id)))} /></th>
-                  <th className="icon-col" />
+                  <th className="icon-col"><span className="sr-only">Icon</span></th>
                   <th>Updated</th>
                   <th>Status</th>
                   <th>Product</th>
                   <th className="num">On hand</th>
                   <th className="num">Price</th>
-                  <th className="actions-col" />
+                  <th className="actions-col"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody ref={v.bodyRef}>
