@@ -24,10 +24,15 @@ Target: [OWASP ASVS 4.0](https://owasp.org/www-project-application-security-veri
 
 ## Authentication
 
-**No passwords.** Workers caps PBKDF2 at 100,000 iterations, below OWASP's 600,000 for PBKDF2-HMAC-SHA256, and the free plan allows only 10 ms of CPU per request. Rather than store weakly hashed passwords, ShopList uses:
+**No passwords stored by ShopList.** Workers caps PBKDF2 at 100,000 iterations, below OWASP's 600,000 for PBKDF2-HMAC-SHA256, and the free plan allows only 10 ms of CPU per request. Identity comes from GitHub (owner), Clerk (customers) or a passkey.
 
-1. **OAuth 2.0 with PKCE** via GitHub and Google. Only verified emails are accepted. `state` and the PKCE verifier are stored in a short-lived, signed, HttpOnly cookie.
-2. **Passkeys (WebAuthn)** as a phishing-resistant option, added from account settings. Verifying a passkey is one signature check, which fits the CPU budget. User verification is required.
+**Passkeys (WebAuthn)** are verified in the Worker with WebCrypto only (`src/webauthn.ts`), one ECDSA check per sign-in:
+- ES256 credentials, discoverable (no username typed), user verification required (biometric or device PIN). Attestation is not requested (`none`).
+- A signed, purpose-bound challenge that expires after 2 minutes. A sign-in challenge cannot be used to register, and a registration challenge is bound to the user who asked for it.
+- The origin, relying party id hash, ceremony type, user-presence and user-verified flags are all checked. The sign counter must increase when the authenticator uses one (rollback means a cloned key).
+- Unknown credential, bad signature and disabled account give the same answer, so credential ids cannot be probed.
+- A passkey session is a normal session. It **never** carries super-admin power, even on the owner's account. Only the GitHub door does.
+- Not done: single-use challenges (a captured response is replayable for up to 2 minutes, but capturing one needs a TLS break) and attestation verification. Add both if you ever need to restrict which authenticators are allowed.
 
 Account linking: a new OAuth identity with an email that matches an existing user is linked **only** if the provider marks the email as verified.
 
@@ -36,7 +41,10 @@ Account linking: a new OAuth identity with an email that matches an existing use
 | Door | For | How it works |
 |---|---|---|
 | **GitHub** | The owner only | OAuth with PKCE. The callback accepts exactly one GitHub account, matched by numeric id (`SUPER_ADMIN_GITHUB_ID`), in every mode. Everyone else is refused before any user or session exists. |
-| **Clerk** | Customers | Clerk proves identity (Google, email, passkeys, MFA). The Worker verifies Clerk's RS256 session token itself, then issues its own ShopList session, so cookies, CSRF checks and revocation stay ours. Only enabled when `SIGNIN_MODE=open`. |
+| **Clerk** | Customers | Clerk proves identity (Google, email code). The Worker verifies Clerk's RS256 session token itself, then issues its own ShopList session, so cookies, CSRF checks and revocation stay ours. Available in `invite` and `open` modes. |
+| **Passkey** | Existing users | Added from Settings after a first sign-in. Never grants admin power. |
+
+The two pages are separate: `/login` is for customers, `/owner` is the owner's unlinked GitHub page.
 
 There is exactly **one super admin**: the owner. The role is never stored and cannot be granted through the app. It is true only when **both** hold: the user is linked to the GitHub account in `SUPER_ADMIN_GITHUB_ID`, **and** the current session was created through the GitHub door. A session from the customer door carries no admin power even on the same user row.
 

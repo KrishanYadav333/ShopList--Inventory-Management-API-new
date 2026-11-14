@@ -8,6 +8,7 @@ import { dateParts } from '../format';
 import { Icon } from '../icons';
 import { canAdmin, useLocations, useMe } from '../queries';
 import { useToast } from '../toast';
+import { addPasskey, passkeysSupported, wasCancelled } from '../passkeys';
 
 interface Member { id: string; name: string; email: string; role: Role }
 
@@ -23,6 +24,15 @@ export function SettingsPage() {
 
   const [name, setName] = useState(org.name);
   const rename = useMutation({ mutationFn: () => api('PATCH', `/orgs/${org.id}`, { body: { name } }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['me'] }); toast({ kind: 'success', text: 'Organization renamed' }); }, onError: fail });
+
+  const passkeys = useQuery({ queryKey: ['passkeys'], queryFn: () => api<{ data: { id: string; name: string; created_at: string; last_used_at: string | null }[] }>('GET', '/auth/passkeys'), enabled: passkeysSupported() });
+  const [pkName, setPkName] = useState('');
+  const addPk = useMutation({
+    mutationFn: () => addPasskey(pkName.trim() || 'Passkey'),
+    onSuccess: () => { setPkName(''); qc.invalidateQueries({ queryKey: ['passkeys'] }); toast({ kind: 'success', text: 'Passkey added' }); },
+    onError: (e) => { if (!wasCancelled(e)) toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Could not add the passkey.' }); },
+  });
+  const removePk = useMutation({ mutationFn: (id: string) => api('DELETE', `/auth/passkeys/${id}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['passkeys'] }); toast({ text: 'Passkey removed' }); }, onError: fail });
 
   const locations = useLocations(org.id);
   const [loc, setLoc] = useState({ name: '', code: '' });
@@ -214,6 +224,27 @@ export function SettingsPage() {
                 <button className="btn btn-outline" onClick={() => setNewSecret('')}>I have saved it</button>
               </div>
             )}
+          </section>
+        )}
+
+        {passkeysSupported() && (
+          <section className="card">
+            <h2>Passkeys</h2>
+            <p className="hint">Sign in with your fingerprint, face or device PIN instead of an email code. Passkeys sign you in as a normal user; the owner’s admin access always needs GitHub.</p>
+            {passkeys.data?.data.length ? (
+              <ul className="list">
+                {passkeys.data.data.map((k) => (
+                  <li key={k.id}>
+                    <span><strong>{k.name}</strong><div className="time">Added {dateParts(k.created_at).date}{k.last_used_at ? ` · last used ${dateParts(k.last_used_at).date}` : ' · never used'}</div></span>
+                    <button className="btn btn-outline" onClick={() => { if (confirm(`Remove passkey “${k.name}”?`)) removePk.mutate(k.id); }} aria-label={`Remove passkey ${k.name}`}>Remove</button>
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="hint">No passkeys yet.</p>}
+            <form className="hook-form" onSubmit={submit(() => addPk.mutate())}>
+              <div className="field"><label htmlFor="pk-name">Name</label><input id="pk-name" maxLength={60} placeholder="e.g. MacBook Touch ID" value={pkName} onChange={(e) => setPkName(e.target.value)} /></div>
+              <button className="btn btn-primary" disabled={addPk.isPending}>{addPk.isPending ? 'Waiting for your device…' : 'Add a passkey'}</button>
+            </form>
           </section>
         )}
 

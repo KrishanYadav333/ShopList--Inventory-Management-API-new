@@ -26,7 +26,7 @@ Single shared product list, Worker + D1, public writes capped at 500 products. L
 
 ## Phase 2: Identity and tenancy (partly done)
 
-> **Status:** GitHub OAuth with PKCE, sessions (hashed tokens), organizations, roles, invitations and tenant isolation are built and tested. Also built: owner-only sign-in by default, a single super admin (platform admin screen, suspend/disable, platform audit log). Customer sign-in through Clerk is built on the server (token verification and session exchange, 12 tests); the browser sign-in screen needs a Clerk application. Still to do: the Clerk sign-in UI, a passkey step-up for the owner, Turnstile on sign-in, session list and revoke UI.
+> **Status:** GitHub OAuth with PKCE, sessions (hashed tokens), organizations, roles, invitations and tenant isolation are built and tested. Also built: owner-only sign-in by default, a single super admin (platform admin screen, suspend/disable, platform audit log). Customer sign-in through Clerk is built on the server (token verification and session exchange, 12 tests); the browser sign-in screen needs a Clerk application. Clerk sign-in and passkeys are built. Still to do: Turnstile on sign-in, session list and revoke UI.
 
 **Goal:** real accounts and isolated organizations.
 
@@ -106,4 +106,8 @@ Single shared product list, Worker + D1, public writes capped at 500 products. L
 
 Built and tested: orders with stock reservations, API keys, CSV import, webhooks, barcode scanning, generated API docs (`/api/docs`, `/api/v1/openapi.json`) and a CI pipeline (`.github/workflows/ci.yml`: typecheck, tests, bundle budget, audit).
 
-Not built: Google sign-in, passkeys, Turnstile, the Clerk sign-in screen, session list and revoke UI, row virtualization, automated preview deployments, the v1 to v2 data migration and cutover.
+Also built since: Clerk customer sign-in and sign-up (invite-only), a separate owner page (`/owner`), passkeys (register, sign in, remove), products table virtualization, and `apps/api/scripts/migrate-v1.mjs` for the v1 to v2 copy.
+
+Measured on the live site: axe reports 0 violations on login, owner, orders, products, history and settings at 1280 px and 390 px. Lighthouse mobile on `/login`: performance 99, accessibility 100, best practices 92 (the one flag is the expected 401 from `/me` when signed out), SEO 100. A 1,500-product table keeps about 20 rows in the DOM while scrolling.
+
+Not built: Google sign-in outside Clerk, Turnstile, a session list and revoke UI, automated preview deployments, the v1 to v2 cutover (see OPERATIONS.md), and checks on a physical phone and with VoiceOver, which need a person with the device.

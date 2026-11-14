@@ -51,10 +51,11 @@ import {
 import type { Bindings } from './env';
 import { buildOpenApi, renderDocsPage } from './docs';
 import { checkWebhookUrl, flushEvents, forgetHooks, handleQueue, sendTestEvent, type DeliveryJob } from './webhooks';
+import { verifyAssertion, verifyRegistration } from './webauthn';
 import { clerkConfigured, fetchClerkProfile, verifyClerkToken } from './clerk';
 import { AppError, problemResponse, unwrap } from './errors';
 import type { Caller, Idem } from './inventory-do';
-import { decodeCursor, encodeCursor, newId, nowIso, randomToken, sha256Hex } from './util';
+import { base64url, decodeCursor, encodeCursor, newId, nowIso, randomToken, sha256Hex } from './util';
 
 export { InventoryDO } from './inventory-do';
 
@@ -317,6 +318,89 @@ route('post', '/auth/dev/login', 'public', async (c) => {
   const token = await createSession(c.env, user.id, c.req.raw, 'dev');
   setSessionCookie(c, token);
   return c.json({ user });
+});
+
+// ------------------------------------------------------------------ passkeys (WebAuthn)
+const CHALLENGE_MS = 2 * 60 * 1000;
+const rp = (env: Bindings) => ({ id: new URL(env.APP_ORIGIN).hostname, origin: new URL(env.APP_ORIGIN).origin });
+const b64 = z.string().min(1).max(8192).regex(/^[A-Za-z0-9_-]+$/);
+
+async function issueChallenge(c: Ctx, purpose: 'register' | 'login', userId?: string) {
+  const challenge = randomToken(32);
+  return { challenge, token: await signPayload(c.env, { purpose, challenge, userId, exp: Date.now() + CHALLENGE_MS }) };
+}
+async function openChallenge(c: Ctx, token: string, purpose: 'register' | 'login'): Promise<{ challenge: string; userId?: string }> {
+  const p = await verifyPayload<{ purpose: string; challenge: string; userId?: string; exp: number }>(c.env, token);
+  if (!p || p.purpose !== purpose || typeof p.exp !== 'number' || p.exp < Date.now()) throw new AppError(400, 'passkey_expired', 'That passkey request expired. Try again.');
+  return p;
+}
+
+route('post', '/auth/passkeys/register/options', 'user', async (c) => {
+  const user = c.get('user');
+  const { challenge, token } = await issueChallenge(c, 'register', user.id);
+  const { results } = await c.env.DB.prepare(`SELECT id FROM passkeys WHERE user_id = ?`).bind(user.id).all<{ id: string }>();
+  return c.json({
+    token,
+    publicKey: {
+      challenge,
+      rp: { id: rp(c.env).id, name: 'ShopList' },
+      user: { id: base64url(new TextEncoder().encode(user.id)), name: user.email, displayName: user.name },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+      excludeCredentials: results.map((r) => ({ type: 'public-key', id: r.id })),
+      authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+      attestation: 'none',
+      timeout: 60000,
+    },
+  });
+});
+
+route('post', '/auth/passkeys/register', 'user', async (c) => {
+  const user = c.get('user');
+  const { data } = await readJson(c, z.object({ token: z.string().max(2000), clientDataJSON: b64, attestationObject: b64, transports: z.array(z.string().max(20)).max(6).optional(), name: z.string().trim().min(1).max(60).optional() }).strict());
+  const ch = await openChallenge(c, data.token, 'register');
+  if (ch.userId !== user.id) throw new AppError(400, 'passkey_invalid', 'The passkey response was rejected (user).');
+  const { credentialId, publicKey, counter } = await verifyRegistration(data, { challenge: ch.challenge, origin: rp(c.env).origin, rpId: rp(c.env).id });
+  const count = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?`).bind(user.id).first<{ n: number }>();
+  if ((count?.n ?? 0) >= 10) throw new AppError(409, 'too_many_passkeys', 'You can register up to 10 passkeys. Remove one first.');
+  try {
+    await c.env.DB.prepare(`INSERT INTO passkeys(id, user_id, public_key, sign_count, transports, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .bind(credentialId, user.id, publicKey, counter, JSON.stringify(data.transports ?? []), data.name ?? 'Passkey', nowIso())
+      .run();
+  } catch {
+    throw new AppError(409, 'passkey_exists', 'That passkey is already registered.');
+  }
+  return c.json({ id: credentialId, name: data.name ?? 'Passkey' }, 201);
+});
+
+route('get', '/auth/passkeys', 'user', async (c) => {
+  const { results } = await c.env.DB.prepare(`SELECT id, name, created_at, last_used_at FROM passkeys WHERE user_id = ? ORDER BY created_at`).bind(c.get('user').id).all();
+  return c.json({ data: results });
+});
+
+route('delete', '/auth/passkeys/:id', 'user', async (c) => {
+  const r = await c.env.DB.prepare(`DELETE FROM passkeys WHERE id = ? AND user_id = ?`).bind(c.req.param('id'), c.get('user').id).run();
+  if (!r.meta.changes) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  return c.json({ ok: true });
+});
+
+route('post', '/auth/passkeys/login/options', 'public', async (c) => {
+  if (signinClosed(c.env)) throw new AppError(403, 'signin_closed', 'This ShopList is private. Only the site owner can sign in.');
+  const { challenge, token } = await issueChallenge(c, 'login');
+  return c.json({ token, publicKey: { challenge, rpId: rp(c.env).id, userVerification: 'required', timeout: 60000 } });
+});
+
+/** Passkey sign-in. The session is a normal one: it never carries super-admin power, which only the GitHub door grants. */
+route('post', '/auth/passkeys/login', 'public', async (c) => {
+  if (signinClosed(c.env)) throw new AppError(403, 'signin_closed', 'This ShopList is private. Only the site owner can sign in.');
+  const { data } = await readJson(c, z.object({ token: z.string().max(2000), id: b64, clientDataJSON: b64, authenticatorData: b64, signature: b64 }).strict());
+  const ch = await openChallenge(c, data.token, 'login');
+  const row = await c.env.DB.prepare(`SELECT p.public_key, p.sign_count, p.user_id FROM passkeys p JOIN users u ON u.id = p.user_id WHERE p.id = ? AND u.disabled_at IS NULL`).bind(data.id).first<{ public_key: ArrayBuffer | number[]; sign_count: number; user_id: string }>();
+  // Same answer for "unknown passkey" and "bad signature", so ids cannot be probed.
+  if (!row) throw new AppError(400, 'passkey_invalid', 'The passkey response was rejected (unknown passkey).');
+  const counter = await verifyAssertion(data, { publicKey: new Uint8Array(row.public_key), counter: row.sign_count }, { challenge: ch.challenge, origin: rp(c.env).origin, rpId: rp(c.env).id });
+  await c.env.DB.prepare(`UPDATE passkeys SET sign_count = ?, last_used_at = ? WHERE id = ?`).bind(counter, nowIso(), data.id).run();
+  setSessionCookie(c, await createSession(c.env, row.user_id, c.req.raw, 'passkey'));
+  return c.json({ ok: true });
 });
 
 route('post', '/auth/logout', 'user', async (c) => {

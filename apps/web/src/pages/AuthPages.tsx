@@ -5,6 +5,7 @@ import { api, ApiError } from '../api';
 import { Icon } from '../icons';
 import { useMe } from '../queries';
 import { useToast } from '../toast';
+import { passkeysSupported, signInWithPasskey, wasCancelled } from '../passkeys';
 
 /** `/login` is for clients (Clerk); `/owner` is the owner's separate GitHub door. */
 export function Login({ owner = false }: { owner?: boolean }) {
@@ -15,6 +16,11 @@ export function Login({ owner = false }: { owner?: boolean }) {
   const [email, setEmail] = useState('');
   const [asAdmin, setAsAdmin] = useState(false);
   const [error, setError] = useState('');
+  const passkey = useMutation({
+    mutationFn: signInWithPasskey,
+    onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['me'] }); nav('/'); },
+    onError: (e) => { if (!wasCancelled(e)) setError(e instanceof ApiError ? e.message : 'That passkey did not work. Try again or use another sign-in.'); },
+  });
   const dev = useMutation({
     mutationFn: () => api('POST', '/auth/dev/login', { body: asAdmin ? { email, superAdmin: true } : { email } }),
     onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['me'] }); nav('/'); },
@@ -39,6 +45,11 @@ export function Login({ owner = false }: { owner?: boolean }) {
             {health.data?.signin === 'invite-only' && <p className="notice" role="note">Access is by invitation. Use the email address your invitation was sent to.</p>}
             {health.data?.signin !== 'owner-only' && import.meta.env.VITE_CLERK_PUBLISHABLE_KEY && (
               <a className="btn btn-primary full" href="/sign-in">Sign in with email or Google</a>
+            )}
+            {health.data?.signin !== 'owner-only' && passkeysSupported() && (
+              <button type="button" className="btn btn-outline full" disabled={passkey.isPending} onClick={() => { setError(''); passkey.mutate(); }}>
+                {passkey.isPending ? 'Waiting for your passkey…' : 'Sign in with a passkey'}
+              </button>
             )}
           </>
         )}

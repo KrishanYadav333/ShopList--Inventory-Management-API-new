@@ -38,8 +38,12 @@ The server checks the caller's membership and role for `{orgId}` on every reques
 | GET | `/auth/oauth/github` | Start the owner's GitHub sign-in |
 | GET | `/auth/oauth/github/callback` | Finish it; only the owner's account is accepted |
 | POST | `/auth/clerk/session` | Exchange a Clerk session token for a ShopList session (customers) |
-| POST | `/auth/passkeys/options` | Get WebAuthn registration or sign-in options |
-| POST | `/auth/passkeys/verify` | Verify a passkey, set session cookie |
+| POST | `/auth/passkeys/register/options` | Session. Start registering a passkey (WebAuthn creation options and a signed challenge token) |
+| POST | `/auth/passkeys/register` | Session. Finish registering; verifies the attestation |
+| GET | `/auth/passkeys` | Session. List your passkeys |
+| DELETE | `/auth/passkeys/:id` | Session. Remove one of your passkeys |
+| POST | `/auth/passkeys/login/options` | Public. Start a sign-in (discoverable credentials, no username) |
+| POST | `/auth/passkeys/login` | Public. Verify the assertion and set the session cookie |
 | POST | `/auth/logout` | End the current session |
 | GET | `/me` | Current user, organizations and roles |
 | GET / DELETE | `/me/sessions[/{id}]` | List or revoke own sessions |

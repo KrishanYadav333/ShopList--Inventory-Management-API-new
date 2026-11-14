@@ -191,3 +191,26 @@ Setup for a new instance:
 4. Update the origins in the `/sign-in` rule in `_headers` if the Frontend API host changes.
 
 A development instance (`pk_test_`) works on any address but is limited and shows a "Development mode" badge. A production instance needs a domain you control, because Clerk verifies it with DNS records.
+
+
+## Moving from v1 to v2
+
+v1 (`shoplist.technology1.workers.dev`) is a single shared list. v2 is multi-tenant, so the data goes into one organization. Nothing in v1 is changed or deleted.
+
+1. Sign in to v2 at `/owner` with GitHub and create an organization (for example "Demo").
+2. In Settings → API keys, create a key with **Write inventory**.
+3. Dry run, which only reads v1 and prints what it would send:
+   ```
+   node apps/api/scripts/migrate-v1.mjs
+   ```
+4. Import. The script upserts by SKU, so running it twice is harmless and reports "unchanged" the second time:
+   ```
+   V2_URL=https://shoplist-v2.technology1.workers.dev ORG_ID=org_xxx API_KEY=sl_live_xxx \
+     node apps/api/scripts/migrate-v1.mjs --apply
+   ```
+5. Check the product count and a few quantities in v2, then revoke the API key.
+6. Cutover is your call and is not scripted: point links at v2, and leave v1 running read-only until you are happy. Prices are converted from decimals to integer minor units, and each product's quantity lands at the organization's default location as an opening stock movement.
+
+## Accessibility and performance checks
+
+Run against a local server with `DEV_AUTH=true`, never production. The audit tools are not repository dependencies; install `axe-core`, `puppeteer-core` and `lighthouse` in a scratch folder. Pages checked: `/login`, `/owner`, orders, products, history, settings, at 1280 px and 390 px. Fix every serious or critical axe finding before release.

@@ -45,7 +45,7 @@ export const mayUse = (env: Pick<Bindings, 'SIGNIN_MODE'>, user: Pick<AuthUser, 
 
 // ------------------------------------------------------------------ sessions
 /** Creates a session and returns the raw token. Only its SHA-256 is stored. */
-export type SessionProvider = 'github' | 'clerk' | 'dev';
+export type SessionProvider = 'github' | 'clerk' | 'passkey' | 'dev';
 
 export async function createSession(env: Bindings, userId: string, req: Request, provider: SessionProvider): Promise<string> {
   const token = randomToken(32);
