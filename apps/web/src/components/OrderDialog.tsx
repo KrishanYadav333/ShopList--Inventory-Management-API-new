@@ -7,6 +7,7 @@ import { Icon } from '../icons';
 import { useLocations, type OrgSummary } from '../queries';
 import { useToast } from '../toast';
 import { Modal } from './Modal';
+import { ScanButton } from './Scanner';
 
 interface Line { product: Product; quantity: string }
 
@@ -31,6 +32,14 @@ export function OrderDialog({ org, onClose }: { org: OrgSummary; onClose: () => 
     setLines((l) => (l.some((x) => x.product.id === p.id) ? l : [...l, { product: p, quantity: '1' }]));
     setTerm('');
   };
+  async function addByCode(code: string) {
+    try {
+      const r = await api<{ product: Product }>('GET', `/orgs/${org.id}/products/lookup?code=${encodeURIComponent(code.trim())}`);
+      add(r.product);
+    } catch {
+      toast({ kind: 'error', text: `Nothing matches ${code}.` });
+    }
+  }
   const total = lines.reduce((sum, l) => sum + (Number(l.quantity) || 0) * l.product.priceMinor, 0);
 
   const save = useMutation({
@@ -92,7 +101,8 @@ export function OrderDialog({ org, onClose }: { org: OrgSummary; onClose: () => 
 
           <div className="field">
             <label htmlFor="o-add">Items</label>
-            <div className="scan-row"><input id="o-add" value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Search a product to add…" autoComplete="off" /><Icon name="search" /></div>
+            <div className="scan-row"><input id="o-add" value={term} onChange={(e) => setTerm(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (term.trim()) void addByCode(term); } }} placeholder="Search, or scan a barcode and press Enter" autoComplete="off" /><Icon name="search" /></div>
+            <ScanButton onResult={(code) => void addByCode(code)} label="Scan to add" />
             {term.trim() && (
               <ul className="results" role="listbox">
                 {matches.data?.data.map((p) => (

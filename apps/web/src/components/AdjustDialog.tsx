@@ -7,6 +7,7 @@ import { Icon } from '../icons';
 import { useLocations, useProduct, type OrgSummary } from '../queries';
 import { useToast } from '../toast';
 import { Modal } from './Modal';
+import { ScanButton } from './Scanner';
 
 /** Sign of the change each reason implies, so staff only type a positive number. */
 const SIGN: Record<string, 1 | -1 | 0> = { receive: 1, return: 1, sale: -1, damage: -1, adjust: 0 };
@@ -37,17 +38,18 @@ export function AdjustDialog({ org, productId, onClose }: { org: OrgSummary; pro
     enabled: !pid && term.trim().length > 0,
     queryFn: () => api<{ data: Product[] }>('GET', `/orgs/${org.id}/products?limit=6&q=${encodeURIComponent(term.trim())}`),
   });
-  async function lookup(e: FormEvent) {
-    e.preventDefault();
-    const code = term.trim();
+  async function lookupCode(raw: string) {
+    const code = raw.trim();
     if (!code) return;
     try {
       const r = await api<{ product: Product }>('GET', `/orgs/${org.id}/products/lookup?code=${encodeURIComponent(code)}`);
       setPid(r.product.id);
     } catch {
       if (matches.data?.data.length === 1) setPid(matches.data.data[0].id);
+      else toast({ kind: 'error', text: `Nothing matches ${code}.` });
     }
   }
+  const lookup = (e: FormEvent) => { e.preventDefault(); void lookupCode(term); };
 
   const level: StockLevel | undefined = selected.data?.levels.find((l) => l.locationId === locationId);
   const available = level?.available ?? 0;
@@ -91,6 +93,7 @@ export function AdjustDialog({ org, productId, onClose }: { org: OrgSummary; pro
                 <input id="adj-q" value={term} onChange={(e) => setTerm(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && lookup(e)} placeholder="Name, SKU or barcode" autoComplete="off" />
                 <Icon name="scan" />
               </div>
+              <ScanButton onResult={(code) => { setTerm(code); void lookupCode(code); }} />
               <ul className="results" role="listbox">
                 {matches.data?.data.map((p) => (
                   <li key={p.id}><button type="button" onClick={() => setPid(p.id)}><strong>{p.name}</strong><span>{p.sku} · {p.onHand} on hand</span></button></li>
