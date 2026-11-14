@@ -155,6 +155,28 @@ const MIGRATIONS: string[][] = [
     `CREATE INDEX order_lines_waiting ON order_lines(product_id) WHERE open = 1 AND reserved < quantity`,
     `INSERT INTO counters(name, value) VALUES ('order_seq', 1000)`,
   ],
+  // Step 3: webhook outbox. Events are written in the same transaction as the change they describe.
+  [
+    `CREATE TABLE outbox (
+       id TEXT PRIMARY KEY,
+       type TEXT NOT NULL,
+       data TEXT NOT NULL,
+       created_at TEXT NOT NULL
+     )`,
+    `CREATE INDEX outbox_created ON outbox(created_at, id)`,
+  ],
+  // Step 4: order the outbox by an insertion sequence. Timestamps tie within a millisecond and ids are random,
+  // so ordering by them could deliver events out of order.
+  [
+    `DROP TABLE outbox`,
+    `CREATE TABLE outbox (
+       seq INTEGER PRIMARY KEY AUTOINCREMENT,
+       id TEXT NOT NULL UNIQUE,
+       type TEXT NOT NULL,
+       data TEXT NOT NULL,
+       created_at TEXT NOT NULL
+     )`,
+  ],
 ];
 
 // ---------------------------------------------------------------------------
@@ -287,6 +309,8 @@ function ftsQuery(q: string | undefined): string | null {
  */
 export class InventoryDO extends DurableObject<Bindings> {
   private sql: SqlStorage;
+  /** Events are only recorded while the organization has a webhook; the Worker keeps this switch in sync. */
+  private eventsOn = false;
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env);
@@ -294,6 +318,30 @@ export class InventoryDO extends DurableObject<Bindings> {
     ctx.blockConcurrencyWhile(async () => {
       this.migrate();
       this.ensureDefaultLocation();
+      this.eventsOn = this.one<{ value: string }>(`SELECT value FROM meta WHERE key = 'events_on'`)?.value === '1';
+    });
+  }
+
+  // ------------------------------------------------------------------ events
+  private emit(type: string, data: Record<string, unknown>): void {
+    if (!this.eventsOn) return;
+    this.run(`INSERT INTO outbox(id, type, data, created_at) VALUES (?, ?, ?, ?)`, newId('evt'), type, JSON.stringify(data), nowIso());
+    // Safety valve: if nothing is draining the outbox, do not let it grow without bound.
+    if (Math.random() < 0.01) this.run(`DELETE FROM outbox WHERE created_at < ?`, new Date(Date.now() - 24 * 3600_000).toISOString());
+  }
+
+  setEventsEnabled(on: boolean): void {
+    this.eventsOn = on;
+    this.run(`INSERT INTO meta(key, value) VALUES ('events_on', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, on ? '1' : '0');
+    if (!on) this.run(`DELETE FROM outbox`);
+  }
+
+  /** Returns up to `limit` pending events, oldest first, and removes them. */
+  takeOutbox(limit: number): { id: string; type: string; data: string; createdAt: string }[] {
+    return this.ctx.storage.transactionSync(() => {
+      const rows = this.all<{ seq: number; id: string; type: string; data: string; created_at: string }>(`SELECT seq, id, type, data, created_at FROM outbox ORDER BY seq ASC LIMIT ?`, Math.min(Math.max(limit, 1), 100));
+      for (const r of rows) this.run(`DELETE FROM outbox WHERE seq = ?`, r.seq);
+      return rows.map((r) => ({ id: r.id, type: r.type, data: r.data, createdAt: r.created_at })); // data stays a JSON string so it crosses RPC safely
     });
   }
 
@@ -492,6 +540,9 @@ export class InventoryDO extends DurableObject<Bindings> {
     const after: ProductRow = { ...product, on_hand_total: product.on_hand_total + delta };
     this.run(`UPDATE products SET on_hand_total = ?, attention = ? WHERE id = ?`, after.on_hand_total, needsAttention(after), productId);
     this.applyCounters(product, after);
+    this.emit('stock.changed', { productId, sku: product.sku, name: product.name, locationId, delta, reason, reference, balance: next });
+    if (!isOut(product) && isOut(after)) this.emit('stock.out', { productId, sku: product.sku, name: product.name, onHand: after.on_hand_total });
+    else if (!isLow(product) && isLow(after)) this.emit('stock.low', { productId, sku: product.sku, name: product.name, onHand: after.on_hand_total, reorderPoint: after.reorder_point });
     // New stock goes to the oldest waiting orders first.
     if (delta > 0) this.allocateWaiting(productId, locationId);
     const reservedNow = this.one<{ reserved: number }>(`SELECT reserved FROM stock_levels WHERE product_id = ? AND location_id = ?`, productId, locationId)!.reserved;
@@ -561,6 +612,7 @@ export class InventoryDO extends DurableObject<Bindings> {
         this.move(c, id, def.id, input.initialQuantity, 'receive', null, 'Initial stock');
       }
       this.audit(c, 'product.create', 'product', id, { sku: input.sku, name: input.name });
+      this.emit('product.created', { productId: id, sku: input.sku, name: input.name });
       return { status: 201, body: { product: this.view(this.one<ProductRow>(`SELECT * FROM products WHERE id = ?`, id)!) } };
     }
   }
@@ -609,6 +661,7 @@ export class InventoryDO extends DurableObject<Bindings> {
       this.reindex(after);
       this.applyCounters(before, after);
       this.audit(c, 'product.update', 'product', id, changes);
+      this.emit('product.updated', { productId: id, sku: after.sku, name: after.name, changes });
       return { status: 200, body: { product: this.view(after) } };
     }
   }
@@ -626,6 +679,7 @@ export class InventoryDO extends DurableObject<Bindings> {
       this.run(`DELETE FROM products_fts WHERE product_id = ?`, id);
       this.applyCounters(before, this.one<ProductRow>(`SELECT * FROM products WHERE id = ?`, id));
       this.audit(c, 'product.delete', 'product', id, { sku: before.sku });
+      this.emit('product.deleted', { productId: id, sku: before.sku, name: before.name });
       return { status: 200, body: { id } };
     });
   }
@@ -971,6 +1025,7 @@ export class InventoryDO extends DurableObject<Bindings> {
       }
       this.run(`UPDATE orders SET state = ? WHERE id = ?`, openState(input.paid, made), id);
       this.audit(c, 'order.create', 'order', id, { number, customer: input.customerName, lines: input.lines.length });
+      this.emit('order.created', { orderId: id, number, customerName: input.customerName, lines: input.lines.length });
       return { status: 201, body: { order: this.orderViews([this.orderRow(id)])[0] } };
     });
   }
@@ -1032,6 +1087,7 @@ export class InventoryDO extends DurableObject<Bindings> {
       }
       this.run(`UPDATE orders SET state = 'shipped', shipped_at = ?, version = version + 1, updated_at = ? WHERE id = ?`, nowIso(), nowIso(), id);
       this.audit(c, 'order.ship', 'order', id, { number: row.number });
+      this.emit('order.shipped', { orderId: id, number: row.number, customerName: row.customer_name });
       return { status: 200, body: { order: this.orderViews([this.orderRow(id)])[0] } };
     });
   }
@@ -1048,6 +1104,7 @@ export class InventoryDO extends DurableObject<Bindings> {
       // Freed units may now satisfy orders that were waiting.
       for (const l of lines) this.allocateWaiting(l.product_id, row.location_id);
       this.audit(c, 'order.cancel', 'order', id, { number: row.number });
+      this.emit('order.cancelled', { orderId: id, number: row.number, customerName: row.customer_name });
       return { status: 200, body: { order: this.orderViews([this.orderRow(id)])[0] } };
     });
   }

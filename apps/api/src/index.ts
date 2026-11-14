@@ -22,6 +22,7 @@ import {
   productListQuery,
   productPatch,
   transferInput,
+  webhookInput,
   type ImportResult,
   type Permission,
   type Role,
@@ -46,6 +47,7 @@ import {
   type AuthUser,
 } from './auth';
 import type { Bindings } from './env';
+import { checkWebhookUrl, flushEvents, forgetHooks, handleQueue, sendTestEvent, type DeliveryJob } from './webhooks';
 import { clerkConfigured, fetchClerkProfile, verifyClerkToken } from './clerk';
 import { AppError, problemResponse, unwrap } from './errors';
 import type { Caller, Idem } from './inventory-do';
@@ -237,7 +239,14 @@ function route(method: 'get' | 'post' | 'patch' | 'delete', path: string, access
   ROUTES.push({ method: method.toUpperCase(), path, access });
   const guards: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }>[] =
     access === 'public' ? [] : access === 'user' ? [requireUser] : access === 'super' ? [requireUser, requireSuper] : access === 'org:manage' || access === 'org:owner' ? [requireUser, orgAccess(access)] : [requireAuth, orgAccess(access)];
-  const handlers = [...guards, handler] as MiddlewareHandler[];
+  // After a successful write, move any recorded events to the delivery queue without delaying the response.
+  const wrapped: Handler = async (c) => {
+    const res = await handler(c);
+    const org = c.get('org');
+    if (method !== 'get' && res.status < 400 && org) c.executionCtx.waitUntil(flushEvents(c.env, org.id).then(() => undefined, () => undefined));
+    return res;
+  };
+  const handlers = [...guards, wrapped] as MiddlewareHandler[];
   (api[method] as (path: string, ...h: MiddlewareHandler[]) => unknown).call(api, path, ...handlers);
 }
 
@@ -433,6 +442,61 @@ route('delete', '/orgs/:orgId/api-keys/:id', 'org:manage', async (c) => {
   const res = await c.env.DB.prepare(`UPDATE api_keys SET revoked_at = ? WHERE id = ? AND org_id = ? AND revoked_at IS NULL`).bind(nowIso(), c.req.param('id') ?? '', c.get('org').id).run();
   if (!res.meta.changes) throw new AppError(404, 'key_not_found', 'That key does not exist or is already revoked.');
   return c.json({ ok: true });
+});
+
+
+// ------------------------------------------------------------------ webhooks
+route('get', '/orgs/:orgId/webhooks', 'org:manage', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT w.id, w.url, w.events, w.active, w.created_at AS createdAt, substr(w.secret, 1, 10) AS secretPrefix,
+            (SELECT d.status FROM webhook_deliveries d WHERE d.webhook_id = w.id ORDER BY d.created_at DESC, d.id DESC LIMIT 1) AS lastStatus,
+            (SELECT d.created_at FROM webhook_deliveries d WHERE d.webhook_id = w.id ORDER BY d.created_at DESC, d.id DESC LIMIT 1) AS lastDeliveryAt
+       FROM webhooks w WHERE w.org_id = ? ORDER BY w.created_at DESC`,
+  ).bind(c.get('org').id).all<{ events: string; active: number }>();
+  return c.json({ data: results.map((r) => ({ ...r, events: JSON.parse(r.events) as string[], active: r.active === 1 })) });
+});
+
+route('post', '/orgs/:orgId/webhooks', 'org:manage', async (c) => {
+  const { data } = await readJson(c, webhookInput);
+  const problem = checkWebhookUrl(data.url);
+  if (problem) throw new AppError(400, 'invalid_webhook_url', problem, { errors: [{ field: 'url', code: 'invalid_url', message: problem }] });
+  const orgId = c.get('org').id;
+  const count = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM webhooks WHERE org_id = ?`).bind(orgId).first<{ n: number }>();
+  if ((count?.n ?? 0) >= 10) throw new AppError(409, 'webhook_limit', 'An organization can have at most 10 webhooks.');
+  const id = newId('whk');
+  const secret = `whsec_${randomToken(24)}`;
+  await c.env.DB.prepare(`INSERT INTO webhooks(id, org_id, url, events, secret, active, created_by, created_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)`)
+    .bind(id, orgId, data.url, JSON.stringify([...new Set(data.events)]), secret, c.get('user').id, nowIso()).run();
+  forgetHooks(orgId);
+  await inventory(c).setEventsEnabled(true);
+  // The signing secret is shown once.
+  return c.json({ id, url: data.url, events: data.events, secret }, 201);
+});
+
+route('delete', '/orgs/:orgId/webhooks/:id', 'org:manage', async (c) => {
+  const orgId = c.get('org').id;
+  const res = await c.env.DB.prepare(`DELETE FROM webhooks WHERE id = ? AND org_id = ?`).bind(c.req.param('id') ?? '', orgId).run();
+  if (!res.meta.changes) throw new AppError(404, 'webhook_not_found', 'That webhook does not exist.');
+  forgetHooks(orgId);
+  const left = await c.env.DB.prepare(`SELECT 1 AS x FROM webhooks WHERE org_id = ? LIMIT 1`).bind(orgId).first();
+  if (!left) await inventory(c).setEventsEnabled(false); // stop recording events nobody will read
+  return c.json({ ok: true });
+});
+
+route('post', '/orgs/:orgId/webhooks/:id/test', 'org:manage', async (c) => {
+  const row = await c.env.DB.prepare(`SELECT id FROM webhooks WHERE id = ? AND org_id = ?`).bind(c.req.param('id') ?? '', c.get('org').id).first();
+  if (!row) throw new AppError(404, 'webhook_not_found', 'That webhook does not exist.');
+  await sendTestEvent(c.env, c.get('org').id, c.req.param('id') ?? '');
+  return c.json({ queued: true }, 202);
+});
+
+route('get', '/orgs/:orgId/webhooks/:id/deliveries', 'org:manage', async (c) => {
+  const row = await c.env.DB.prepare(`SELECT id FROM webhooks WHERE id = ? AND org_id = ?`).bind(c.req.param('id') ?? '', c.get('org').id).first();
+  if (!row) throw new AppError(404, 'webhook_not_found', 'That webhook does not exist.');
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, event_id AS eventId, event_type AS eventType, status, http_status AS httpStatus, attempts, created_at AS createdAt FROM webhook_deliveries WHERE webhook_id = ? ORDER BY created_at DESC, id DESC LIMIT 50`,
+  ).bind(c.req.param('id') ?? '').all();
+  return c.json({ data: results });
 });
 
 // ----------------------------------------------------------------- inventory
@@ -675,4 +739,8 @@ route('get', '/admin/audit', 'super', async (c) => {
 });
 
 app.route('/api/v1', api);
-export default app;
+
+export default {
+  fetch: (req: Request, env: Bindings, ctx: ExecutionContext) => app.fetch(req, env, ctx),
+  queue: (batch: MessageBatch<unknown>, env: Bindings) => handleQueue(batch as MessageBatch<DeliveryJob>, env),
+} satisfies ExportedHandler<Bindings>;

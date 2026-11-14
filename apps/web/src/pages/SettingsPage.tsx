@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ROLES, type Role } from '@shoplist/shared';
+import { ROLES, WEBHOOK_EVENTS, type Role } from '@shoplist/shared';
 import { api, ApiError } from '../api';
 import { useShell } from '../components/Shell';
 import { dateParts } from '../format';
@@ -50,6 +50,21 @@ export function SettingsPage() {
     onError: fail,
   });
   const revokeKey = useMutation({ mutationFn: (id: string) => api('DELETE', `/orgs/${org.id}/api-keys/${id}`), onSuccess: () => { refresh(); toast({ text: 'API key revoked' }); }, onError: fail });
+
+  interface HookRow { id: string; url: string; events: string[]; active: boolean; secretPrefix: string; lastStatus: string | null; lastDeliveryAt: string | null }
+  interface DeliveryRow { id: string; eventType: string; status: string; httpStatus: number | null; attempts: number; createdAt: string }
+  const hooks = useQuery({ enabled: admin, queryKey: ['org', org.id, 'webhooks'], queryFn: () => api<{ data: HookRow[] }>('GET', `/orgs/${org.id}/webhooks`).then((r) => r.data) });
+  const [hookForm, setHookForm] = useState<{ url: string; all: boolean; events: string[] }>({ url: '', all: true, events: [] });
+  const [newSecret, setNewSecret] = useState('');
+  const [openHook, setOpenHook] = useState<string | null>(null);
+  const deliveries = useQuery({ enabled: admin && !!openHook, queryKey: ['org', org.id, 'webhooks', openHook, 'deliveries'], queryFn: () => api<{ data: DeliveryRow[] }>('GET', `/orgs/${org.id}/webhooks/${openHook}/deliveries`).then((r) => r.data) });
+  const addHook = useMutation({
+    mutationFn: () => api<{ secret: string }>('POST', `/orgs/${org.id}/webhooks`, { body: { url: hookForm.url.trim(), events: hookForm.all ? ['*'] : hookForm.events } }),
+    onSuccess: (r) => { setNewSecret(r.secret); setHookForm({ url: '', all: true, events: [] }); refresh(); },
+    onError: fail,
+  });
+  const delHook = useMutation({ mutationFn: (id: string) => api('DELETE', `/orgs/${org.id}/webhooks/${id}`), onSuccess: () => { refresh(); toast({ text: 'Webhook deleted' }); }, onError: fail });
+  const testHook = useMutation({ mutationFn: (id: string) => api('POST', `/orgs/${org.id}/webhooks/${id}/test`, { body: {} }), onSuccess: () => { toast({ kind: 'success', text: 'Test event sent. Check the history in a few seconds.' }); setTimeout(() => qc.invalidateQueries({ queryKey: ['org', org.id, 'webhooks'] }), 4000); }, onError: fail });
 
   const audit = useQuery({ enabled: admin, queryKey: ['org', org.id, 'audit'], queryFn: () => api<{ data: { id: string; action: string; entity: string; changes: unknown; actor: string; createdAt: string }[] }>('GET', `/orgs/${org.id}/audit?limit=25`).then((r) => r.data) });
   const del = useMutation({ mutationFn: () => api('DELETE', `/orgs/${org.id}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['me'] }); nav('/'); }, onError: fail });
@@ -147,6 +162,56 @@ export function SettingsPage() {
                 <input readOnly value={newKey} onFocus={(e) => e.target.select()} aria-label="New API key" />
                 <button className="btn btn-outline" onClick={() => navigator.clipboard.writeText(newKey).then(() => toast({ kind: 'success', text: 'Key copied' }))}>Copy</button>
                 <button className="btn btn-outline" onClick={() => setNewKey('')}>I have saved it</button>
+              </div>
+            )}
+          </section>
+        )}
+
+        {admin && (
+          <section className="card" aria-labelledby="h-hooks">
+            <h2 id="h-hooks">Webhooks</h2>
+            <p className="hint">ShopList sends a signed POST to your address when something happens. Each request carries <code>ShopList-Signature: t=…,v1=…</code>, an HMAC-SHA256 of <code>timestamp.body</code> with your signing secret. Failed deliveries are retried for about a day.</p>
+            {hooks.data?.length ? (
+              <ul className="list">
+                {hooks.data.map((h) => (
+                  <li key={h.id} className="stack">
+                    <span style={{ minWidth: 0 }}>
+                      <strong style={{ overflowWrap: 'anywhere' }}>{h.url}</strong>
+                      <div>{h.events.map((e) => <span key={e} className="tag">{e === '*' ? 'all events' : e}</span>)}</div>
+                      <div className="time">{h.lastStatus ? `Last delivery: ${h.lastStatus}${h.lastDeliveryAt ? ' · ' + new Date(h.lastDeliveryAt).toLocaleString() : ''}` : 'No deliveries yet'} · secret {h.secretPrefix}…</div>
+                    </span>
+                    <span className="row">
+                      <button className="btn btn-outline" onClick={() => testHook.mutate(h.id)}>Send test</button>
+                      <button className="btn btn-outline" aria-expanded={openHook === h.id} onClick={() => setOpenHook(openHook === h.id ? null : h.id)}>History</button>
+                      <button className="btn btn-outline" onClick={() => { if (confirm('Delete this webhook?')) delHook.mutate(h.id); }}>Delete</button>
+                    </span>
+                    {openHook === h.id && (
+                      <div className="deliveries">
+                        {!deliveries.data?.length ? <p className="hint">Nothing recorded yet.</p> : (
+                          <table className="diff"><thead><tr><th>When</th><th>Event</th><th>Result</th><th className="num">Tries</th></tr></thead>
+                            <tbody>{deliveries.data.map((d) => <tr key={d.id}><td>{new Date(d.createdAt).toLocaleString()}</td><td>{d.eventType}</td><td>{d.status === 'delivered' ? `Delivered (${d.httpStatus})` : `Failed${d.httpStatus ? ` (${d.httpStatus})` : ' (no response)'}`}</td><td className="num">{d.attempts}</td></tr>)}</tbody></table>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="hint">No webhooks yet.</p>}
+            <form className="hook-form" onSubmit={submit(() => addHook.mutate())}>
+              <div className="field"><label htmlFor="w-url">Destination URL (https)</label><input id="w-url" type="url" placeholder="https://example.com/shoplist-events" value={hookForm.url} onChange={(e) => setHookForm({ ...hookForm, url: e.target.value })} /></div>
+              <fieldset className="modes">
+                <legend>Events</legend>
+                <label className="check"><input type="checkbox" checked={hookForm.all} onChange={(e) => setHookForm({ ...hookForm, all: e.target.checked })} /> All events</label>
+                {!hookForm.all && <div className="event-grid">{WEBHOOK_EVENTS.map((ev) => <label key={ev} className="check"><input type="checkbox" checked={hookForm.events.includes(ev)} onChange={(e) => setHookForm({ ...hookForm, events: e.target.checked ? [...hookForm.events, ev] : hookForm.events.filter((x) => x !== ev) })} /> {ev}</label>)}</div>}
+              </fieldset>
+              <button className="btn btn-primary" disabled={addHook.isPending || !hookForm.url.trim() || (!hookForm.all && !hookForm.events.length)}>Add webhook</button>
+            </form>
+            {newSecret && (
+              <div className="invite-link" role="status">
+                <p><strong>Copy the signing secret now.</strong> It is shown only once. Use it to verify the signature on each request.</p>
+                <input readOnly value={newSecret} onFocus={(e) => e.target.select()} aria-label="Signing secret" />
+                <button className="btn btn-outline" onClick={() => navigator.clipboard.writeText(newSecret).then(() => toast({ kind: 'success', text: 'Secret copied' }))}>Copy</button>
+                <button className="btn btn-outline" onClick={() => setNewSecret('')}>I have saved it</button>
               </div>
             )}
           </section>

@@ -188,6 +188,15 @@ export interface ImportResult {
   error?: string;
 }
 
+// --------------------------------------------------------------- webhooks
+export const WEBHOOK_EVENTS = ['product.created', 'product.updated', 'product.deleted', 'stock.changed', 'stock.low', 'stock.out', 'order.created', 'order.shipped', 'order.cancelled'] as const;
+export const webhookInput = z
+  .object({
+    url: z.string().trim().url().max(500),
+    events: z.array(z.enum([...WEBHOOK_EVENTS, '*'])).min(1, 'Choose at least one event').max(WEBHOOK_EVENTS.length + 1),
+  })
+  .strict();
+
 export const API_KEY_SCOPES = ['inventory:read', 'inventory:write'] as const;
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
 export const apiKeyInput = z

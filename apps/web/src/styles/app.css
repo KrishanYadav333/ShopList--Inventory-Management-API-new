@@ -293,3 +293,10 @@ button.nav-icon { background: none; border: 0; cursor: pointer; }
 .row-bad td { background: #fdecea; }
 .preview td, .preview th { white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .tiles.inner { padding: 0; }
+
+/* Webhooks */
+.list li.stack { flex-wrap: wrap; }
+.deliveries { flex-basis: 100%; }
+.hook-form { display: grid; gap: 12px; }
+.event-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 14px; margin-top: 6px; }
+code { background: #eef2f5; padding: 1px 5px; border-radius: 4px; font-size: 12px; }

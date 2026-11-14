@@ -1,4 +1,5 @@
 import type { InventoryDO } from './inventory-do';
+import type { DeliveryJob } from './webhooks';
 
 export interface Bindings {
   DB: D1Database;
@@ -23,6 +24,8 @@ export interface Bindings {
   GITHUB_CLIENT_SECRET?: string;
   /** Random 32+ byte secret used to sign the short-lived OAuth state cookie. */
   COOKIE_SIGNING_KEY?: string;
+  /** Webhook delivery queue. */
+  WEBHOOKS: Queue<DeliveryJob>;
   /** Optional Workers rate limiting binding. */
   LIMITER?: { limit(opts: { key: string }): Promise<{ success: boolean }> };
 }
