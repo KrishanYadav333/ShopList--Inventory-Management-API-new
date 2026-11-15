@@ -225,3 +225,23 @@ export async function keyFromBearer(env: Bindings, bearer: string): Promise<ApiK
   }
   return { id: row.id, orgId: row.org_id, name: row.name, scopes: JSON.parse(row.scopes) as string[] };
 }
+
+/**
+ * Joins the user to every organization that has a pending, unexpired invitation for their email.
+ * Only call this with an email the identity provider has verified: the invitation is the proof of invitation,
+ * so an invited person who signs in lands in the organization instead of an empty "create one" screen.
+ */
+export async function acceptPendingInvitations(env: Pick<Bindings, 'DB'>, user: { id: string; email: string }): Promise<number> {
+  const now = new Date().toISOString();
+  const { results } = await env.DB.prepare(`SELECT token_hash, org_id, role FROM invitations WHERE lower(email) = ? AND accepted_at IS NULL AND expires_at > ?`)
+    .bind(user.email.toLowerCase(), now)
+    .all<{ token_hash: string; org_id: string; role: string }>();
+  if (!results.length) return 0;
+  await env.DB.batch(
+    results.flatMap((i) => [
+      env.DB.prepare(`INSERT OR IGNORE INTO memberships(org_id, user_id, role, created_at) VALUES (?, ?, ?, ?)`).bind(i.org_id, user.id, i.role, now),
+      env.DB.prepare(`UPDATE invitations SET accepted_at = ? WHERE token_hash = ?`).bind(now, i.token_hash),
+    ]),
+  );
+  return results.length;
+}

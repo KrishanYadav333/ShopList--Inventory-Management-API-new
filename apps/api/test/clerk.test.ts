@@ -67,6 +67,41 @@ describe('Clerk sign-in exchange', () => {
     expect(again.body.user.id).toBe(r.body.user.id);
   });
 
+  it('an invited person lands in the invited organization with the invited role, no link needed', async () => {
+    const sub = `user_${uid()}`;
+    const owner = await newOrg('Invited Co');
+    const email = `${uid()}-invitee@example.com`;
+    (profile.email_addresses as { email_address: string }[])[0].email_address = email;
+    await call(owner.cookie, 'POST', `${owner.base}/invitations`, { email: email.toUpperCase(), role: 'editor' });
+    // Someone else's invitation and an expired one must not be applied.
+    await call(owner.cookie, 'POST', `${owner.base}/invitations`, { email: `other-${email}`, role: 'admin' });
+
+    const r = await exchange(await mint({ sub }));
+    expect(r.status).toBe(200);
+    const cookie = (r.headers.get('set-cookie') ?? '').match(/__Host-sl_session=[^;]+/)![0];
+    const me = await call(cookie, 'GET', '/me');
+    expect(me.body.organizations).toHaveLength(1);
+    expect(me.body.organizations[0]).toMatchObject({ name: 'Invited Co', role: 'editor' });
+    expect((await call(cookie, 'GET', `${owner.base}/products`)).status).toBe(200);
+    expect((await call(cookie, 'POST', `${owner.base}/locations`, { name: 'x', code: 'x' })).status).toBe(403); // editor, not admin
+
+    // Signing in again changes nothing.
+    await exchange(await mint({ sub }));
+    expect((await call(cookie, 'GET', '/me')).body.organizations).toHaveLength(1);
+  });
+
+  it('an expired invitation does not add anyone to an organization', async () => {
+    const sub = `user_${uid()}`;
+    const owner = await newOrg();
+    const email = `${uid()}-late@example.com`;
+    (profile.email_addresses as { email_address: string }[])[0].email_address = email;
+    await call(owner.cookie, 'POST', `${owner.base}/invitations`, { email, role: 'viewer' });
+    await env.DB.prepare(`UPDATE invitations SET expires_at = ? WHERE email = ?`).bind(new Date(Date.now() - 1000).toISOString(), email).run();
+    const r = await exchange(await mint({ sub }));
+    const cookie = (r.headers.get('set-cookie') ?? '').match(/__Host-sl_session=[^;]+/)![0];
+    expect((await call(cookie, 'GET', '/me')).body.organizations).toHaveLength(0);
+  });
+
   it('a Clerk identity can never attach to the owner\'s account, even with the owner\'s verified email', async () => {
     const adminEmail = `${uid()}-owner@example.com`;
     // The owner signs in through the admin door (dev stand-in for GitHub) and so has a GitHub-linked account.

@@ -166,6 +166,13 @@ export function SettingsPage() {
                 <select id="i-role" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}><option value="viewer">viewer</option><option value="editor">editor</option><option value="admin">admin</option></select></div>
               <button className="btn btn-primary" disabled={sendInvite.isPending || !invite.email}>Create link</button>
             </form>
+            <ul className="hint role-help">
+              <li><strong>viewer</strong>: can look at products, stock, orders and history. Cannot change anything.</li>
+              <li><strong>editor</strong>: viewer, plus add and edit products, move stock, import, and manage orders.</li>
+              <li><strong>admin</strong>: editor, plus locations, members, invitations, API keys, webhooks and the activity log.</li>
+              <li><strong>owner</strong>: admin, plus delete the organization and manage owners.</li>
+            </ul>
+            <p className="hint">The person signs in with that email (Google or email code) and lands in this organization with the role you chose. The link is optional.</p>
           )}
           {link && (
             <div className="invite-link" role="status">
