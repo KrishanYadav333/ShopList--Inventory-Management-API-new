@@ -1,6 +1,7 @@
 # ShopList: access levels and feature plan
 
-**Status: plan only. Nothing in this folder is built yet** unless a line says *Built*.
+**Status: Phase 1 (F1–F7) is built and deployed (2026-11-16). Later phases are plan only** unless a line says *Built*.
+The plan was approved with the defaults listed in [08-decisions.md](08-decisions.md).
 Written 2026-11-16. Build starts after you approve it (see [08-decisions.md](08-decisions.md)).
 
 ## What this plan is for

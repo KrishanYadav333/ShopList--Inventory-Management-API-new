@@ -113,6 +113,8 @@ Rules:
 - The permission table lives in one place (`ROLE_PERMISSIONS` in `packages/shared`). Each route declares exactly one permission, such as `requires('stock:write')`, and a test fails if any route lacks one. A test also walks every role through the routes and checks the expected 200 or 403.
 - **One admin per organization.** Inviting or promoting a second admin is refused (`second_admin`) unless the request says `confirmSecondAdmin: true`, which the screen asks for with a confirm box. The last admin cannot be demoted or removed.
 - The org id in the URL is checked against the caller's memberships in D1 **before** the Durable Object is touched. The Durable Object id is derived from that verified org id.
+- Cost price and inventory value are removed from every response for roles without `cost:read` (manager and admin have it). Colleagues' emails and last-seen times are shown only to people who manage the team.
+- Businesses are created by the platform owner ("Onboard a business"), not by users. Members can be deactivated (they keep their history), and the admin role can be handed over; the last active admin is protected.
 - API keys act as a manager for inventory (write scope) or a viewer (read scope), and can never manage members, keys or webhooks.
 - When someone signs in with a verified email that has a pending invitation, they join that organization with the invited role automatically.
 
