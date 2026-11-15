@@ -53,9 +53,9 @@ export function Login({ owner = false }: { owner?: boolean }) {
             )}
           </>
         )}
-        {import.meta.env.DEV && (
+        {import.meta.env.DEV && owner && (
           <form onSubmit={submit} className="dev-login">
-            <div className="hint">Development only</div>
+            <div className="hint">Development only (local, never in production)</div>
             <input type="email" required placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} aria-label="Email for development sign-in" />
             <label className="check"><input type="checkbox" checked={asAdmin} onChange={(e) => setAsAdmin(e.target.checked)} /> Sign in as super admin</label>
             <button className="btn btn-outline" disabled={dev.isPending}>Dev sign-in</button>
