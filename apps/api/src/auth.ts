@@ -36,7 +36,7 @@ export async function clerkAdmission(env: Pick<Bindings, 'SIGNIN_MODE' | 'DB'>, 
   if (mode === 'admin-only') return 'owner_only';
   const e = email.trim().toLowerCase();
   if (await env.DB.prepare(`SELECT 1 AS x FROM users WHERE email = ?`).bind(e).first()) return 'allowed'; // a disabled account is refused later, with the right message
-  const invited = await env.DB.prepare(`SELECT 1 AS x FROM invitations WHERE email = ? AND accepted_at IS NULL AND expires_at > ?`).bind(e, nowIso()).first();
+  const invited = await env.DB.prepare(`SELECT 1 AS x FROM invitations WHERE email = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`).bind(e, nowIso()).first();
   return invited ? 'allowed' : 'not_invited';
 }
 
@@ -233,7 +233,7 @@ export async function keyFromBearer(env: Bindings, bearer: string): Promise<ApiK
  */
 export async function acceptPendingInvitations(env: Pick<Bindings, 'DB'>, user: { id: string; email: string }): Promise<number> {
   const now = new Date().toISOString();
-  const { results } = await env.DB.prepare(`SELECT token_hash, org_id, role FROM invitations WHERE lower(email) = ? AND accepted_at IS NULL AND expires_at > ?`)
+  const { results } = await env.DB.prepare(`SELECT token_hash, org_id, role FROM invitations WHERE lower(email) = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
     .bind(user.email.toLowerCase(), now)
     .all<{ token_hash: string; org_id: string; role: string }>();
   if (!results.length) return 0;

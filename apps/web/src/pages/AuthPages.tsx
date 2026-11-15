@@ -80,10 +80,23 @@ export function Home() {
     onSuccess: async (r) => { await qc.invalidateQueries({ queryKey: ['me'] }); nav(`/o/${r.organization.id}/orders`); },
     onError: (e: ApiError) => toast({ kind: 'error', text: e.message }),
   });
-  if (me.isLoading) return <div className="boot">Loading…</div>;
+  const health = useQuery({ queryKey: ['health'], queryFn: () => api<{ signin: 'open' | 'owner-only' | 'invite-only' }>('GET', '/health'), staleTime: 300_000 });
+  if (me.isLoading || health.isLoading) return <div className="boot">Loading…</div>;
   if (me.isError || !me.data) return <Navigate to="/login" replace />;
   const orgs = me.data.organizations;
   if (orgs.length && !location.search.includes('new')) return <Navigate to={`/o/${orgs[0].id}/orders`} replace />;
+  if (health.data?.signin !== 'open') {
+    return (
+      <main className="auth">
+        <div className="auth-card">
+          <img className="brand-mark-lg" src="/logo-symbol.png" alt="ShopList" width="56" height="60" />
+          <h1>Welcome, {me.data.user.name.split(' ')[0]}</h1>
+          <p>You are not part of a business yet. Ask your admin to invite you with this email address ({me.data.user.email}), then sign in again.</p>
+          <button className="btn btn-outline full" onClick={async () => { await api('POST', '/auth/logout', { body: {} }).catch(() => {}); qc.clear(); nav('/login'); }}>Sign out</button>
+        </div>
+      </main>
+    );
+  }
   return (
     <main className="auth">
       <form className="auth-card" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>

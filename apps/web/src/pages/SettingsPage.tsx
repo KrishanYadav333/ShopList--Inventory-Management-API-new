@@ -10,7 +10,8 @@ import { canAdmin, useLocations, useMe } from '../queries';
 import { useToast } from '../toast';
 import { addPasskey, passkeysSupported, wasCancelled } from '../passkeys';
 
-interface Member { id: string; name: string; email: string; role: Role }
+interface Member { id: string; name: string; email?: string; role: Role; deactivatedAt?: string | null; lastSeenAt?: string | null }
+interface Pending { id: string; email: string; role: Role; createdAt: string; expiresAt: string; invitedBy: string | null }
 
 export function SettingsPage() {
   const { org } = useShell();
@@ -82,6 +83,12 @@ export function SettingsPage() {
     onSuccess: refresh,
     onError: (e: ApiError) => { fail(e); refresh(); },
   });
+  const pending = useQuery({ enabled: admin, queryKey: ['org', org.id, 'invitations'], queryFn: () => api<{ data: Pending[] }>('GET', `/orgs/${org.id}/invitations`).then((r) => r.data) });
+  const refreshTeam = () => { qc.invalidateQueries({ queryKey: ['org', org.id, 'members'] }); qc.invalidateQueries({ queryKey: ['org', org.id, 'invitations'] }); };
+  const resendInv = useMutation({ mutationFn: (id: string) => api<{ link: string }>('POST', `/orgs/${org.id}/invitations/${id}/resend`, { body: {} }), onSuccess: (r) => { setLink(r.link); refreshTeam(); toast({ kind: 'success', text: 'New link created' }); }, onError: fail });
+  const revokeInv = useMutation({ mutationFn: (id: string) => api('DELETE', `/orgs/${org.id}/invitations/${id}`), onSuccess: () => { refreshTeam(); toast({ text: 'Invitation revoked' }); }, onError: fail });
+  const setActive = useMutation({ mutationFn: (v: { id: string; on: boolean }) => api('POST', `/orgs/${org.id}/members/${v.id}/${v.on ? 'reactivate' : 'deactivate'}`, { body: {} }), onSuccess: (_r, v) => { refreshTeam(); toast({ text: v.on ? 'Member reactivated' : 'Member deactivated' }); }, onError: fail });
+  const handover = useMutation({ mutationFn: (v: { userId: string; confirmName: string }) => api('POST', `/orgs/${org.id}/admin-handover`, { body: v }), onSuccess: () => { qc.invalidateQueries(); toast({ kind: 'success', text: 'Admin role handed over' }); }, onError: fail });
   const removeMember = useMutation({ mutationFn: (id: string) => api('DELETE', `/orgs/${org.id}/members/${id}`), onSuccess: () => { refresh(); toast({ text: 'Member removed' }); }, onError: fail });
   const [invite, setInvite] = useState({ email: '', role: 'manager' });
   const [link, setLink] = useState('');
@@ -162,14 +169,18 @@ export function SettingsPage() {
           <ul className="list">
             {members.data?.map((m) => (
               <li key={m.id}>
-                <span><strong>{m.name}</strong><div className="time">{m.email}</div></span>
+                <span><strong>{m.name}</strong>{m.deactivatedAt && <span className="tag">deactivated</span>}{m.email && <div className="time">{m.email}{m.lastSeenAt ? ` · last seen ${dateParts(m.lastSeenAt).date}` : ''}</div>}</span>
                 <span className="row">
                   {admin && m.id !== me.data?.user.id ? (
                     <select aria-label={`Role of ${m.name}`} value={m.role} onChange={(e) => setRole.mutate({ id: m.id, role: e.target.value as Role })}>
                       {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
                     </select>
                   ) : <span className="tag">{ROLE_LABELS[m.role] ?? m.role}</span>}
-                  {admin && m.id !== me.data?.user.id && <button className="btn btn-outline" onClick={() => removeMember.mutate(m.id)}>Remove</button>}
+                  {admin && m.id !== me.data?.user.id && (m.deactivatedAt
+                    ? <button className="btn btn-outline" onClick={() => setActive.mutate({ id: m.id, on: true })}>Reactivate</button>
+                    : <button className="btn btn-outline" onClick={() => { if (confirm(`Deactivate ${m.name}? They lose access now. Their history stays.`)) setActive.mutate({ id: m.id, on: false }); }}>Deactivate</button>)}
+                  {admin && m.id !== me.data?.user.id && <button className="btn btn-outline" onClick={() => { if (confirm(`Remove ${m.name} completely? Deactivate keeps their history.`)) removeMember.mutate(m.id); }}>Remove</button>}
+                  {admin && m.id !== me.data?.user.id && !m.deactivatedAt && m.role !== 'admin' && <button className="btn btn-outline" onClick={() => { const t = prompt(`Hand over ${org.name} to ${m.name}? You become a manager. Type the business name to confirm:`); if (t !== null) handover.mutate({ userId: m.id, confirmName: t }); }}>Make admin</button>}
                 </span>
               </li>
             ))}
@@ -186,6 +197,22 @@ export function SettingsPage() {
               {ROLES.map((r) => <li key={r}><strong>{ROLE_LABELS[r]}</strong>: {ROLE_SUMMARY[r]}</li>)}
             </ul>
             <p className="hint">The person signs in with that email (Google or email code) and lands in this organization with the role you chose. The link is optional.</p>
+            {pending.data && pending.data.length > 0 && (
+              <>
+                <h3>Pending invitations</h3>
+                <ul className="list">
+                  {pending.data.map((i) => (
+                    <li key={i.id}>
+                      <span><strong>{i.email}</strong> <span className="tag">{ROLE_LABELS[i.role] ?? i.role}</span><div className="time">invited by {i.invitedBy ?? 'the platform owner'} · expires {dateParts(i.expiresAt).date}</div></span>
+                      <span className="row">
+                        <button className="btn btn-outline" onClick={() => resendInv.mutate(i.id)}>New link</button>
+                        <button className="btn btn-outline" onClick={() => revokeInv.mutate(i.id)}>Revoke</button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
             </>
           )}
           {link && (

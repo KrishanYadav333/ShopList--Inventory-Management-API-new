@@ -778,6 +778,15 @@ export class InventoryDO extends DurableObject<Bindings> {
     };
   }
 
+  /** Numbers only, for the platform console. Never returns product, customer or order details. */
+  stats(): { products: number; locations: number; openOrders: number; lastActivityAt: string | null } {
+    const counters = Object.fromEntries(this.all<{ name: string; value: number }>(`SELECT name, value FROM counters`).map((r) => [r.name, r.value]));
+    const loc = this.all<{ n: number }>(`SELECT COUNT(*) AS n FROM locations WHERE archived_at IS NULL`)[0]?.n ?? 0;
+    const open = this.all<{ n: number }>(`SELECT COUNT(*) AS n FROM orders WHERE state IN ('payment_required', 'waiting_for_stock', 'ready_to_ship')`)[0]?.n ?? 0;
+    const last = this.all<{ t: string | null }>(`SELECT MAX(created_at) AS t FROM audit_log`)[0]?.t ?? null;
+    return { products: counters.products ?? 0, locations: loc, openOrders: open, lastActivityAt: last };
+  }
+
   // ---------------------------------------------------------- locations
   listLocations(): Location[] {
     return this.all<{ id: string; name: string; code: string; is_default: number; archived_at: string | null }>(`SELECT * FROM locations ORDER BY is_default DESC, name COLLATE NOCASE`).map((l) => ({

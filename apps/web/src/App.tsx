@@ -2,7 +2,6 @@ import { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { Shell } from './components/Shell';
 import { Home, Invite, Login } from './pages/AuthPages';
-import { AdminPage } from './pages/AdminPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { OrdersPage } from './pages/OrdersPage';
 import { ProductsPage } from './pages/ProductsPage';
@@ -10,6 +9,8 @@ import { SettingsPage } from './pages/SettingsPage';
 
 // Clerk's widget is only needed on the client sign-in page, so it is loaded on demand.
 const ClerkSignIn = lazy(() => import('./pages/ClerkSignIn'));
+// The platform console is only for the owner, so it loads on demand too.
+const AdminPage = lazy(() => import('./pages/AdminPage').then((m) => ({ default: m.AdminPage })));
 
 export function App() {
   return (
@@ -19,7 +20,7 @@ export function App() {
       <Route path="/sign-in/*" element={<Suspense fallback={<div className="boot">Loading…</div>}><ClerkSignIn /></Suspense>} />
       <Route path="/sign-up/*" element={<Suspense fallback={<div className="boot">Loading…</div>}><ClerkSignIn /></Suspense>} />
       <Route path="/invite/:token" element={<Invite />} />
-      <Route path="/admin" element={<AdminPage />} />
+      <Route path="/admin" element={<Suspense fallback={<div className="boot">Loading…</div>}><AdminPage /></Suspense>} />
       <Route path="/" element={<Home />} />
       <Route path="/o/:orgId" element={<Shell />}>
         <Route index element={<Navigate to="orders" replace />} />

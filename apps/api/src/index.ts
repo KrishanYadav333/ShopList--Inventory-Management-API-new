@@ -221,7 +221,7 @@ const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindin
     return next();
   }
   const row = await c.env.DB.prepare(
-    `SELECT m.role FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.org_id = ? AND m.user_id = ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL`,
+    `SELECT m.role FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.org_id = ? AND m.user_id = ? AND m.deactivated_at IS NULL AND o.deleted_at IS NULL AND o.suspended_at IS NULL`,
   )
     .bind(orgId, c.get('user').id)
     .first<{ role: Role }>();
@@ -457,7 +457,7 @@ route('post', '/auth/logout', 'user', async (c) => {
 route('get', '/me', 'user', async (c) => {
   const user = c.get('user');
   const { results } = await c.env.DB.prepare(
-    `SELECT o.id, o.name, o.slug, o.currency, m.role FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.user_id = ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL ORDER BY o.name`,
+    `SELECT o.id, o.name, o.slug, o.currency, m.role FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.user_id = ? AND m.deactivated_at IS NULL AND o.deleted_at IS NULL AND o.suspended_at IS NULL ORDER BY o.name`,
   ).bind(user.id).all();
   return c.json({ user, organizations: results });
 });
@@ -465,6 +465,8 @@ route('get', '/me', 'user', async (c) => {
 // ------------------------------------------------------------- organizations
 route('post', '/orgs', 'user', async (c) => {
   const user = c.get('user');
+  // Businesses are onboarded by the platform owner. Self-serve creation exists only in open mode (tests, local).
+  if (signinMode(c.env) !== 'open') throw new AppError(403, 'org_creation_closed', 'New businesses are set up by the ShopList owner. Ask your admin to invite you.');
   const { data } = await readJson(c, orgInput);
   const owned = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM memberships WHERE user_id = ? AND role = 'admin'`).bind(user.id).first<{ n: number }>();
   if ((owned?.n ?? 0) >= 5) throw new AppError(409, 'org_limit', 'You can administer at most 5 organizations.');
@@ -497,19 +499,23 @@ route('delete', '/orgs/:orgId', 'org:delete', async (c) => {
 // ------------------------------------------------------------------- members
 route('get', '/orgs/:orgId/members', 'inventory:read', async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT u.id, u.name, u.email, u.avatar_url, m.role, m.created_at FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = ? ORDER BY m.created_at`,
-  ).bind(c.get('org').id).all();
-  return c.json({ data: results });
+    `SELECT u.id, u.name, u.email, u.avatar_url, m.role, m.created_at, m.deactivated_at AS deactivatedAt,
+            (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id) AS lastSeenAt
+       FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = ? ORDER BY m.created_at`,
+  ).bind(c.get('org').id).all<{ email: string; lastSeenAt: string | null }>();
+  // Staff see who their colleagues are, not how to reach them or when they were last on.
+  const manage = can(c.get('org').role, 'team:manage');
+  return c.json({ data: manage ? results : results.map(({ email: _e, lastSeenAt: _l, ...rest }) => rest) });
 });
 
 async function adminCount(c: Ctx): Promise<number> {
-  return (await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM memberships WHERE org_id = ? AND role = 'admin'`).bind(c.get('org').id).first<{ n: number }>())?.n ?? 0;
+  return (await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM memberships WHERE org_id = ? AND role = 'admin' AND deactivated_at IS NULL`).bind(c.get('org').id).first<{ n: number }>())?.n ?? 0;
 }
 
 /** One admin per organization is the rule. A second one is allowed only when the caller says so explicitly. */
 async function guardSecondAdmin(c: Ctx, role: Role, confirmed: boolean | undefined, exceptUserId?: string): Promise<void> {
   if (role !== 'admin' || confirmed) return;
-  const n = (await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM memberships WHERE org_id = ? AND role = 'admin' AND user_id <> ?`).bind(c.get('org').id, exceptUserId ?? '').first<{ n: number }>())?.n ?? 0;
+  const n = (await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM memberships WHERE org_id = ? AND role = 'admin' AND deactivated_at IS NULL AND user_id <> ?`).bind(c.get('org').id, exceptUserId ?? '').first<{ n: number }>())?.n ?? 0;
   if (n > 0) throw new AppError(409, 'second_admin', 'This organization already has an admin. An organization normally has one. Confirm to add another.');
 }
 
@@ -532,21 +538,90 @@ route('delete', '/orgs/:orgId/members/:userId', 'team:manage', async (c) => {
   return c.json({ ok: true });
 });
 
+route('post', '/orgs/:orgId/members/:userId/deactivate', 'team:manage', async (c) => {
+  const userId = c.req.param('userId') ?? '';
+  const target = await c.env.DB.prepare(`SELECT role, deactivated_at FROM memberships WHERE org_id = ? AND user_id = ?`).bind(c.get('org').id, userId).first<{ role: Role; deactivated_at: string | null }>();
+  if (!target) throw new AppError(404, 'member_not_found', 'That person is not a member.');
+  if (target.role === 'admin' && (await adminCount(c)) <= 1) throw new AppError(409, 'last_admin', 'An organization needs at least one active admin.');
+  await c.env.DB.prepare(`UPDATE memberships SET deactivated_at = COALESCE(deactivated_at, ?) WHERE org_id = ? AND user_id = ?`).bind(nowIso(), c.get('org').id, userId).run();
+  return c.json({ ok: true });
+});
+
+route('post', '/orgs/:orgId/members/:userId/reactivate', 'team:manage', async (c) => {
+  const r = await c.env.DB.prepare(`UPDATE memberships SET deactivated_at = NULL WHERE org_id = ? AND user_id = ?`).bind(c.get('org').id, c.req.param('userId') ?? '').run();
+  if (!r.meta.changes) throw new AppError(404, 'member_not_found', 'That person is not a member.');
+  return c.json({ ok: true });
+});
+
+/** The admin hands the business to someone else: that person becomes admin, the current admin becomes manager. One step. */
+route('post', '/orgs/:orgId/admin-handover', 'team:manage', async (c) => {
+  const { data } = await readJson(c, z.object({ userId: z.string().max(60), confirmName: z.string().max(100) }).strict());
+  const org = await c.env.DB.prepare(`SELECT name FROM organizations WHERE id = ?`).bind(c.get('org').id).first<{ name: string }>();
+  if (!org || data.confirmName.trim() !== org.name) throw new AppError(400, 'confirm_name', 'Type the business name exactly to confirm.');
+  if (data.userId === c.get('user').id) throw new AppError(400, 'same_person', 'Choose someone else.');
+  const target = await c.env.DB.prepare(`SELECT 1 AS x FROM memberships WHERE org_id = ? AND user_id = ? AND deactivated_at IS NULL`).bind(c.get('org').id, data.userId).first();
+  if (!target) throw new AppError(404, 'member_not_found', 'That person is not an active member.');
+  await c.env.DB.batch([
+    c.env.DB.prepare(`UPDATE memberships SET role = 'admin' WHERE org_id = ? AND user_id = ?`).bind(c.get('org').id, data.userId),
+    c.env.DB.prepare(`UPDATE memberships SET role = 'manager' WHERE org_id = ? AND user_id = ?`).bind(c.get('org').id, c.get('user').id),
+  ]);
+  return c.json({ ok: true });
+});
+
+/** Creates an invitation, replacing any pending one for the same email in the same organization. The token is shown once. */
+async function createInvitation(c: Ctx, o: { orgId: string; email: string; role: Role; invitedBy: string }) {
+  const token = randomToken(32);
+  const id = newId('inv');
+  const now = nowIso();
+  const expiresAt = new Date(Date.now() + 7 * 86400_000).toISOString();
+  await c.env.DB.batch([
+    c.env.DB.prepare(`UPDATE invitations SET revoked_at = ? WHERE org_id = ? AND lower(email) = ? AND accepted_at IS NULL AND revoked_at IS NULL`).bind(now, o.orgId, o.email.toLowerCase()),
+    c.env.DB.prepare(`INSERT INTO invitations(id, token_hash, org_id, email, role, invited_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, await sha256Hex(token), o.orgId, o.email, o.role, o.invitedBy, now, expiresAt),
+  ]);
+  return { id, token, link: `${c.env.APP_ORIGIN}/invite/${token}`, expiresAt };
+}
+
 route('post', '/orgs/:orgId/invitations', 'team:manage', async (c) => {
   const { data } = await readJson(c, inviteInput);
   await guardSecondAdmin(c, data.role, data.confirmSecondAdmin);
-  const token = randomToken(32);
-  await c.env.DB.prepare(`INSERT INTO invitations(token_hash, org_id, email, role, invited_by, expires_at) VALUES (?, ?, ?, ?, ?, ?)`)
-    .bind(await sha256Hex(token), c.get('org').id, data.email, data.role, c.get('user').id, new Date(Date.now() + 7 * 86400_000).toISOString())
-    .run();
+  const existing = await c.env.DB.prepare(`SELECT 1 AS x FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = ? AND lower(u.email) = ?`).bind(c.get('org').id, data.email.toLowerCase()).first();
+  if (existing) throw new AppError(409, 'already_member', 'That person is already a member of this organization.');
+  const inv = await createInvitation(c, { orgId: c.get('org').id, email: data.email, role: data.role, invitedBy: c.get('user').id });
   // The token is shown once; share the link with the invitee.
-  return c.json({ token, link: `${c.env.APP_ORIGIN}/invite/${token}`, email: data.email, role: data.role }, 201);
+  return c.json({ id: inv.id, token: inv.token, link: inv.link, expiresAt: inv.expiresAt, email: data.email, role: data.role }, 201);
+});
+
+route('get', '/orgs/:orgId/invitations', 'team:manage', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT i.id, i.email, i.role, i.created_at AS createdAt, i.expires_at AS expiresAt, u.name AS invitedBy
+       FROM invitations i LEFT JOIN users u ON u.id = i.invited_by
+      WHERE i.org_id = ? AND i.accepted_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > ? ORDER BY i.created_at DESC`,
+  ).bind(c.get('org').id, nowIso()).all();
+  return c.json({ data: results });
+});
+
+async function pendingInvitation(c: Ctx, id: string) {
+  const inv = await c.env.DB.prepare(`SELECT id, email, role FROM invitations WHERE id = ? AND org_id = ? AND accepted_at IS NULL AND revoked_at IS NULL`).bind(id, c.get('org').id).first<{ id: string; email: string; role: Role }>();
+  if (!inv) throw new AppError(404, 'invitation_invalid', 'This invitation is invalid or has already been used.');
+  return inv;
+}
+
+route('post', '/orgs/:orgId/invitations/:invId/resend', 'team:manage', async (c) => {
+  const old = await pendingInvitation(c, c.req.param('invId') ?? '');
+  const inv = await createInvitation(c, { orgId: c.get('org').id, email: old.email, role: old.role, invitedBy: c.get('user').id });
+  return c.json({ id: inv.id, link: inv.link, expiresAt: inv.expiresAt });
+});
+
+route('delete', '/orgs/:orgId/invitations/:invId', 'team:manage', async (c) => {
+  const inv = await pendingInvitation(c, c.req.param('invId') ?? '');
+  await c.env.DB.prepare(`UPDATE invitations SET revoked_at = ? WHERE id = ?`).bind(nowIso(), inv.id).run();
+  return c.json({ ok: true });
 });
 
 route('post', '/invitations/:token/accept', 'user', async (c) => {
   const hash = await sha256Hex(c.req.param('token') ?? '');
-  const inv = await c.env.DB.prepare(`SELECT org_id, email, role, expires_at, accepted_at FROM invitations WHERE token_hash = ?`).bind(hash).first<{ org_id: string; email: string; role: Role; expires_at: string; accepted_at: string | null }>();
-  if (!inv || inv.accepted_at || Date.parse(inv.expires_at) < Date.now()) throw new AppError(404, 'invitation_invalid', 'This invitation is invalid or has expired.');
+  const inv = await c.env.DB.prepare(`SELECT org_id, email, role, expires_at, accepted_at, revoked_at FROM invitations WHERE token_hash = ?`).bind(hash).first<{ org_id: string; email: string; role: Role; expires_at: string; accepted_at: string | null; revoked_at: string | null }>();
+  if (!inv || inv.accepted_at || inv.revoked_at || Date.parse(inv.expires_at) < Date.now()) throw new AppError(404, 'invitation_invalid', 'This invitation is invalid or has expired.');
   const user = c.get('user');
   // A stolen link is useless to anyone signed in with a different email.
   if (inv.email.toLowerCase() !== user.email.toLowerCase()) throw new AppError(403, 'invitation_wrong_account', `This invitation was sent to ${inv.email}. Sign in with that account.`);
@@ -806,7 +881,9 @@ route('get', '/admin/orgs', 'super', async (c) => {
   const cur = decodeCursor<{ c: string; i: string }>(q.cursor);
   const { results } = await c.env.DB.prepare(
     `SELECT o.id, o.name, o.slug, o.created_at AS createdAt, o.deleted_at AS deletedAt, o.suspended_at AS suspendedAt,
-            (SELECT COUNT(*) FROM memberships m WHERE m.org_id = o.id) AS members
+            (SELECT COUNT(*) FROM memberships m WHERE m.org_id = o.id) AS members,
+            CASE WHEN o.deleted_at IS NOT NULL THEN 'deleted' WHEN o.suspended_at IS NOT NULL THEN 'suspended'
+                 WHEN NOT EXISTS (SELECT 1 FROM memberships m WHERE m.org_id = o.id) THEN 'pending' ELSE 'active' END AS status
        FROM organizations o
       ${cur ? 'WHERE (o.created_at < ? OR (o.created_at = ? AND o.id < ?))' : ''}
       ORDER BY o.created_at DESC, o.id DESC LIMIT ?`,
@@ -850,6 +927,79 @@ route('post', '/admin/users/:id/enable', 'super', async (c) => {
   if (!res.meta.changes) throw new AppError(404, 'user_not_found', 'That user does not exist or is not disabled.');
   await platformAudit(c, 'user.enable', id);
   return c.json({ ok: true });
+});
+
+const slugFor = (name: string) => `${name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'org'}-${randomToken(3).toLowerCase().replace(/[^a-z0-9]/g, 'x')}`;
+
+/** Onboarding: creates a business with no members and invites its admin. The platform owner never becomes a member. */
+route('post', '/admin/orgs', 'super', async (c) => {
+  const { data } = await readJson(c, z.object({ name: z.string().trim().min(1).max(100), adminEmail: z.string().trim().toLowerCase().email().max(254), currency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/).default('USD') }).strict());
+  const reserved = await c.env.DB.prepare(`SELECT 1 AS x FROM users u JOIN oauth_accounts o ON o.user_id = u.id WHERE u.email = ? AND o.provider = 'github' LIMIT 1`).bind(data.adminEmail).first();
+  if (reserved) throw new AppError(409, 'email_in_use', 'That email belongs to the platform owner account. Use a different email for the business admin.');
+  const disabled = await c.env.DB.prepare(`SELECT 1 AS x FROM users WHERE email = ? AND disabled_at IS NOT NULL`).bind(data.adminEmail).first();
+  if (disabled) throw new AppError(409, 'user_disabled', 'That account is disabled. Enable it first.');
+  const id = newId('org');
+  await c.env.DB.prepare(`INSERT INTO organizations(id, name, slug, currency, created_at) VALUES (?, ?, ?, ?, ?)`).bind(id, data.name, slugFor(data.name), data.currency, nowIso()).run();
+  const inv = await createInvitation(c, { orgId: id, email: data.adminEmail, role: 'admin', invitedBy: c.get('user').id });
+  await platformAudit(c, 'org.onboard', id, { name: data.name, adminDomain: data.adminEmail.split('@')[1] });
+  return c.json({ organization: { id, name: data.name, status: 'pending' }, invitation: { id: inv.id, link: inv.link, expiresAt: inv.expiresAt } }, 201);
+});
+
+route('post', '/admin/orgs/:id/resend-invitation', 'super', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const old = await c.env.DB.prepare(`SELECT email FROM invitations WHERE org_id = ? AND role = 'admin' AND accepted_at IS NULL ORDER BY created_at DESC LIMIT 1`).bind(id).first<{ email: string }>();
+  if (!old) throw new AppError(404, 'invitation_invalid', 'There is no pending admin invitation for that business.');
+  const inv = await createInvitation(c, { orgId: id, email: old.email, role: 'admin', invitedBy: c.get('user').id });
+  await platformAudit(c, 'org.invitation_resent', id);
+  return c.json({ id: inv.id, link: inv.link, expiresAt: inv.expiresAt });
+});
+
+/** A business page for the platform owner: health and people, never products, customers or orders. */
+route('get', '/admin/orgs/:id', 'super', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const org = await c.env.DB.prepare(
+    `SELECT id, name, slug, currency, created_at AS createdAt, suspended_at AS suspendedAt, deleted_at AS deletedAt FROM organizations WHERE id = ?`,
+  ).bind(id).first<{ id: string; suspendedAt: string | null; deletedAt: string | null }>();
+  if (!org) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
+  const { results: members } = await c.env.DB.prepare(
+    `SELECT u.id, u.name, u.email, m.role, m.deactivated_at AS deactivatedAt, (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id) AS lastSeenAt
+       FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = ? ORDER BY m.created_at`,
+  ).bind(id).all();
+  const { results: pending } = await c.env.DB.prepare(`SELECT id, email, role, expires_at AS expiresAt FROM invitations WHERE org_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`).bind(id, nowIso()).all();
+  const keys = await c.env.DB.prepare(`SELECT (SELECT COUNT(*) FROM api_keys WHERE org_id = ? AND revoked_at IS NULL) AS apiKeys, (SELECT COUNT(*) FROM webhooks WHERE org_id = ?) AS webhooks`).bind(id, id).first();
+  const stub = c.env.INVENTORY.get(c.env.INVENTORY.idFromName(id));
+  const stats = await stub.stats();
+  const status = org.deletedAt ? 'deleted' : org.suspendedAt ? 'suspended' : members.length === 0 ? 'pending' : 'active';
+  return c.json({ organization: { ...org, status }, members, pendingInvitations: pending, counts: { ...keys, ...stats } });
+});
+
+/** Recovery when the only admin has gone: the platform owner makes an existing member the admin. Changes a role only. */
+route('post', '/admin/orgs/:id/transfer-admin', 'super', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const { data } = await readJson(c, z.object({ userId: z.string().max(60) }).strict());
+  const target = await c.env.DB.prepare(`SELECT 1 AS x FROM memberships WHERE org_id = ? AND user_id = ? AND deactivated_at IS NULL`).bind(id, data.userId).first();
+  if (!target) throw new AppError(404, 'member_not_found', 'That person is not an active member of this business.');
+  await c.env.DB.prepare(`UPDATE memberships SET role = 'admin' WHERE org_id = ? AND user_id = ?`).bind(id, data.userId).run();
+  await platformAudit(c, 'org.transfer_admin', id, { userId: data.userId });
+  return c.json({ ok: true });
+});
+
+route('get', '/admin/users/:id', 'super', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const user = await c.env.DB.prepare(`SELECT id, email, name, created_at AS createdAt, disabled_at AS disabledAt FROM users WHERE id = ?`).bind(id).first();
+  if (!user) throw new AppError(404, 'user_not_found', 'That user does not exist.');
+  const { results: methods } = await c.env.DB.prepare(`SELECT provider FROM oauth_accounts WHERE user_id = ?`).bind(id).all<{ provider: string }>();
+  const passkeys = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?`).bind(id).first<{ n: number }>();
+  const { results: orgs } = await c.env.DB.prepare(`SELECT o.id, o.name, m.role, m.deactivated_at AS deactivatedAt FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.user_id = ?`).bind(id).all();
+  const { results: sessions } = await c.env.DB.prepare(`SELECT created_at AS createdAt, last_seen_at AS lastSeenAt, user_agent AS userAgent, ip_country AS country, provider AS via FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY last_seen_at DESC`).bind(id, nowIso()).all();
+  return c.json({ user, signInMethods: [...methods.map((m) => m.provider), ...(passkeys?.n ? ['passkey'] : [])], organizations: orgs, sessions });
+});
+
+route('post', '/admin/users/:id/sign-out', 'super', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const r = await c.env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(id).run();
+  await platformAudit(c, 'user.sign_out', id, { sessions: r.meta.changes ?? 0 });
+  return c.json({ revoked: r.meta.changes ?? 0 });
 });
 
 route('post', '/admin/orgs/:id/suspend', 'super', async (c) => {
