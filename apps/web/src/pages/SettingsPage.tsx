@@ -160,6 +160,7 @@ export function SettingsPage() {
             ))}
           </ul>
           {admin && (
+            <>
             <form className="inline-form" onSubmit={submit(() => sendInvite.mutate())}>
               <div className="field"><label htmlFor="i-email">Invite by email</label><input id="i-email" type="email" placeholder="teammate@example.com" value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} /></div>
               <div className="field narrow"><label htmlFor="i-role">Role</label>
@@ -173,6 +174,7 @@ export function SettingsPage() {
               <li><strong>owner</strong>: admin, plus delete the organization and manage owners.</li>
             </ul>
             <p className="hint">The person signs in with that email (Google or email code) and lands in this organization with the role you chose. The link is optional.</p>
+            </>
           )}
           {link && (
             <div className="invite-link" role="status">
