@@ -110,4 +110,6 @@ Also built since: Clerk customer sign-in and sign-up (invite-only), a separate o
 
 Measured on the live site: axe reports 0 violations on login, owner, orders, products, history and settings at 1280 px and 390 px. Lighthouse mobile on `/login`: performance 99, accessibility 100, best practices 92 (the one flag is the expected 401 from `/me` when signed out), SEO 100. A 1,500-product table keeps about 20 rows in the DOM while scrolling.
 
-Not built: Google sign-in outside Clerk, Turnstile, automated preview deployments, the v1 to v2 cutover (see OPERATIONS.md), and checks on a physical phone and with VoiceOver, which need a person with the device.
+Also built: the session list with sign-out and "sign out everywhere else", a load test and a 20,000-row import check (results in OPERATIONS.md).
+
+Not built: Google sign-in outside Clerk, Turnstile, nightly R2 backups and a restore rehearsal (they need your R2 bucket), automated preview deployments, the v1 to v2 cutover (see OPERATIONS.md), and checks on a physical phone and with VoiceOver, which need a person with the device.
