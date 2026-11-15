@@ -38,10 +38,10 @@ describe('creating and managing keys', () => {
     expect(list.body.data[0]).toMatchObject({ id: k.id, name: 'Web shop', prefix: k.prefix, scopes: ['inventory:read', 'inventory:write'], revokedAt: null });
   });
 
-  it('only admins and owners can manage keys, and keys cannot manage keys', async () => {
+  it('only the admin can manage keys, and keys cannot manage keys', async () => {
     const org = await newOrg();
-    const editor = await addMember(org, 'editor');
-    const admin = await addMember(org, 'admin');
+    const editor = await addMember(org, 'manager');
+    const admin = org; // the organization's admin is the creator
     expect((await call(editor.cookie, 'POST', `${org.base}/api-keys`, { name: 'x', scopes: ['inventory:read'] })).status).toBe(403);
     expect((await call(editor.cookie, 'GET', `${org.base}/api-keys`)).status).toBe(403);
     expect((await call(admin.cookie, 'POST', `${org.base}/api-keys`, { name: 'x', scopes: ['inventory:read'] })).status).toBe(201);

@@ -63,7 +63,7 @@ describe('managing webhooks', () => {
   it('is limited to admins, to sessions, and to its own organization', async () => {
     const a = await newOrg();
     const b = await newOrg();
-    const editor = await addMember(a, 'editor');
+    const editor = await addMember(a, 'manager');
     const hook = (await create(a)).body;
     expect((await call(editor.cookie, 'GET', `${a.base}/webhooks`)).status).toBe(403);
     expect((await call(editor.cookie, 'POST', `${a.base}/webhooks`, { url: URL_OK, events: ['*'] })).status).toBe(403);

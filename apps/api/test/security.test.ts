@@ -135,50 +135,84 @@ describe('tenant isolation', () => {
 });
 
 describe('roles and permissions', () => {
-  it('viewer can read but not write; editor can write but not administer', async () => {
-    const owner = await newOrg();
-    const viewer = await addMember(owner, 'viewer');
-    const editor = await addMember(owner, 'editor');
-    const p = await product(owner);
-
-    expect((await call(viewer.cookie, 'GET', `${owner.base}/products`)).status).toBe(200);
-    expect((await call(viewer.cookie, 'POST', `${owner.base}/products`, { sku: 'V', name: 'V', priceMinor: 1 })).status).toBe(403);
-    expect((await call(viewer.cookie, 'DELETE', `${owner.base}/products/${p.id}`, undefined, { 'if-match': '"1"' })).status).toBe(403);
-
-    expect((await call(editor.cookie, 'POST', `${owner.base}/products`, { sku: 'E', name: 'E', priceMinor: 1 })).status).toBe(201);
-    expect((await call(editor.cookie, 'POST', `${owner.base}/locations`, { name: 'Shop', code: 'shop' })).status).toBe(403);
-    expect((await call(editor.cookie, 'GET', `${owner.base}/audit`)).status).toBe(403);
-    expect((await call(editor.cookie, 'POST', `${owner.base}/invitations`, { email: 'z@example.com', role: 'viewer' })).status).toBe(403);
-    expect((await call(editor.cookie, 'DELETE', `${owner.base}`)).status).toBe(403);
+  it('every role can do exactly what its job needs', async () => {
+    const admin = await newOrg();
+    const viewer = await addMember(admin, 'viewer');
+    const sales = await addMember(admin, 'sales');
+    const stock = await addMember(admin, 'stock');
+    const manager = await addMember(admin, 'manager');
+    const p = await product(admin);
+    const loc = await defaultLocation(admin);
+    const newProduct = { sku: 'N-1', name: 'N', priceMinor: 1 };
+    const move = { productId: p.id, locationId: loc, delta: 5, reason: 'receive' };
+    const order = { customerName: 'A', lines: [{ productId: p.id, quantity: 1 }] };
+    const rows: [string, { cookie: string }, string, string, unknown, number][] = [
+      // [label, who, method, path, body, expected status]
+      ['viewer reads', viewer, 'GET', `${admin.base}/products`, undefined, 200],
+      ['viewer cannot add product', viewer, 'POST', `${admin.base}/products`, newProduct, 403],
+      ['viewer cannot move stock', viewer, 'POST', `${admin.base}/stock/movements`, move, 403],
+      ['viewer cannot order', viewer, 'POST', `${admin.base}/orders`, order, 403],
+      ['sales reads', sales, 'GET', `${admin.base}/orders`, undefined, 200],
+      ['sales can order', sales, 'POST', `${admin.base}/orders`, order, 201],
+      ['sales cannot add product', sales, 'POST', `${admin.base}/products`, newProduct, 403],
+      ['sales cannot move stock', sales, 'POST', `${admin.base}/stock/movements`, move, 403],
+      ['stock reads', stock, 'GET', `${admin.base}/products`, undefined, 200],
+      ['stock can move stock', stock, 'POST', `${admin.base}/stock/movements`, move, 201],
+      ['stock cannot add product', stock, 'POST', `${admin.base}/products`, newProduct, 403],
+      ['stock cannot order', stock, 'POST', `${admin.base}/orders`, order, 403],
+      ['manager can add product', manager, 'POST', `${admin.base}/products`, newProduct, 201],
+      ['manager can move stock', manager, 'POST', `${admin.base}/stock/movements`, move, 201],
+      ['manager can order', manager, 'POST', `${admin.base}/orders`, order, 201],
+    ];
+    for (const [label, who, method, path, body, want] of rows) {
+      expect((await call(who.cookie, method, path, body)).status, label).toBe(want);
+    }
+    // Nobody but the admin touches settings, people, keys, webhooks, the activity log or deletion.
+    for (const who of [viewer, sales, stock, manager]) {
+      expect((await call(who.cookie, 'GET', `${admin.base}/audit`)).status).toBe(403);
+      expect((await call(who.cookie, 'POST', `${admin.base}/locations`, { name: 'Shop', code: 'shop' })).status).toBe(403);
+      expect((await call(who.cookie, 'POST', `${admin.base}/invitations`, { email: 'z@example.com', role: 'viewer' })).status).toBe(403);
+      expect((await call(who.cookie, 'GET', `${admin.base}/api-keys`)).status).toBe(403);
+      expect((await call(who.cookie, 'DELETE', admin.base)).status).toBe(403);
+    }
+    expect((await call(admin.cookie, 'GET', `${admin.base}/audit`)).status).toBe(200);
   });
 
-  it('admin can manage members and locations but cannot grant or remove owners', async () => {
-    const owner = await newOrg();
-    const admin = await addMember(owner, 'admin');
-    const editor = await addMember(owner, 'editor');
-    expect((await call(admin.cookie, 'POST', `${owner.base}/locations`, { name: 'Shop', code: 'shop' })).status).toBe(201);
-    expect((await call(admin.cookie, 'PATCH', `${owner.base}/members/${editor.userId}`, { role: 'viewer' })).status).toBe(200);
-    expect((await call(admin.cookie, 'PATCH', `${owner.base}/members/${editor.userId}`, { role: 'owner' })).status).toBe(403);
-    const me = await call(owner.cookie, 'GET', '/me');
-    expect((await call(admin.cookie, 'DELETE', `${owner.base}/members/${me.body.user.id}`)).status).toBe(403);
-    expect((await call(admin.cookie, 'DELETE', `${owner.base}`)).status).toBe(403);
+  it('the admin assigns existing roles; changing a role takes effect on the next request', async () => {
+    const admin = await newOrg();
+    const staff = await addMember(admin, 'viewer');
+    expect((await call(staff.cookie, 'POST', `${admin.base}/products`, { sku: 'S', name: 'S', priceMinor: 1 })).status).toBe(403);
+    expect((await call(admin.cookie, 'PATCH', `${admin.base}/members/${staff.userId}`, { role: 'manager' })).status).toBe(200);
+    expect((await call(staff.cookie, 'POST', `${admin.base}/products`, { sku: 'S', name: 'S', priceMinor: 1 })).status).toBe(201);
+    expect((await call(admin.cookie, 'PATCH', `${admin.base}/members/${staff.userId}`, { role: 'astronaut' })).status).toBe(400); // no inventing roles
   });
 
-  it('the last owner cannot be demoted or removed', async () => {
-    const owner = await newOrg();
-    const me = (await call(owner.cookie, 'GET', '/me')).body.user.id;
-    const demote = await call(owner.cookie, 'PATCH', `${owner.base}/members/${me}`, { role: 'admin' });
+  it('an organization normally has one admin: a second needs explicit confirmation', async () => {
+    const admin = await newOrg();
+    const staff = await addMember(admin, 'manager');
+    const plain = await call(admin.cookie, 'PATCH', `${admin.base}/members/${staff.userId}`, { role: 'admin' });
+    expect(plain.status).toBe(409);
+    expect(plain.body.type).toContain('second-admin');
+    expect((await call(admin.cookie, 'POST', `${admin.base}/invitations`, { email: 'co@example.com', role: 'admin' })).status).toBe(409);
+    expect((await call(admin.cookie, 'PATCH', `${admin.base}/members/${staff.userId}`, { role: 'admin', confirmSecondAdmin: true })).status).toBe(200);
+    expect((await call(staff.cookie, 'GET', `${admin.base}/audit`)).status).toBe(200); // now an admin
+  });
+
+  it('the last admin cannot be demoted or removed', async () => {
+    const admin = await newOrg();
+    const me = (await call(admin.cookie, 'GET', '/me')).body.user.id;
+    const demote = await call(admin.cookie, 'PATCH', `${admin.base}/members/${me}`, { role: 'manager' });
     expect(demote.status).toBe(409);
-    expect(demote.body.type).toContain('last-owner');
-    expect((await call(owner.cookie, 'DELETE', `${owner.base}/members/${me}`)).status).toBe(409);
+    expect(demote.body.type).toContain('last-admin');
+    expect((await call(admin.cookie, 'DELETE', `${admin.base}/members/${me}`)).status).toBe(409);
   });
 
   it('a removed member loses access on the next request', async () => {
-    const owner = await newOrg();
-    const editor = await addMember(owner, 'editor');
-    expect((await call(editor.cookie, 'GET', `${owner.base}/products`)).status).toBe(200);
-    await call(owner.cookie, 'DELETE', `${owner.base}/members/${editor.userId}`);
-    expect((await call(editor.cookie, 'GET', `${owner.base}/products`)).status).toBe(404);
+    const admin = await newOrg();
+    const staff = await addMember(admin, 'manager');
+    expect((await call(staff.cookie, 'GET', `${admin.base}/products`)).status).toBe(200);
+    await call(admin.cookie, 'DELETE', `${admin.base}/members/${staff.userId}`);
+    expect((await call(staff.cookie, 'GET', `${admin.base}/products`)).status).toBe(404);
   });
 });
 

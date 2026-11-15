@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { can, type Permission } from '@shoplist/shared';
 import type { Dashboard, Location, Movement, Order, OrderState, Page, Product, Role, StockLevel } from '@shoplist/shared';
 import { api, ApiError } from './api';
 
@@ -75,8 +76,8 @@ export const useMovements = (orgId: string, f: { productId?: string; locationId?
     getNextPageParam: (last) => last.nextCursor ?? undefined,
   });
 
-export const canWrite = (role: Role) => role !== 'viewer';
-export const canAdmin = (role: Role) => role === 'admin' || role === 'owner';
+export const canDo = (role: Role, permission: Permission) => can(role, permission);
+export const canAdmin = (role: Role) => can(role, 'org:manage');
 
 export const useOrders = (orgId: string, f: { q?: string; state?: OrderState }) =>
   useInfiniteQuery({

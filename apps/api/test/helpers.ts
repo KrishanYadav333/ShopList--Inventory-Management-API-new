@@ -62,7 +62,7 @@ export async function newOrg(name = 'Test Org') {
 }
 
 /** Invites `email` with `role` and has them accept; returns their cookie. */
-export async function addMember(owner: { cookie: string; base: string }, role: 'admin' | 'editor' | 'viewer') {
+export async function addMember(owner: { cookie: string; base: string }, role: 'admin' | 'manager' | 'sales' | 'stock' | 'viewer') {
   const email = `${uid()}@example.com`;
   const cookie = await login(email);
   const inv = await call(owner.cookie, 'POST', `${owner.base}/invitations`, { email, role });

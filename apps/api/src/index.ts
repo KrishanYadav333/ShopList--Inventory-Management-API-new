@@ -2,8 +2,7 @@ import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { z, type ZodType } from 'zod';
 import {
-  PERMISSIONS,
-  ROLE_RANK,
+  can,
   countInput,
   apiKeyInput,
   importRequest,
@@ -213,8 +212,8 @@ const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindin
     if (!['products', 'locations', 'stock', 'orders', 'dashboard'].includes(area)) throw new AppError(403, 'forbidden', 'API keys can only be used for inventory.');
     const live = await c.env.DB.prepare(`SELECT 1 AS x FROM organizations WHERE id = ? AND deleted_at IS NULL AND suspended_at IS NULL`).bind(orgId).first();
     if (!live) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
-    const granted: Role = key.scopes.includes('inventory:write') ? 'editor' : 'viewer';
-    if (permission === 'org:manage' || permission === 'org:owner' || ROLE_RANK[granted] < ROLE_RANK[PERMISSIONS[permission]]) {
+    const granted: Role = key.scopes.includes('inventory:write') ? 'manager' : 'viewer';
+    if (permission === 'org:manage' || permission === 'org:owner' || !can(granted, permission)) {
       throw new AppError(403, 'forbidden', 'This API key does not have permission to do that.');
     }
     c.set('org', { id: orgId, role: granted });
@@ -227,8 +226,7 @@ const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindin
     .first<{ role: Role }>();
   // Not a member: 404, so organization ids cannot be probed.
   if (!row) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
-  const needed = PERMISSIONS[permission];
-  if (ROLE_RANK[row.role] < ROLE_RANK[needed]) throw new AppError(403, 'forbidden', `Your role (${row.role}) cannot do this. Ask an admin for access.`);
+  if (!can(row.role, permission)) throw new AppError(403, 'forbidden', `Your role (${row.role}) cannot do this. Ask your admin for access.`);
   c.set('org', { id: orgId, role: row.role });
   return next();
 };
@@ -450,16 +448,16 @@ route('get', '/me', 'user', async (c) => {
 route('post', '/orgs', 'user', async (c) => {
   const user = c.get('user');
   const { data } = await readJson(c, orgInput);
-  const owned = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM memberships WHERE user_id = ? AND role = 'owner'`).bind(user.id).first<{ n: number }>();
-  if ((owned?.n ?? 0) >= 5) throw new AppError(409, 'org_limit', 'You can own at most 5 organizations.');
+  const owned = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM memberships WHERE user_id = ? AND role = 'admin'`).bind(user.id).first<{ n: number }>();
+  if ((owned?.n ?? 0) >= 5) throw new AppError(409, 'org_limit', 'You can administer at most 5 organizations.');
   const id = newId('org');
   const slug = `${data.name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'org'}-${randomToken(3).toLowerCase().replace(/[^a-z0-9]/g, 'x')}`;
   const now = nowIso();
   await c.env.DB.batch([
     c.env.DB.prepare(`INSERT INTO organizations(id, name, slug, created_at) VALUES (?, ?, ?, ?)`).bind(id, data.name, slug, now),
-    c.env.DB.prepare(`INSERT INTO memberships(org_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)`).bind(id, user.id, now),
+    c.env.DB.prepare(`INSERT INTO memberships(org_id, user_id, role, created_at) VALUES (?, ?, 'admin', ?)`).bind(id, user.id, now),
   ]);
-  return c.json({ organization: { id, name: data.name, slug, currency: 'USD', role: 'owner' } }, 201);
+  return c.json({ organization: { id, name: data.name, slug, currency: 'USD', role: 'admin' } }, 201);
 });
 
 route('get', '/orgs/:orgId', 'inventory:read', async (c) => {
@@ -486,33 +484,39 @@ route('get', '/orgs/:orgId/members', 'inventory:read', async (c) => {
   return c.json({ data: results });
 });
 
-async function ownerCount(c: Ctx): Promise<number> {
-  return (await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM memberships WHERE org_id = ? AND role = 'owner'`).bind(c.get('org').id).first<{ n: number }>())?.n ?? 0;
+async function adminCount(c: Ctx): Promise<number> {
+  return (await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM memberships WHERE org_id = ? AND role = 'admin'`).bind(c.get('org').id).first<{ n: number }>())?.n ?? 0;
+}
+
+/** One admin per organization is the rule. A second one is allowed only when the caller says so explicitly. */
+async function guardSecondAdmin(c: Ctx, role: Role, confirmed: boolean | undefined, exceptUserId?: string): Promise<void> {
+  if (role !== 'admin' || confirmed) return;
+  const n = (await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM memberships WHERE org_id = ? AND role = 'admin' AND user_id <> ?`).bind(c.get('org').id, exceptUserId ?? '').first<{ n: number }>())?.n ?? 0;
+  if (n > 0) throw new AppError(409, 'second_admin', 'This organization already has an admin. An organization normally has one. Confirm to add another.');
 }
 
 route('patch', '/orgs/:orgId/members/:userId', 'org:manage', async (c) => {
   const { data } = await readJson(c, memberPatch);
-  const actor = c.get('org').role;
-  const target = await c.env.DB.prepare(`SELECT role FROM memberships WHERE org_id = ? AND user_id = ?`).bind(c.get('org').id, c.req.param('userId')).first<{ role: Role }>();
+  const userId = c.req.param('userId') ?? '';
+  const target = await c.env.DB.prepare(`SELECT role FROM memberships WHERE org_id = ? AND user_id = ?`).bind(c.get('org').id, userId).first<{ role: Role }>();
   if (!target) throw new AppError(404, 'member_not_found', 'That person is not a member.');
-  // Only an owner may grant or change the owner role.
-  if ((data.role === 'owner' || target.role === 'owner') && actor !== 'owner') throw new AppError(403, 'forbidden', 'Only an owner can change owner roles.');
-  if (target.role === 'owner' && data.role !== 'owner' && (await ownerCount(c)) <= 1) throw new AppError(409, 'last_owner', 'An organization needs at least one owner.');
-  await c.env.DB.prepare(`UPDATE memberships SET role = ? WHERE org_id = ? AND user_id = ?`).bind(data.role, c.get('org').id, c.req.param('userId')).run();
+  if (target.role === 'admin' && data.role !== 'admin' && (await adminCount(c)) <= 1) throw new AppError(409, 'last_admin', 'An organization needs at least one admin. Make someone else admin first.');
+  await guardSecondAdmin(c, data.role, data.confirmSecondAdmin, userId);
+  await c.env.DB.prepare(`UPDATE memberships SET role = ? WHERE org_id = ? AND user_id = ?`).bind(data.role, c.get('org').id, userId).run();
   return c.json({ ok: true });
 });
 
 route('delete', '/orgs/:orgId/members/:userId', 'org:manage', async (c) => {
   const target = await c.env.DB.prepare(`SELECT role FROM memberships WHERE org_id = ? AND user_id = ?`).bind(c.get('org').id, c.req.param('userId')).first<{ role: Role }>();
   if (!target) throw new AppError(404, 'member_not_found', 'That person is not a member.');
-  if (target.role === 'owner' && c.get('org').role !== 'owner') throw new AppError(403, 'forbidden', 'Only an owner can remove an owner.');
-  if (target.role === 'owner' && (await ownerCount(c)) <= 1) throw new AppError(409, 'last_owner', 'An organization needs at least one owner.');
+  if (target.role === 'admin' && (await adminCount(c)) <= 1) throw new AppError(409, 'last_admin', 'An organization needs at least one admin.');
   await c.env.DB.prepare(`DELETE FROM memberships WHERE org_id = ? AND user_id = ?`).bind(c.get('org').id, c.req.param('userId')).run();
   return c.json({ ok: true });
 });
 
 route('post', '/orgs/:orgId/invitations', 'org:manage', async (c) => {
   const { data } = await readJson(c, inviteInput);
+  await guardSecondAdmin(c, data.role, data.confirmSecondAdmin);
   const token = randomToken(32);
   await c.env.DB.prepare(`INSERT INTO invitations(token_hash, org_id, email, role, invited_by, expires_at) VALUES (?, ?, ?, ?, ?, ?)`)
     .bind(await sha256Hex(token), c.get('org').id, data.email, data.role, c.get('user').id, new Date(Date.now() + 7 * 86400_000).toISOString())
@@ -625,14 +629,14 @@ route('get', '/orgs/:orgId/dashboard', 'inventory:read', async (c) => c.json(awa
 
 route('get', '/orgs/:orgId/products', 'inventory:read', async (c) => c.json(await inventory(c).listProducts(parse(productListQuery, c.req.query()))));
 
-route('post', '/orgs/:orgId/products', 'inventory:write', async (c) => {
+route('post', '/orgs/:orgId/products', 'products:write', async (c) => {
   const { data, raw } = await readJson(c, productInput);
   const out = unwrap(await inventory(c).createProduct(caller(c), await idemFrom(c, raw), data));
   etag(c, out.body.product.version);
   return c.json(out.body, out.status as 201);
 });
 
-route('post', '/orgs/:orgId/products/import', 'inventory:write', async (c) => {
+route('post', '/orgs/:orgId/products/import', 'products:write', async (c) => {
   const { data, raw } = await readJson(c, importRequest);
   // Validate each row on its own so a bad row is reported without rejecting the batch.
   const valid: { index: number; row: ReturnType<typeof importRow.parse> }[] = [];
@@ -667,7 +671,7 @@ route('get', '/orgs/:orgId/products/:id', 'inventory:read', async (c) => {
   return c.json(r);
 });
 
-route('patch', '/orgs/:orgId/products/:id', 'inventory:write', async (c) => {
+route('patch', '/orgs/:orgId/products/:id', 'products:write', async (c) => {
   const version = ifMatch(c);
   const { data } = await readJson(c, productPatch);
   const out = unwrap(await inventory(c).updateProduct(caller(c), undefined, c.req.param('id') ?? '', version, data));
@@ -675,12 +679,12 @@ route('patch', '/orgs/:orgId/products/:id', 'inventory:write', async (c) => {
   return c.json(out.body, out.status as 200);
 });
 
-route('delete', '/orgs/:orgId/products/:id', 'inventory:write', async (c) => {
+route('delete', '/orgs/:orgId/products/:id', 'products:write', async (c) => {
   const out = unwrap(await inventory(c).deleteProduct(caller(c), c.req.param('id') ?? '', ifMatch(c)));
   return c.json(out.body, out.status as 200);
 });
 
-route('post', '/orgs/:orgId/products/:id/restore', 'inventory:write', async (c) => {
+route('post', '/orgs/:orgId/products/:id/restore', 'products:write', async (c) => {
   const out = unwrap(await inventory(c).restoreProduct(caller(c), c.req.param('id') ?? ''));
   return c.json(out.body, out.status as 200);
 });
@@ -698,19 +702,19 @@ route('delete', '/orgs/:orgId/locations/:id', 'org:manage', async (c) => {
   return c.json(out.body, out.status as 200);
 });
 
-route('post', '/orgs/:orgId/stock/movements', 'inventory:write', async (c) => {
+route('post', '/orgs/:orgId/stock/movements', 'stock:write', async (c) => {
   const { data, raw } = await readJson(c, movementInput);
   const out = unwrap(await inventory(c).addMovement(caller(c), await idemFrom(c, raw), data));
   return c.json(out.body, out.status as 201);
 });
 
-route('post', '/orgs/:orgId/stock/transfers', 'inventory:write', async (c) => {
+route('post', '/orgs/:orgId/stock/transfers', 'stock:write', async (c) => {
   const { data, raw } = await readJson(c, transferInput);
   const out = unwrap(await inventory(c).transfer(caller(c), await idemFrom(c, raw), data));
   return c.json(out.body, out.status as 201);
 });
 
-route('post', '/orgs/:orgId/stock/counts', 'inventory:write', async (c) => {
+route('post', '/orgs/:orgId/stock/counts', 'stock:write', async (c) => {
   const { data, raw } = await readJson(c, countInput);
   const out = unwrap(await inventory(c).count(caller(c), await idemFrom(c, raw), data));
   return c.json(out.body, out.status as 201);
@@ -720,7 +724,7 @@ route('post', '/orgs/:orgId/stock/counts', 'inventory:write', async (c) => {
 // -------------------------------------------------------------------- orders
 route('get', '/orgs/:orgId/orders', 'inventory:read', async (c) => c.json(await inventory(c).listOrders(parse(orderListQuery, c.req.query()))));
 
-route('post', '/orgs/:orgId/orders', 'inventory:write', async (c) => {
+route('post', '/orgs/:orgId/orders', 'orders:write', async (c) => {
   const { data, raw } = await readJson(c, orderInput);
   const out = unwrap(await inventory(c).createOrder(caller(c), await idemFrom(c, raw), data));
   etag(c, out.body.order.version);
@@ -733,7 +737,7 @@ route('get', '/orgs/:orgId/orders/:id', 'inventory:read', async (c) => {
   return c.json(r);
 });
 
-route('post', '/orgs/:orgId/orders/:id/paid', 'inventory:write', async (c) => {
+route('post', '/orgs/:orgId/orders/:id/paid', 'orders:write', async (c) => {
   const version = ifMatch(c);
   const { data } = await readJson(c, paidInput);
   const out = unwrap(await inventory(c).setOrderPaid(caller(c), c.req.param('id') ?? '', version, data.paid));
@@ -741,13 +745,13 @@ route('post', '/orgs/:orgId/orders/:id/paid', 'inventory:write', async (c) => {
   return c.json(out.body, out.status as 200);
 });
 
-route('post', '/orgs/:orgId/orders/:id/ship', 'inventory:write', async (c) => {
+route('post', '/orgs/:orgId/orders/:id/ship', 'orders:write', async (c) => {
   const out = unwrap(await inventory(c).shipOrder(caller(c), c.req.param('id') ?? '', ifMatch(c)));
   etag(c, out.body.order.version);
   return c.json(out.body, out.status as 200);
 });
 
-route('post', '/orgs/:orgId/orders/:id/cancel', 'inventory:write', async (c) => {
+route('post', '/orgs/:orgId/orders/:id/cancel', 'orders:write', async (c) => {
   const out = unwrap(await inventory(c).cancelOrder(caller(c), c.req.param('id') ?? '', ifMatch(c)));
   etag(c, out.body.order.version);
   return c.json(out.body, out.status as 200);

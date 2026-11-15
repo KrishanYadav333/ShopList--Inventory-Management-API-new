@@ -64,7 +64,7 @@ CREATE TABLE organizations (
 CREATE TABLE memberships (
   org_id        TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role          TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'editor', 'viewer')),
+  role          TEXT NOT NULL CHECK (role IN ('admin', 'manager', 'sales', 'stock', 'viewer')),
   created_at    TEXT NOT NULL,
   PRIMARY KEY (org_id, user_id)
 );
@@ -74,7 +74,7 @@ CREATE TABLE invitations (
   token_hash    TEXT PRIMARY KEY,
   org_id        TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   email         TEXT NOT NULL COLLATE NOCASE,
-  role          TEXT NOT NULL CHECK (role IN ('admin', 'editor', 'viewer')),
+  role          TEXT NOT NULL CHECK (role IN ('admin', 'manager', 'sales', 'stock', 'viewer')),
   invited_by    TEXT NOT NULL REFERENCES users(id),
   expires_at    TEXT NOT NULL,             -- 7 days
   accepted_at   TEXT

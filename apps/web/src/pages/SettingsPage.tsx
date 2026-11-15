@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ROLES, WEBHOOK_EVENTS, type Role } from '@shoplist/shared';
+import { ROLES, ROLE_LABELS, ROLE_SUMMARY, WEBHOOK_EVENTS, type Role } from '@shoplist/shared';
 import { api, ApiError } from '../api';
 import { useShell } from '../components/Shell';
 import { dateParts } from '../format';
@@ -71,13 +71,28 @@ export function SettingsPage() {
   const archive = useMutation({ mutationFn: (id: string) => api('DELETE', `/orgs/${org.id}/locations/${id}`), onSuccess: () => { refresh(); toast({ text: 'Location archived' }); }, onError: fail });
 
   const members = useQuery({ queryKey: ['org', org.id, 'members'], queryFn: () => api<{ data: Member[] }>('GET', `/orgs/${org.id}/members`).then((r) => r.data) });
-  const setRole = useMutation({ mutationFn: (v: { id: string; role: Role }) => api('PATCH', `/orgs/${org.id}/members/${v.id}`, { body: { role: v.role } }), onSuccess: refresh, onError: (e: ApiError) => { fail(e); refresh(); } });
+  const setRole = useMutation({
+    mutationFn: async (v: { id: string; role: Role }) => {
+      try { return await api('PATCH', `/orgs/${org.id}/members/${v.id}`, { body: { role: v.role } }); } catch (e) {
+        // An organization normally has one admin: ask before adding another.
+        if (e instanceof ApiError && e.code === 'second-admin' && confirm('This organization already has an admin. Make this person an admin too?')) return api('PATCH', `/orgs/${org.id}/members/${v.id}`, { body: { role: v.role, confirmSecondAdmin: true } });
+        throw e;
+      }
+    },
+    onSuccess: refresh,
+    onError: (e: ApiError) => { fail(e); refresh(); },
+  });
   const removeMember = useMutation({ mutationFn: (id: string) => api('DELETE', `/orgs/${org.id}/members/${id}`), onSuccess: () => { refresh(); toast({ text: 'Member removed' }); }, onError: fail });
-  const [invite, setInvite] = useState({ email: '', role: 'editor' });
+  const [invite, setInvite] = useState({ email: '', role: 'manager' });
   const [link, setLink] = useState('');
   const sendInvite = useMutation({
-    mutationFn: () => api<{ link: string }>('POST', `/orgs/${org.id}/invitations`, { body: invite }),
-    onSuccess: (r) => { setLink(r.link); setInvite({ email: '', role: 'editor' }); },
+    mutationFn: async () => {
+      try { return await api<{ link: string }>('POST', `/orgs/${org.id}/invitations`, { body: invite }); } catch (e) {
+        if (e instanceof ApiError && e.code === 'second-admin' && confirm('This organization already has an admin. Invite another admin?')) return api<{ link: string }>('POST', `/orgs/${org.id}/invitations`, { body: { ...invite, confirmSecondAdmin: true } });
+        throw e;
+      }
+    },
+    onSuccess: (r) => { setLink(r.link); setInvite({ email: '', role: 'manager' }); },
     onError: fail,
   });
 
@@ -151,9 +166,9 @@ export function SettingsPage() {
                 <span className="row">
                   {admin && m.id !== me.data?.user.id ? (
                     <select aria-label={`Role of ${m.name}`} value={m.role} onChange={(e) => setRole.mutate({ id: m.id, role: e.target.value as Role })}>
-                      {ROLES.filter((r) => org.role === 'owner' || r !== 'owner').map((r) => <option key={r} value={r}>{r}</option>)}
+                      {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
                     </select>
-                  ) : <span className="tag">{m.role}</span>}
+                  ) : <span className="tag">{ROLE_LABELS[m.role] ?? m.role}</span>}
                   {admin && m.id !== me.data?.user.id && <button className="btn btn-outline" onClick={() => removeMember.mutate(m.id)}>Remove</button>}
                 </span>
               </li>
@@ -164,14 +179,11 @@ export function SettingsPage() {
             <form className="inline-form" onSubmit={submit(() => sendInvite.mutate())}>
               <div className="field"><label htmlFor="i-email">Invite by email</label><input id="i-email" type="email" placeholder="teammate@example.com" value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} /></div>
               <div className="field narrow"><label htmlFor="i-role">Role</label>
-                <select id="i-role" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}><option value="viewer">viewer</option><option value="editor">editor</option><option value="admin">admin</option></select></div>
+                <select id="i-role" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}>{ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}</select></div>
               <button className="btn btn-primary" disabled={sendInvite.isPending || !invite.email}>Create link</button>
             </form>
             <ul className="hint role-help">
-              <li><strong>viewer</strong>: can look at products, stock, orders and history. Cannot change anything.</li>
-              <li><strong>editor</strong>: viewer, plus add and edit products, move stock, import, and manage orders.</li>
-              <li><strong>admin</strong>: editor, plus locations, members, invitations, API keys, webhooks and the activity log.</li>
-              <li><strong>owner</strong>: admin, plus delete the organization and manage owners.</li>
+              {ROLES.map((r) => <li key={r}><strong>{ROLE_LABELS[r]}</strong>: {ROLE_SUMMARY[r]}</li>)}
             </ul>
             <p className="hint">The person signs in with that email (Google or email code) and lands in this organization with the role you chose. The link is optional.</p>
             </>
@@ -322,7 +334,7 @@ export function SettingsPage() {
           </section>
         )}
 
-        {org.role === 'owner' && (
+        {org.role === 'admin' && (
           <section className="card danger">
             <h2>Danger zone</h2>
             <p>Deleting the organization hides it and all its data from everyone.</p>

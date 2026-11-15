@@ -20,7 +20,7 @@ Target: [OWASP ASVS 4.0](https://owasp.org/www-project-application-security-veri
 | **R**epudiation | "I never deleted that product" | Audit log of every change with actor, request id and field-level diff; no code path can edit it |
 | **I**nformation disclosure | User of org A reads org B's products | Separate Durable Object per org, chosen from the server-side membership, never from client input alone; cross-org ids return 404 |
 | **D**enial of service | Bot floods sign-in or the API burns the free daily quota | Turnstile on auth; per-IP, per-user and per-key rate limits; request size limits; page size caps; no unbounded queries |
-| **E**levation of privilege | Viewer calls an editor endpoint; editor makes themself owner | Every route declares its required permission; role changes need admin, owner changes need owner; the last owner cannot be removed |
+| **E**levation of privilege | Viewer calls a write endpoint; a manager makes themself admin | Every route declares its required permission; only the admin changes roles; a second admin needs explicit confirmation; the last admin cannot be removed |
 
 ## Authentication
 
@@ -91,20 +91,30 @@ The app cannot enforce a second factor for the GitHub door: enable a passkey or 
 
 ## Authorization
 
-Roles and permissions:
+Access is in three levels, the same idea as a clinic ERP.
 
-| Permission | viewer | editor | admin | owner |
-|---|:-:|:-:|:-:|:-:|
-| Read products, stock, ledger, dashboard | ✓ | ✓ | ✓ | ✓ |
-| Create, edit, delete products; move stock; reservations; imports | | ✓ | ✓ | ✓ |
-| Locations, members, invitations, API keys, webhooks, audit log | | | ✓ | ✓ |
-| Billing, delete org, transfer ownership, manage owners | | | | ✓ |
+| Level | Who | Scope |
+|---|---|---|
+| **Developer** (super admin) | You, the platform owner | The platform only: organizations, users, platform audit log. Cannot read any organization's inventory. Not a stored role; see "Two sign-in doors". |
+| **Admin** | The client business owner. One per organization | Everything in their own organization, plus team, invitations, locations, API keys, webhooks, the activity log and deleting the organization. |
+| **Staff roles** | People the admin invites, by job | Only what the job needs. The admin picks an existing role; nobody can redefine a role. |
+
+| Permission | viewer | sales | stock keeper | manager | admin |
+|---|:-:|:-:|:-:|:-:|:-:|
+| Read products, stock, orders, history, dashboard | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Create, edit, delete products; CSV import | | | | ✓ | ✓ |
+| Receive, adjust, transfer and count stock | | | ✓ | ✓ | ✓ |
+| Create, pay, ship and cancel orders | | ✓ | | ✓ | ✓ |
+| Locations, members, invitations, API keys, webhooks, activity log, organization name | | | | | ✓ |
+| Delete the organization | | | | | ✓ |
 
 Rules:
 
-- Each route declares one permission, such as `requires('stock:write')`. A test fails if any route lacks a declaration.
+- The permission table lives in one place (`ROLE_PERMISSIONS` in `packages/shared`). Each route declares exactly one permission, such as `requires('stock:write')`, and a test fails if any route lacks one. A test also walks every role through the routes and checks the expected 200 or 403.
+- **One admin per organization.** Inviting or promoting a second admin is refused (`second_admin`) unless the request says `confirmSecondAdmin: true`, which the screen asks for with a confirm box. The last admin cannot be demoted or removed.
 - The org id in the URL is checked against the caller's memberships in D1 **before** the Durable Object is touched. The Durable Object id is derived from that verified org id.
-- API keys are limited to their scopes and can never manage members, keys or webhooks.
+- API keys act as a manager for inventory (write scope) or a viewer (read scope), and can never manage members, keys or webhooks.
+- When someone signs in with a verified email that has a pending invitation, they join that organization with the invited role automatically.
 
 ## Web application security
 
@@ -146,7 +156,7 @@ Rules:
 
 | Test | When |
 |---|---|
-| Unit tests for every permission rule, including "viewer cannot write" for each route | Every commit |
+| Unit tests for every permission rule, including every role against every kind of route | Every commit |
 | Tenant isolation test: user of org A requests every org B endpoint and must get 404 | Every commit |
 | Concurrency test: 50 parallel `-1` movements on a stock of 50 end at exactly 0, never below | Every commit |
 | OWASP ZAP baseline scan against the preview deployment | Every pull request |

@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate, useOutletContext, useParams, useSearchPar
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { Icon } from '../icons';
-import { useDashboard, useLocations, useMe, canWrite, type OrgSummary } from '../queries';
+import { useDashboard, useLocations, useMe, canDo, type OrgSummary } from '../queries';
 import { AdjustDialog } from './AdjustDialog';
 import { OrderDialog } from './OrderDialog';
 import { CommandPalette } from './CommandPalette';
@@ -47,7 +47,7 @@ export function Shell() {
       const typing = /input|textarea|select/i.test((e.target as HTMLElement)?.tagName ?? '') || (e.target as HTMLElement)?.isContentEditable;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setDialog({ kind: 'palette' }); }
       else if (!typing && !e.metaKey && !e.ctrlKey && e.key === '/') { e.preventDefault(); document.querySelector<HTMLInputElement>('.search-input')?.focus(); }
-      else if (!typing && !e.metaKey && !e.ctrlKey && e.key === 'n' && org && canWrite(org.role)) { e.preventDefault(); setDialog({ kind: location.pathname.endsWith('/orders') ? 'order' : 'new' } as Dialog); }
+      else if (!typing && !e.metaKey && !e.ctrlKey && e.key === 'n' && org && canDo(org.role, location.pathname.endsWith('/orders') ? 'orders:write' : 'products:write')) { e.preventDefault(); setDialog({ kind: location.pathname.endsWith('/orders') ? 'order' : 'new' } as Dialog); }
     };
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);

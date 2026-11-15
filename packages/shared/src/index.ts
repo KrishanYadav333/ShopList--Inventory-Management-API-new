@@ -1,18 +1,37 @@
 import { z } from 'zod';
 
 // ---------------------------------------------------------------- roles
-export const ROLES = ['viewer', 'editor', 'admin', 'owner'] as const;
+export const ROLES = ['admin', 'manager', 'sales', 'stock', 'viewer'] as const;
 export type Role = (typeof ROLES)[number];
-export const ROLE_RANK: Record<Role, number> = { viewer: 1, editor: 2, admin: 3, owner: 4 };
 
-/** Minimum role needed for each permission. Every route declares exactly one. */
-export const PERMISSIONS = {
-  'inventory:read': 'viewer',
-  'inventory:write': 'editor',
-  'org:manage': 'admin',
-  'org:owner': 'owner',
-} as const satisfies Record<string, Role>;
-export type Permission = keyof typeof PERMISSIONS;
+/**
+ * Levels are by job, not a ladder (the same idea as a clinic ERP: platform developer, one admin who owns the
+ * business, then staff whose access depends on their job).
+ *   Developer (super admin): the platform only, set in configuration, never stored here.
+ *   admin: the business owner. One per organization. Everything in their own organization.
+ *   manager, sales, stock, viewer: staff roles the admin assigns. The admin chooses a role; nobody can redefine one.
+ */
+export const ROLE_LABELS: Record<Role, string> = { admin: 'Admin', manager: 'Manager', sales: 'Sales', stock: 'Stock keeper', viewer: 'Viewer' };
+
+export const ROLE_SUMMARY: Record<Role, string> = {
+  admin: 'The business owner. Everything, plus team, invitations, locations, API keys, webhooks, the activity log and deleting the organization.',
+  manager: 'Runs daily operations: products, prices, stock, orders and imports. No team or settings.',
+  sales: 'Works orders: create, take payment, ship, cancel. Can see products and stock. Cannot change products or stock.',
+  stock: 'Moves stock: receive, adjust, transfer, count. Can see products and orders. Cannot change products or orders.',
+  viewer: 'Read-only: products, stock, orders and history.',
+};
+
+export const PERMISSIONS = ['inventory:read', 'products:write', 'stock:write', 'orders:write', 'org:manage', 'org:owner'] as const;
+export type Permission = (typeof PERMISSIONS)[number];
+
+export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
+  viewer: ['inventory:read'],
+  sales: ['inventory:read', 'orders:write'],
+  stock: ['inventory:read', 'stock:write'],
+  manager: ['inventory:read', 'products:write', 'stock:write', 'orders:write'],
+  admin: PERMISSIONS,
+};
+export const can = (role: Role, permission: Permission): boolean => ROLE_PERMISSIONS[role].includes(permission);
 
 // ---------------------------------------------------------------- limits
 export const LIMITS = {
@@ -210,10 +229,10 @@ export const apiKeyInput = z
 export const orgInput = z.object({ name: text(100) }).strict();
 
 export const inviteInput = z
-  .object({ email: z.string().trim().toLowerCase().email().max(254), role: z.enum(['admin', 'editor', 'viewer']) })
+  .object({ email: z.string().trim().toLowerCase().email().max(254), role: z.enum(ROLES), confirmSecondAdmin: z.boolean().optional() })
   .strict();
 
-export const memberPatch = z.object({ role: z.enum(ROLES) }).strict();
+export const memberPatch = z.object({ role: z.enum(ROLES), confirmSecondAdmin: z.boolean().optional() }).strict();
 
 // ---------------------------------------------------------------- queries
 const limit = z.coerce.number().int().min(1).max(LIMITS.maxPageSize).default(LIMITS.defaultPageSize);

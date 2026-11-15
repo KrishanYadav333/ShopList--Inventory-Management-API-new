@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import type { Product } from '@shoplist/shared';
 import { api } from '../api';
-import { canWrite, type OrgSummary } from '../queries';
+import { canDo, type OrgSummary } from '../queries';
 import { Modal } from './Modal';
 
 interface Cmd { id: string; label: string; hint?: string; run: () => void }
@@ -22,17 +22,15 @@ export function CommandPalette({ org, onClose, onNew, onAdjust, onEdit }: { org:
     { id: 'p', label: 'Go to Products', run: go('products') },
     { id: 'h', label: 'Go to Stock history', run: go('history') },
     { id: 's', label: 'Go to Settings', run: go('settings') },
-    ...(canWrite(org.role) ? [
-      { id: 'n', label: 'New product', hint: 'N', run: () => { onClose(); onNew(); } },
-      { id: 'a', label: 'Adjust stock', run: () => { onClose(); onAdjust(); } },
-    ] : []),
+    ...(canDo(org.role, 'products:write') ? [{ id: 'n', label: 'New product', hint: 'N', run: () => { onClose(); onNew(); } }] : []),
+    ...(canDo(org.role, 'stock:write') ? [{ id: 'a', label: 'Adjust stock', run: () => { onClose(); onAdjust(); } }] : []),
   ];
   const text = q.trim().toLowerCase();
   const cmds: Cmd[] = [
     ...base.filter((c) => !text || c.label.toLowerCase().includes(text)),
     ...(products.data?.data ?? []).flatMap((p): Cmd[] => [
       { id: `e-${p.id}`, label: `Open ${p.name}`, hint: p.sku, run: () => { onClose(); onEdit(p.id); } },
-      ...(canWrite(org.role) ? [{ id: `a-${p.id}`, label: `Adjust stock: ${p.name}`, hint: `${p.onHand} on hand`, run: () => { onClose(); onAdjust(p.id); } }] : []),
+      ...(canDo(org.role, 'stock:write') ? [{ id: `a-${p.id}`, label: `Adjust stock: ${p.name}`, hint: `${p.onHand} on hand`, run: () => { onClose(); onAdjust(p.id); } }] : []),
     ]),
   ];
   useEffect(() => setActive(0), [q]);

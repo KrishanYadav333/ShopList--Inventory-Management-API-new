@@ -72,18 +72,18 @@ describe('Clerk sign-in exchange', () => {
     const owner = await newOrg('Invited Co');
     const email = `${uid()}-invitee@example.com`;
     (profile.email_addresses as { email_address: string }[])[0].email_address = email;
-    await call(owner.cookie, 'POST', `${owner.base}/invitations`, { email: email.toUpperCase(), role: 'editor' });
+    await call(owner.cookie, 'POST', `${owner.base}/invitations`, { email: email.toUpperCase(), role: 'manager' });
     // Someone else's invitation and an expired one must not be applied.
-    await call(owner.cookie, 'POST', `${owner.base}/invitations`, { email: `other-${email}`, role: 'admin' });
+    await call(owner.cookie, 'POST', `${owner.base}/invitations`, { email: `other-${email}`, role: 'viewer' });
 
     const r = await exchange(await mint({ sub }));
     expect(r.status).toBe(200);
     const cookie = (r.headers.get('set-cookie') ?? '').match(/__Host-sl_session=[^;]+/)![0];
     const me = await call(cookie, 'GET', '/me');
     expect(me.body.organizations).toHaveLength(1);
-    expect(me.body.organizations[0]).toMatchObject({ name: 'Invited Co', role: 'editor' });
+    expect(me.body.organizations[0]).toMatchObject({ name: 'Invited Co', role: 'manager' });
     expect((await call(cookie, 'GET', `${owner.base}/products`)).status).toBe(200);
-    expect((await call(cookie, 'POST', `${owner.base}/locations`, { name: 'x', code: 'x' })).status).toBe(403); // editor, not admin
+    expect((await call(cookie, 'POST', `${owner.base}/locations`, { name: 'x', code: 'x' })).status).toBe(403); // manager, not admin
 
     // Signing in again changes nothing.
     await exchange(await mint({ sub }));
@@ -233,7 +233,7 @@ describe('invite-only access for customers', () => {
     const email = `${uid()}-client@example.com`;
     expect(await clerkAdmission(modeEnv('invite'), email)).toBe('not_invited');
 
-    const inv = await call(owner.cookie, 'POST', `${owner.base}/invitations`, { email, role: 'editor' });
+    const inv = await call(owner.cookie, 'POST', `${owner.base}/invitations`, { email, role: 'manager' });
     expect(inv.status).toBe(201);
     expect(await clerkAdmission(modeEnv('invite'), email)).toBe('allowed');
     expect(await clerkAdmission(modeEnv('invite'), email.toUpperCase())).toBe('allowed'); // emails compare case-insensitively

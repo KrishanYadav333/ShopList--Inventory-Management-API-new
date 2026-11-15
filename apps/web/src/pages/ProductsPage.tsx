@@ -7,7 +7,7 @@ import { ImportDialog } from '../components/ImportDialog';
 import { useShell } from '../components/Shell';
 import { avatarClass, csvCell, dateParts, money } from '../format';
 import { Icon } from '../icons';
-import { canWrite, useProducts, type ProductFilters } from '../queries';
+import { canDo, useProducts, type ProductFilters } from '../queries';
 import { useToast } from '../toast';
 import { useVirtualRows } from '../virtual';
 
@@ -28,7 +28,8 @@ export function ProductsPage() {
   const [text, setText] = useState(params.get('q') ?? '');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
-  const write = canWrite(org.role);
+  const editProducts = canDo(org.role, 'products:write');
+  const moveStock = canDo(org.role, 'stock:write');
 
   // Debounce typing into the URL so filtered views are shareable.
   useEffect(() => {
@@ -102,9 +103,9 @@ export function ProductsPage() {
             <input className="search-input" type="search" placeholder="Search name, SKU, barcode…" aria-label="Search products" value={text} onChange={(e) => setText(e.target.value)} />
             <Icon name="search" />
           </div>
-          {write && <button className="btn btn-primary" onClick={openNew}><Icon name="plus" size={14} /> New</button>}
-          {write && <button className="btn btn-ghost" onClick={() => openAdjust()}><Icon name="swap" size={14} /> Adjust</button>}
-          {write && <button className="btn btn-ghost" onClick={() => setImporting(true)}><Icon name="upload" size={14} /> Import</button>}
+          {editProducts && <button className="btn btn-primary" onClick={openNew}><Icon name="plus" size={14} /> New</button>}
+          {moveStock && <button className="btn btn-ghost" onClick={() => openAdjust()}><Icon name="swap" size={14} /> Adjust</button>}
+          {editProducts && <button className="btn btn-ghost" onClick={() => setImporting(true)}><Icon name="upload" size={14} /> Import</button>}
           <button className="btn btn-ghost" onClick={exportCsv} disabled={!rows.length}><Icon name="download" size={14} /> {selected.size ? `Export ${selected.size}` : 'Export'}</button>
         </div>
       </header>
@@ -121,7 +122,7 @@ export function ProductsPage() {
               <><h2>No products match{filters.q ? ` “${filters.q}”` : ' these filters'}</h2><p>Try a different search or clear the filters.</p><button className="btn btn-primary" onClick={() => { setText(''); setParams({}, { replace: true }); }}>Clear filters</button></>
             ) : (
               <><h2>Your inventory is empty</h2><p>Add your first product, or load a few samples to explore.</p>
-                {write && <div className="state-actions"><button className="btn btn-primary" onClick={openNew}><Icon name="plus" size={14} /> New product</button><button className="btn btn-outline" onClick={() => seed.mutate()} disabled={seed.isPending}>{seed.isPending ? 'Adding…' : 'Load sample data'}</button></div>}</>
+                {editProducts && <div className="state-actions"><button className="btn btn-primary" onClick={openNew}><Icon name="plus" size={14} /> New product</button><button className="btn btn-outline" onClick={() => seed.mutate()} disabled={seed.isPending}>{seed.isPending ? 'Adding…' : 'Load sample data'}</button></div>}</>
             )}
           </div>
         ) : (
@@ -158,9 +159,9 @@ export function ProductsPage() {
                       <td className="num"><div className="qty">{p.onHand}</div>{p.reserved > 0 && <div className="time">{p.reserved} reserved</div>}</td>
                       <td className="num">{money(p.priceMinor, org.currency)}</td>
                       <td className="actions-col row-actions">
-                        {write && <button title="Adjust stock" aria-label={`Adjust stock of ${p.name}`} onClick={() => openAdjust(p.id)}><Icon name="swap" /></button>}
-                        {write && <button title="Edit" aria-label={`Edit ${p.name}`} onClick={() => openEdit(p.id)}><Icon name="pencil" /></button>}
-                        {write && <button title="Delete" aria-label={`Delete ${p.name}`} onClick={() => remove.mutate(p)}><Icon name="trash" /></button>}
+                        {moveStock && <button title="Adjust stock" aria-label={`Adjust stock of ${p.name}`} onClick={() => openAdjust(p.id)}><Icon name="swap" /></button>}
+                        {editProducts && <button title="Edit" aria-label={`Edit ${p.name}`} onClick={() => openEdit(p.id)}><Icon name="pencil" /></button>}
+                        {editProducts && <button title="Delete" aria-label={`Delete ${p.name}`} onClick={() => remove.mutate(p)}><Icon name="trash" /></button>}
                       </td>
                     </tr>
                   );

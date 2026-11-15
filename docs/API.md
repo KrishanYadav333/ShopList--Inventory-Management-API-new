@@ -65,10 +65,10 @@ All answer 404 to everyone else (401 when signed out). None returns inventory da
 
 | Method | Path | Role |
 |---|---|---|
-| POST | `/orgs` | Any signed-in user (becomes owner) |
-| GET / PATCH / DELETE | `/orgs/{orgId}` | viewer / admin / owner |
-| GET | `/orgs/{orgId}/members` | viewer |
-| PATCH / DELETE | `/orgs/{orgId}/members/{userId}` | admin (owners only by owner) |
+| POST | `/orgs` | Any signed-in user (becomes the organization's admin) |
+| GET / PATCH / DELETE | `/orgs/{orgId}` | member / admin / admin |
+| GET | `/orgs/{orgId}/members` | any member |
+| PATCH / DELETE | `/orgs/{orgId}/members/{userId}` | admin |
 | POST | `/orgs/{orgId}/invitations` | admin |
 | POST | `/invitations/{token}/accept` | Invitee |
 | GET / POST / DELETE | `/orgs/{orgId}/api-keys[/{id}]` | admin |
@@ -77,25 +77,25 @@ All answer 404 to everyone else (401 when signed out). None returns inventory da
 
 | Method | Path | Role | Notes |
 |---|---|---|---|
-| GET | `/orgs/{orgId}/products` | viewer | Paged; `q`, `location`, `stock=low\|out\|in`, `tag`, `sort` |
-| POST | `/orgs/{orgId}/products` | editor | Idempotency-Key required |
-| GET | `/orgs/{orgId}/products/{id}` | viewer | Returns `ETag` |
-| PATCH | `/orgs/{orgId}/products/{id}` | editor | `If-Match` required; partial update |
-| DELETE | `/orgs/{orgId}/products/{id}` | editor | Soft delete; `If-Match` required |
-| POST | `/orgs/{orgId}/products/{id}/restore` | editor | Undo a delete within 30 days |
-| GET | `/orgs/{orgId}/products/lookup?barcode=` | viewer | Exact barcode or SKU match, for scanners |
-| GET / POST / PATCH | `/orgs/{orgId}/locations[/{id}]` | viewer / admin | |
-| POST | `/orgs/{orgId}/stock/movements` | editor | Adjust stock; see below |
-| POST | `/orgs/{orgId}/stock/transfers` | editor | Move units between locations atomically |
-| POST | `/orgs/{orgId}/stock/counts` | editor | Submit a stock count; server writes the difference as a `count` movement |
-| GET | `/orgs/{orgId}/stock/movements` | viewer | Ledger, paged, filter by product, location, reason, date |
-| POST | `/orgs/{orgId}/reservations` | editor | Hold stock for an order, with expiry |
-| POST | `/orgs/{orgId}/reservations/{id}/commit` | editor | Converts the hold into a `sale` movement |
-| POST | `/orgs/{orgId}/reservations/{id}/release` | editor | Frees the hold |
-| GET | `/orgs/{orgId}/dashboard` | viewer | Counters, low-stock list, recent movements |
-| POST | `/orgs/{orgId}/imports` | editor | Upload CSV, returns a job id (async) |
-| GET | `/orgs/{orgId}/imports/{jobId}` | editor | Job status and per-row errors |
-| POST | `/orgs/{orgId}/exports` | viewer | Start CSV export; result is a short-lived R2 link |
+| GET | `/orgs/{orgId}/products` | any member | Paged; `q`, `location`, `stock=low\|out\|in`, `tag`, `sort` |
+| POST | `/orgs/{orgId}/products` | manager | Idempotency-Key required |
+| GET | `/orgs/{orgId}/products/{id}` | any member | Returns `ETag` |
+| PATCH | `/orgs/{orgId}/products/{id}` | manager | `If-Match` required; partial update |
+| DELETE | `/orgs/{orgId}/products/{id}` | manager | Soft delete; `If-Match` required |
+| POST | `/orgs/{orgId}/products/{id}/restore` | manager | Undo a delete within 30 days |
+| GET | `/orgs/{orgId}/products/lookup?barcode=` | any member | Exact barcode or SKU match, for scanners |
+| GET / POST / PATCH | `/orgs/{orgId}/locations[/{id}]` | any member / admin | |
+| POST | `/orgs/{orgId}/stock/movements` | stock keeper or manager | Adjust stock; see below |
+| POST | `/orgs/{orgId}/stock/transfers` | stock keeper or manager | Move units between locations atomically |
+| POST | `/orgs/{orgId}/stock/counts` | stock keeper or manager | Submit a stock count; server writes the difference as a `count` movement |
+| GET | `/orgs/{orgId}/stock/movements` | any member | Ledger, paged, filter by product, location, reason, date |
+| POST | `/orgs/{orgId}/reservations` | sales or manager | Hold stock for an order, with expiry |
+| POST | `/orgs/{orgId}/reservations/{id}/commit` | sales or manager | Converts the hold into a `sale` movement |
+| POST | `/orgs/{orgId}/reservations/{id}/release` | sales or manager | Frees the hold |
+| GET | `/orgs/{orgId}/dashboard` | any member | Counters, low-stock list, recent movements |
+| POST | `/orgs/{orgId}/imports` | manager | Upload CSV, returns a job id (async) |
+| GET | `/orgs/{orgId}/imports/{jobId}` | manager | Job status and per-row errors |
+| POST | `/orgs/{orgId}/exports` | any member | Start CSV export; result is a short-lived R2 link |
 | GET | `/orgs/{orgId}/audit` | admin | Audit log, paged |
 | GET / POST / DELETE | `/orgs/{orgId}/webhooks[/{id}]` | admin | Outbound webhook subscriptions |
 

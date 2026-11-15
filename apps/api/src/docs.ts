@@ -36,13 +36,13 @@ export const DOCS: Record<string, Doc> = {
   'POST /auth/passkeys/login/options': { tag: 'Sign-in', summary: 'Start a passkey sign-in (WebAuthn request options)' },
   'POST /auth/passkeys/login': { tag: 'Sign-in', summary: 'Finish a passkey sign-in and start a session' },
   'GET /me': { tag: 'Account', summary: 'The signed-in user and their organizations' },
-  'POST /orgs': { tag: 'Organizations', summary: 'Create an organization (the caller becomes its owner)', body: orgInput },
+  'POST /orgs': { tag: 'Organizations', summary: 'Create an organization (the caller becomes its admin)', body: orgInput },
   'GET /orgs/:orgId': { tag: 'Organizations', summary: 'Organization details' },
   'PATCH /orgs/:orgId': { tag: 'Organizations', summary: 'Rename the organization', body: orgInput },
-  'DELETE /orgs/:orgId': { tag: 'Organizations', summary: 'Delete the organization (owner only)' },
+  'DELETE /orgs/:orgId': { tag: 'Organizations', summary: 'Delete the organization (admin only)' },
   'GET /orgs/:orgId/members': { tag: 'Members', summary: 'List members' },
   'PATCH /orgs/:orgId/members/:userId': { tag: 'Members', summary: "Change a member's role", body: memberPatch },
-  'DELETE /orgs/:orgId/members/:userId': { tag: 'Members', summary: 'Remove a member. The last owner cannot be removed' },
+  'DELETE /orgs/:orgId/members/:userId': { tag: 'Members', summary: 'Remove a member. The last admin cannot be removed' },
   'POST /orgs/:orgId/invitations': { tag: 'Members', summary: 'Create a one-time invitation link', body: inviteInput },
   'POST /invitations/:token/accept': { tag: 'Members', summary: 'Accept an invitation (the signed-in email must match)' },
   'GET /orgs/:orgId/api-keys': { tag: 'API keys', summary: 'List API keys (never their secrets)' },
@@ -91,9 +91,11 @@ const ACCESS_TEXT: Record<string, string> = {
   user: 'Signed-in session (not API keys)',
   super: 'Super admin session only',
   'inventory:read': 'Viewer or above, or an API key with inventory:read',
-  'inventory:write': 'Editor or above, or an API key with inventory:write',
-  'org:manage': 'Admin or owner session (not API keys)',
-  'org:owner': 'Owner session only',
+  'products:write': 'Manager or admin, or an API key with inventory:write',
+  'stock:write': 'Manager, stock keeper or admin, or an API key with inventory:write',
+  'orders:write': 'Manager, sales or admin, or an API key with inventory:write',
+  'org:manage': 'Admin session (not API keys)',
+  'org:owner': 'Admin session only',
 };
 
 function schemaOf(s: ZodType): Record<string, unknown> {
@@ -132,7 +134,7 @@ export function buildOpenApi(routes: RouteInfo[], origin: string) {
       (op.parameters as unknown[]).push(...Object.entries(js.properties ?? {}).map(([name, schema]) => ({ name, in: 'query', required: !!js.required?.includes(name), schema })));
     }
     if (r.access === 'public') op.security = [];
-    else if (r.access === 'inventory:read' || r.access === 'inventory:write') op.security = [{ session: [] }, { apiKey: [] }];
+    else if (r.access.includes(':') && !r.access.startsWith('org:')) op.security = [{ session: [] }, { apiKey: [] }];
     else op.security = [{ session: [] }];
     (paths[oaPath] ??= {})[r.method.toLowerCase()] = op;
   }

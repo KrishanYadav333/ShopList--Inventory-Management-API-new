@@ -6,7 +6,7 @@ import { api, ApiError } from '../api';
 import { useShell } from '../components/Shell';
 import { dateParts, money } from '../format';
 import { Icon } from '../icons';
-import { canWrite, useOrders } from '../queries';
+import { canDo, useOrders } from '../queries';
 import { useToast } from '../toast';
 
 const LABEL: Record<OrderState, [string, string]> = {
@@ -29,7 +29,7 @@ export function OrdersPage() {
   const [text, setText] = useState(params.get('q') ?? '');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [printing, setPrinting] = useState<Order[] | null>(null);
-  const write = canWrite(org.role);
+  const write = canDo(org.role, 'orders:write');
   const state = (params.get('state') as OrderState | null) ?? undefined;
 
   useEffect(() => {
