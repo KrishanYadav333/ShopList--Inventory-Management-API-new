@@ -77,7 +77,7 @@ export const useMovements = (orgId: string, f: { productId?: string; locationId?
   });
 
 export const canDo = (role: Role, permission: Permission) => can(role, permission);
-export const canAdmin = (role: Role) => can(role, 'org:manage');
+export const canAdmin = (role: Role) => can(role, 'team:manage');
 
 export const useOrders = (orgId: string, f: { q?: string; state?: OrderState }) =>
   useInfiniteQuery({

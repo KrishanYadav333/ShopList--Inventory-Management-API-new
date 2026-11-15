@@ -2,6 +2,7 @@ import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { z, type ZodType } from 'zod';
 import {
+  SESSION_ONLY,
   can,
   countInput,
   apiKeyInput,
@@ -213,7 +214,7 @@ const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindin
     const live = await c.env.DB.prepare(`SELECT 1 AS x FROM organizations WHERE id = ? AND deleted_at IS NULL AND suspended_at IS NULL`).bind(orgId).first();
     if (!live) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
     const granted: Role = key.scopes.includes('inventory:write') ? 'manager' : 'viewer';
-    if (permission === 'org:manage' || permission === 'org:owner' || !can(granted, permission)) {
+    if (SESSION_ONLY.includes(permission) || !can(granted, permission)) {
       throw new AppError(403, 'forbidden', 'This API key does not have permission to do that.');
     }
     c.set('org', { id: orgId, role: granted });
@@ -237,15 +238,32 @@ export const ROUTES: { method: string; path: string; access: Access }[] = [];
 const api = new Hono<{ Bindings: Bindings; Variables: Vars }>();
 api.use('*', rateLimit, originCheck);
 
+const COST_FIELDS = new Set(['costMinor', 'inventoryValueMinor']);
+const stripCost = (v: unknown): unknown => {
+  if (Array.isArray(v)) return v.map(stripCost);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).filter(([k]) => !COST_FIELDS.has(k)).map(([k, x]) => [k, stripCost(x)]));
+  return v;
+};
+async function withoutCost(res: Response): Promise<Response> {
+  const text = await res.text();
+  let body: unknown;
+  try { body = JSON.parse(text); } catch { return new Response(text, res); }
+  const out = new Response(JSON.stringify(stripCost(body)), res);
+  out.headers.delete('content-length');
+  return out;
+}
+
 type Handler = (c: Ctx) => Response | Promise<Response>;
 function route(method: 'get' | 'post' | 'patch' | 'delete', path: string, access: Access, handler: Handler): void {
   ROUTES.push({ method: method.toUpperCase(), path, access });
   const guards: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }>[] =
-    access === 'public' ? [] : access === 'user' ? [requireUser] : access === 'super' ? [requireUser, requireSuper] : access === 'org:manage' || access === 'org:owner' ? [requireUser, orgAccess(access)] : [requireAuth, orgAccess(access)];
+    access === 'public' ? [] : access === 'user' ? [requireUser] : access === 'super' ? [requireUser, requireSuper] : SESSION_ONLY.includes(access as Permission) ? [requireUser, orgAccess(access as Permission)] : [requireAuth, orgAccess(access)];
   // After a successful write, move any recorded events to the delivery queue without delaying the response.
   const wrapped: Handler = async (c) => {
-    const res = await handler(c);
+    let res = await handler(c);
     const org = c.get('org');
+    // Roles without cost:read never receive cost or inventory value, in any response from any route.
+    if (org && !can(org.role, 'cost:read') && res.headers.get('content-type')?.includes('json')) res = await withoutCost(res);
     if (method !== 'get' && res.status < 400 && org) c.executionCtx.waitUntil(flushEvents(c.env, org.id).then(() => undefined, () => undefined));
     return res;
   };
@@ -465,13 +483,13 @@ route('get', '/orgs/:orgId', 'inventory:read', async (c) => {
   return c.json({ organization: { ...org, role: c.get('org').role } });
 });
 
-route('patch', '/orgs/:orgId', 'org:manage', async (c) => {
+route('patch', '/orgs/:orgId', 'settings:manage', async (c) => {
   const { data } = await readJson(c, orgInput);
   await c.env.DB.prepare(`UPDATE organizations SET name = ? WHERE id = ?`).bind(data.name, c.get('org').id).run();
   return c.json({ ok: true });
 });
 
-route('delete', '/orgs/:orgId', 'org:owner', async (c) => {
+route('delete', '/orgs/:orgId', 'org:delete', async (c) => {
   await c.env.DB.prepare(`UPDATE organizations SET deleted_at = ? WHERE id = ?`).bind(nowIso(), c.get('org').id).run();
   return c.json({ ok: true });
 });
@@ -495,7 +513,7 @@ async function guardSecondAdmin(c: Ctx, role: Role, confirmed: boolean | undefin
   if (n > 0) throw new AppError(409, 'second_admin', 'This organization already has an admin. An organization normally has one. Confirm to add another.');
 }
 
-route('patch', '/orgs/:orgId/members/:userId', 'org:manage', async (c) => {
+route('patch', '/orgs/:orgId/members/:userId', 'team:manage', async (c) => {
   const { data } = await readJson(c, memberPatch);
   const userId = c.req.param('userId') ?? '';
   const target = await c.env.DB.prepare(`SELECT role FROM memberships WHERE org_id = ? AND user_id = ?`).bind(c.get('org').id, userId).first<{ role: Role }>();
@@ -506,7 +524,7 @@ route('patch', '/orgs/:orgId/members/:userId', 'org:manage', async (c) => {
   return c.json({ ok: true });
 });
 
-route('delete', '/orgs/:orgId/members/:userId', 'org:manage', async (c) => {
+route('delete', '/orgs/:orgId/members/:userId', 'team:manage', async (c) => {
   const target = await c.env.DB.prepare(`SELECT role FROM memberships WHERE org_id = ? AND user_id = ?`).bind(c.get('org').id, c.req.param('userId')).first<{ role: Role }>();
   if (!target) throw new AppError(404, 'member_not_found', 'That person is not a member.');
   if (target.role === 'admin' && (await adminCount(c)) <= 1) throw new AppError(409, 'last_admin', 'An organization needs at least one admin.');
@@ -514,7 +532,7 @@ route('delete', '/orgs/:orgId/members/:userId', 'org:manage', async (c) => {
   return c.json({ ok: true });
 });
 
-route('post', '/orgs/:orgId/invitations', 'org:manage', async (c) => {
+route('post', '/orgs/:orgId/invitations', 'team:manage', async (c) => {
   const { data } = await readJson(c, inviteInput);
   await guardSecondAdmin(c, data.role, data.confirmSecondAdmin);
   const token = randomToken(32);
@@ -541,7 +559,7 @@ route('post', '/invitations/:token/accept', 'user', async (c) => {
 
 
 // ------------------------------------------------------------------ API keys
-route('get', '/orgs/:orgId/api-keys', 'org:manage', async (c) => {
+route('get', '/orgs/:orgId/api-keys', 'settings:manage', async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT id, name, prefix, scopes, created_at AS createdAt, last_used_at AS lastUsedAt, expires_at AS expiresAt, revoked_at AS revokedAt
        FROM api_keys WHERE org_id = ? ORDER BY created_at DESC`,
@@ -549,7 +567,7 @@ route('get', '/orgs/:orgId/api-keys', 'org:manage', async (c) => {
   return c.json({ data: results.map((r) => ({ ...r, scopes: JSON.parse(r.scopes) as string[] })) });
 });
 
-route('post', '/orgs/:orgId/api-keys', 'org:manage', async (c) => {
+route('post', '/orgs/:orgId/api-keys', 'settings:manage', async (c) => {
   const { data } = await readJson(c, apiKeyInput);
   const count = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM api_keys WHERE org_id = ? AND revoked_at IS NULL`).bind(c.get('org').id).first<{ n: number }>();
   if ((count?.n ?? 0) >= 20) throw new AppError(409, 'key_limit', 'An organization can have at most 20 active API keys. Revoke one first.');
@@ -563,7 +581,7 @@ route('post', '/orgs/:orgId/api-keys', 'org:manage', async (c) => {
   return c.json({ id, name: data.name, prefix: secret.slice(0, 12), scopes: data.scopes, key: secret }, 201);
 });
 
-route('delete', '/orgs/:orgId/api-keys/:id', 'org:manage', async (c) => {
+route('delete', '/orgs/:orgId/api-keys/:id', 'settings:manage', async (c) => {
   const res = await c.env.DB.prepare(`UPDATE api_keys SET revoked_at = ? WHERE id = ? AND org_id = ? AND revoked_at IS NULL`).bind(nowIso(), c.req.param('id') ?? '', c.get('org').id).run();
   if (!res.meta.changes) throw new AppError(404, 'key_not_found', 'That key does not exist or is already revoked.');
   return c.json({ ok: true });
@@ -571,7 +589,7 @@ route('delete', '/orgs/:orgId/api-keys/:id', 'org:manage', async (c) => {
 
 
 // ------------------------------------------------------------------ webhooks
-route('get', '/orgs/:orgId/webhooks', 'org:manage', async (c) => {
+route('get', '/orgs/:orgId/webhooks', 'settings:manage', async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT w.id, w.url, w.events, w.active, w.created_at AS createdAt, substr(w.secret, 1, 10) AS secretPrefix,
             (SELECT d.status FROM webhook_deliveries d WHERE d.webhook_id = w.id ORDER BY d.created_at DESC, d.id DESC LIMIT 1) AS lastStatus,
@@ -581,7 +599,7 @@ route('get', '/orgs/:orgId/webhooks', 'org:manage', async (c) => {
   return c.json({ data: results.map((r) => ({ ...r, events: JSON.parse(r.events) as string[], active: r.active === 1 })) });
 });
 
-route('post', '/orgs/:orgId/webhooks', 'org:manage', async (c) => {
+route('post', '/orgs/:orgId/webhooks', 'settings:manage', async (c) => {
   const { data } = await readJson(c, webhookInput);
   const problem = checkWebhookUrl(data.url);
   if (problem) throw new AppError(400, 'invalid_webhook_url', problem, { errors: [{ field: 'url', code: 'invalid_url', message: problem }] });
@@ -598,7 +616,7 @@ route('post', '/orgs/:orgId/webhooks', 'org:manage', async (c) => {
   return c.json({ id, url: data.url, events: data.events, secret }, 201);
 });
 
-route('delete', '/orgs/:orgId/webhooks/:id', 'org:manage', async (c) => {
+route('delete', '/orgs/:orgId/webhooks/:id', 'settings:manage', async (c) => {
   const orgId = c.get('org').id;
   const res = await c.env.DB.prepare(`DELETE FROM webhooks WHERE id = ? AND org_id = ?`).bind(c.req.param('id') ?? '', orgId).run();
   if (!res.meta.changes) throw new AppError(404, 'webhook_not_found', 'That webhook does not exist.');
@@ -608,14 +626,14 @@ route('delete', '/orgs/:orgId/webhooks/:id', 'org:manage', async (c) => {
   return c.json({ ok: true });
 });
 
-route('post', '/orgs/:orgId/webhooks/:id/test', 'org:manage', async (c) => {
+route('post', '/orgs/:orgId/webhooks/:id/test', 'settings:manage', async (c) => {
   const row = await c.env.DB.prepare(`SELECT id FROM webhooks WHERE id = ? AND org_id = ?`).bind(c.req.param('id') ?? '', c.get('org').id).first();
   if (!row) throw new AppError(404, 'webhook_not_found', 'That webhook does not exist.');
   await sendTestEvent(c.env, c.get('org').id, c.req.param('id') ?? '');
   return c.json({ queued: true }, 202);
 });
 
-route('get', '/orgs/:orgId/webhooks/:id/deliveries', 'org:manage', async (c) => {
+route('get', '/orgs/:orgId/webhooks/:id/deliveries', 'settings:manage', async (c) => {
   const row = await c.env.DB.prepare(`SELECT id FROM webhooks WHERE id = ? AND org_id = ?`).bind(c.req.param('id') ?? '', c.get('org').id).first();
   if (!row) throw new AppError(404, 'webhook_not_found', 'That webhook does not exist.');
   const { results } = await c.env.DB.prepare(
@@ -691,13 +709,13 @@ route('post', '/orgs/:orgId/products/:id/restore', 'products:write', async (c) =
 
 route('get', '/orgs/:orgId/locations', 'inventory:read', async (c) => c.json({ data: await inventory(c).listLocations() }));
 
-route('post', '/orgs/:orgId/locations', 'org:manage', async (c) => {
+route('post', '/orgs/:orgId/locations', 'settings:manage', async (c) => {
   const { data } = await readJson(c, locationInput);
   const out = unwrap(await inventory(c).createLocation(caller(c), data));
   return c.json(out.body, out.status as 201);
 });
 
-route('delete', '/orgs/:orgId/locations/:id', 'org:manage', async (c) => {
+route('delete', '/orgs/:orgId/locations/:id', 'settings:manage', async (c) => {
   const out = unwrap(await inventory(c).archiveLocation(caller(c), c.req.param('id') ?? ''));
   return c.json(out.body, out.status as 200);
 });
@@ -759,7 +777,7 @@ route('post', '/orgs/:orgId/orders/:id/cancel', 'orders:write', async (c) => {
 
 route('get', '/orgs/:orgId/stock/movements', 'inventory:read', async (c) => c.json(await inventory(c).listMovements(parse(movementListQuery, c.req.query()))));
 
-route('get', '/orgs/:orgId/audit', 'org:manage', async (c) => c.json(await inventory(c).listAudit(parse(pageQuery, c.req.query()))));
+route('get', '/orgs/:orgId/audit', 'audit:read', async (c) => c.json(await inventory(c).listAudit(parse(pageQuery, c.req.query()))));
 
 
 // ------------------------------------------------------- platform administration

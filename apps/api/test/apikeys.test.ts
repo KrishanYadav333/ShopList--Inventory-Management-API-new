@@ -54,7 +54,7 @@ describe('creating and managing keys', () => {
     const org = await newOrg();
     expect((await call(org.cookie, 'POST', `${org.base}/api-keys`, { name: '', scopes: ['inventory:read'] })).status).toBe(400);
     expect((await call(org.cookie, 'POST', `${org.base}/api-keys`, { name: 'x', scopes: [] })).status).toBe(400);
-    expect((await call(org.cookie, 'POST', `${org.base}/api-keys`, { name: 'x', scopes: ['org:manage'] })).status).toBe(400);
+    expect((await call(org.cookie, 'POST', `${org.base}/api-keys`, { name: 'x', scopes: ['team:manage'] })).status).toBe(400);
     expect((await call(org.cookie, 'POST', `${org.base}/api-keys`, { name: 'x', scopes: ['inventory:read'], expiresInDays: 9999 })).status).toBe(400);
     for (let i = 0; i < 20; i++) await makeKey(org, ['inventory:read']);
     expect((await call(org.cookie, 'POST', `${org.base}/api-keys`, { name: 'one too many', scopes: ['inventory:read'] })).status).toBe(409);

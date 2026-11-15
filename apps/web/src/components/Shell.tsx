@@ -158,7 +158,7 @@ export function Shell() {
             </div>
           </div>
 
-          {d && (
+          {d && d.inventoryValueMinor != null && (
             <div className="filter-section">
               <h3>Inventory value</h3>
               <div className="side-value">{new Intl.NumberFormat(undefined, { style: 'currency', currency: org.currency }).format(d.inventoryValueMinor / 100)}</div>

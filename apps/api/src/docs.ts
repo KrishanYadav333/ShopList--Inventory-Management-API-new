@@ -94,8 +94,11 @@ const ACCESS_TEXT: Record<string, string> = {
   'products:write': 'Manager or admin, or an API key with inventory:write',
   'stock:write': 'Manager, stock keeper or admin, or an API key with inventory:write',
   'orders:write': 'Manager, sales or admin, or an API key with inventory:write',
-  'org:manage': 'Admin session (not API keys)',
-  'org:owner': 'Admin session only',
+  'cost:read': 'Manager or admin (cost prices)',
+  'team:manage': 'Admin session (not API keys)',
+  'settings:manage': 'Admin session (not API keys)',
+  'audit:read': 'Admin session (not API keys)',
+  'org:delete': 'Admin session only',
 };
 
 function schemaOf(s: ZodType): Record<string, unknown> {
@@ -134,7 +137,7 @@ export function buildOpenApi(routes: RouteInfo[], origin: string) {
       (op.parameters as unknown[]).push(...Object.entries(js.properties ?? {}).map(([name, schema]) => ({ name, in: 'query', required: !!js.required?.includes(name), schema })));
     }
     if (r.access === 'public') op.security = [];
-    else if (r.access.includes(':') && !r.access.startsWith('org:')) op.security = [{ session: [] }, { apiKey: [] }];
+    else if (r.access.includes(':') && !['team:manage', 'settings:manage', 'audit:read', 'org:delete'].includes(r.access)) op.security = [{ session: [] }, { apiKey: [] }];
     else op.security = [{ session: [] }];
     (paths[oaPath] ??= {})[r.method.toLowerCase()] = op;
   }

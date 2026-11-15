@@ -21,14 +21,16 @@ export const ROLE_SUMMARY: Record<Role, string> = {
   viewer: 'Read-only: products, stock, orders and history.',
 };
 
-export const PERMISSIONS = ['inventory:read', 'products:write', 'stock:write', 'orders:write', 'org:manage', 'org:owner'] as const;
+export const PERMISSIONS = ['inventory:read', 'cost:read', 'products:write', 'stock:write', 'orders:write', 'team:manage', 'settings:manage', 'audit:read', 'org:delete'] as const;
 export type Permission = (typeof PERMISSIONS)[number];
+/** Never available to an API key, whatever its scopes: these need a signed-in person. */
+export const SESSION_ONLY: readonly Permission[] = ['team:manage', 'settings:manage', 'audit:read', 'org:delete'];
 
 export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   viewer: ['inventory:read'],
   sales: ['inventory:read', 'orders:write'],
   stock: ['inventory:read', 'stock:write'],
-  manager: ['inventory:read', 'products:write', 'stock:write', 'orders:write'],
+  manager: ['inventory:read', 'cost:read', 'products:write', 'stock:write', 'orders:write'],
   admin: PERMISSIONS,
 };
 export const can = (role: Role, permission: Permission): boolean => ROLE_PERMISSIONS[role].includes(permission);
