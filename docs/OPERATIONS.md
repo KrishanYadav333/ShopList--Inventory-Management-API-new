@@ -156,7 +156,9 @@ Every response includes `X-Request-Id`, which the UI shows on errors so a user r
 | Each org's inventory | Nightly export of every object to R2 as JSON Lines by a cron-driven Queue job, 30 days kept | 24 hours | Under 1 hour per org |
 | Ledger | The ledger is itself the history; any stock level can be rebuilt from it | — | — |
 
-A restore is rehearsed quarterly into the preview environment and the result recorded.
+**Status:** the nightly R2 exports above are a design, not built. R2 needs a bucket and a payment method on the Cloudflare account, which is your decision. What exists today: D1 Time Travel for the control plane, Cloudflare's point-in-time recovery for SQLite Durable Objects, and the products table's CSV export in the app. Until the R2 job exists, export your products as CSV from the Products page before any risky change, and re-import them with CSV import.
+
+A restore is rehearsed quarterly into the preview environment and the result recorded. No rehearsal has been done yet.
 
 ## Runbooks
 
@@ -214,3 +216,19 @@ v1 (`shoplist.technology1.workers.dev`) is a single shared list. v2 is multi-ten
 ## Accessibility and performance checks
 
 Run against a local server with `DEV_AUTH=true`, never production. The audit tools are not repository dependencies; install `axe-core`, `puppeteer-core` and `lighthouse` in a scratch folder. Pages checked: `/login`, `/owner`, orders, products, history, settings, at 1280 px and 390 px. Fix every serious or critical axe finding before release.
+
+
+## Measured on a local server (2026-11)
+
+`node apps/api/scripts/loadtest.mjs` and `node apps/api/scripts/import-check.mjs` against `wrangler dev`:
+
+| Check | Result |
+|---|---|
+| 400 parallel sales against 10 in stock | exactly 10 sold, 390 refused, 0 left |
+| 100 identical requests with one idempotency key | 1 movement |
+| Reads, 20 parallel (list, search, filter, dashboard) | p95 57–68 ms, 340–430 requests/s |
+| Writes, 20 parallel | p95 75 ms |
+| Dashboard counters vs recomputed from the ledger | equal |
+| 20,000-row CSV-style import (4 parallel batches of 100) | 51 s, 19,997 created, 3 invalid rows reported |
+
+These are local numbers, not the deployed Workers free plan under sustained load.

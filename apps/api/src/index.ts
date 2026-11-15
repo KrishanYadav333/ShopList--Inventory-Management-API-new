@@ -403,6 +403,32 @@ route('post', '/auth/passkeys/login', 'public', async (c) => {
   return c.json({ ok: true });
 });
 
+// ------------------------------------------------------------------ my sessions
+/** The id shown to the client is a prefix of the stored hash, never anything usable as a token. */
+const SID = 16;
+
+route('get', '/auth/sessions', 'user', async (c) => {
+  const current = await sha256Hex(readSessionCookie(c) ?? '');
+  const { results } = await c.env.DB.prepare(`SELECT token_hash, created_at, last_seen_at, user_agent, ip_country, provider FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY last_seen_at DESC`)
+    .bind(c.get('user').id, nowIso())
+    .all<{ token_hash: string; created_at: string; last_seen_at: string; user_agent: string | null; ip_country: string | null; provider: string }>();
+  return c.json({ data: results.map((r) => ({ id: r.token_hash.slice(0, SID), current: r.token_hash === current, createdAt: r.created_at, lastSeenAt: r.last_seen_at, userAgent: r.user_agent, country: r.ip_country, via: r.provider })) });
+});
+
+route('post', '/auth/sessions/revoke-others', 'user', async (c) => {
+  const current = await sha256Hex(readSessionCookie(c) ?? '');
+  const r = await c.env.DB.prepare(`DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?`).bind(c.get('user').id, current).run();
+  return c.json({ revoked: r.meta.changes ?? 0 });
+});
+
+route('delete', '/auth/sessions/:id', 'user', async (c) => {
+  const id = c.req.param('id') ?? '';
+  if (!/^[0-9a-f]{16}$/.test(id)) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  const r = await c.env.DB.prepare(`DELETE FROM sessions WHERE user_id = ? AND substr(token_hash, 1, ?) = ?`).bind(c.get('user').id, SID, id).run();
+  if (!r.meta.changes) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  return c.json({ ok: true });
+});
+
 route('post', '/auth/logout', 'user', async (c) => {
   await destroySession(c.env, readSessionCookie(c));
   clearCookie(c, SESSION_COOKIE);

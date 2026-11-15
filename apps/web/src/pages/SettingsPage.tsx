@@ -34,6 +34,12 @@ export function SettingsPage() {
   });
   const removePk = useMutation({ mutationFn: (id: string) => api('DELETE', `/auth/passkeys/${id}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['passkeys'] }); toast({ text: 'Passkey removed' }); }, onError: fail });
 
+  interface Sess { id: string; current: boolean; lastSeenAt: string; userAgent: string | null; country: string | null; via: string }
+  const sessions = useQuery({ queryKey: ['sessions'], queryFn: () => api<{ data: Sess[] }>('GET', '/auth/sessions') });
+  const revoke = useMutation({ mutationFn: (id: string) => api('DELETE', `/auth/sessions/${id}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['sessions'] }); toast({ text: 'Signed out' }); }, onError: fail });
+  const revokeOthers = useMutation({ mutationFn: () => api('POST', '/auth/sessions/revoke-others', { body: {} }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['sessions'] }); toast({ text: 'Signed out everywhere else' }); }, onError: fail });
+  const device = (ua: string | null) => (ua ? `${/iPhone|iPad|Android/.test(ua) ? 'Phone or tablet' : /Mac|Windows|Linux/.test(ua) ? 'Computer' : 'Device'} · ${/Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Browser'}` : 'Unknown device');
+
   const locations = useLocations(org.id);
   const [loc, setLoc] = useState({ name: '', code: '' });
   const addLoc = useMutation({ mutationFn: () => api('POST', `/orgs/${org.id}/locations`, { body: loc }), onSuccess: () => { setLoc({ name: '', code: '' }); refresh(); toast({ kind: 'success', text: 'Location added' }); }, onError: fail });
@@ -226,6 +232,21 @@ export function SettingsPage() {
             )}
           </section>
         )}
+
+        <section className="card">
+          <h2>Where you are signed in</h2>
+          {sessions.data?.data.length ? (
+            <ul className="list">
+              {sessions.data.data.map((x) => (
+                <li key={x.id}>
+                  <span><strong>{device(x.userAgent)}{x.current ? ' (this device)' : ''}</strong><div className="time">{x.country ? `${x.country} · ` : ''}last active {dateParts(x.lastSeenAt).date} {dateParts(x.lastSeenAt).time}</div></span>
+                  {!x.current && <button className="btn btn-outline" onClick={() => revoke.mutate(x.id)} aria-label={`Sign out ${device(x.userAgent)}`}>Sign out</button>}
+                </li>
+              ))}
+            </ul>
+          ) : <p className="hint">Loading…</p>}
+          {(sessions.data?.data.length ?? 0) > 1 && <button className="btn btn-outline" disabled={revokeOthers.isPending} onClick={() => revokeOthers.mutate()}>Sign out everywhere else</button>}
+        </section>
 
         {passkeysSupported() && (
           <section className="card">

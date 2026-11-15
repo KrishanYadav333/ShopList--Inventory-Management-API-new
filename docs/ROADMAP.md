@@ -26,7 +26,7 @@ Single shared product list, Worker + D1, public writes capped at 500 products. L
 
 ## Phase 2: Identity and tenancy (partly done)
 
-> **Status:** GitHub OAuth with PKCE, sessions (hashed tokens), organizations, roles, invitations and tenant isolation are built and tested. Also built: owner-only sign-in by default, a single super admin (platform admin screen, suspend/disable, platform audit log). Customer sign-in through Clerk is built on the server (token verification and session exchange, 12 tests); the browser sign-in screen needs a Clerk application. Clerk sign-in and passkeys are built. Still to do: Turnstile on sign-in, session list and revoke UI.
+> **Status:** GitHub OAuth with PKCE, sessions (hashed tokens), organizations, roles, invitations and tenant isolation are built and tested. Also built: owner-only sign-in by default, a single super admin (platform admin screen, suspend/disable, platform audit log). Customer sign-in through Clerk is built on the server (token verification and session exchange, 12 tests); the browser sign-in screen needs a Clerk application. Clerk sign-in and passkeys are built. Session list and revoke are built. Still to do: Turnstile on sign-in.
 
 **Goal:** real accounts and isolated organizations.
 
@@ -110,4 +110,4 @@ Also built since: Clerk customer sign-in and sign-up (invite-only), a separate o
 
 Measured on the live site: axe reports 0 violations on login, owner, orders, products, history and settings at 1280 px and 390 px. Lighthouse mobile on `/login`: performance 99, accessibility 100, best practices 92 (the one flag is the expected 401 from `/me` when signed out), SEO 100. A 1,500-product table keeps about 20 rows in the DOM while scrolling.
 
-Not built: Google sign-in outside Clerk, Turnstile, a session list and revoke UI, automated preview deployments, the v1 to v2 cutover (see OPERATIONS.md), and checks on a physical phone and with VoiceOver, which need a person with the device.
+Not built: Google sign-in outside Clerk, Turnstile, automated preview deployments, the v1 to v2 cutover (see OPERATIONS.md), and checks on a physical phone and with VoiceOver, which need a person with the device.
