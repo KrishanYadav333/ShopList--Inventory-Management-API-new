@@ -40,6 +40,31 @@ export function SettingsPage() {
   const revokeOthers = useMutation({ mutationFn: () => api('POST', '/auth/sessions/revoke-others', { body: {} }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['sessions'] }); toast({ text: 'Signed out everywhere else' }); }, onError: fail });
   const device = (ua: string | null) => (ua ? `${/iPhone|iPad|Android/.test(ua) ? 'Phone or tablet' : /Mac|Windows|Linux/.test(ua) ? 'Computer' : 'Device'} · ${/Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Browser'}` : 'Unknown device');
 
+  const [backingUp, setBackingUp] = useState(false);
+  /** Pages through every product and downloads one JSON file: a copy you control, and the input for a CSV re-import. */
+  const backup = async () => {
+    setBackingUp(true);
+    try {
+      const products: unknown[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await api<{ data: unknown[]; nextCursor?: string | null }>('GET', `/orgs/${org.id}/products?limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+        products.push(...page.data);
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      const locs = await api<{ data: unknown[] }>('GET', `/orgs/${org.id}/locations`);
+      const file = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), organization: { id: org.id, name: org.name, currency: org.currency }, locations: locs.data, products }, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(file);
+      a.download = `shoplist-backup-${org.name.replace(/[^\w-]+/g, '-')}-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast({ kind: 'success', text: `Backed up ${products.length} product${products.length === 1 ? '' : 's'}` });
+    } catch (e) {
+      toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Backup failed.' });
+    } finally { setBackingUp(false); }
+  };
+
   const locations = useLocations(org.id);
   const [loc, setLoc] = useState({ name: '', code: '' });
   const addLoc = useMutation({ mutationFn: () => api('POST', `/orgs/${org.id}/locations`, { body: loc }), onSuccess: () => { setLoc({ name: '', code: '' }); refresh(); toast({ kind: 'success', text: 'Location added' }); }, onError: fail });
@@ -277,6 +302,14 @@ export function SettingsPage() {
                 {audit.data.map((a) => { const { date, time } = dateParts(a.createdAt); return <li key={a.id}><span><strong>{a.action}</strong><div className="time">{JSON.stringify(a.changes ?? {}).slice(0, 120)}</div></span><span className="time">{date} {time}</span></li>; })}
               </ul>
             )}
+          </section>
+        )}
+
+        {admin && (
+          <section className="card">
+            <h2>Backup</h2>
+            <p className="hint">Download every product and location as one JSON file. Keep it somewhere safe before big changes. To restore, export products to CSV from the Products page and use Import.</p>
+            <button className="btn btn-outline" onClick={backup} disabled={backingUp}>{backingUp ? 'Preparing…' : 'Download backup (JSON)'}</button>
           </section>
         )}
 

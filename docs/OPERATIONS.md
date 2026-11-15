@@ -156,7 +156,7 @@ Every response includes `X-Request-Id`, which the UI shows on errors so a user r
 | Each org's inventory | Nightly export of every object to R2 as JSON Lines by a cron-driven Queue job, 30 days kept | 24 hours | Under 1 hour per org |
 | Ledger | The ledger is itself the history; any stock level can be rebuilt from it | — | — |
 
-**Status:** the nightly R2 exports above are a design, not built. R2 needs a bucket and a payment method on the Cloudflare account, which is your decision. What exists today: D1 Time Travel for the control plane, Cloudflare's point-in-time recovery for SQLite Durable Objects, and the products table's CSV export in the app. Until the R2 job exists, export your products as CSV from the Products page before any risky change, and re-import them with CSV import.
+**Status:** the nightly R2 exports above are a design, not built. R2 needs a bucket and a payment method on the Cloudflare account, which is your decision. What exists today: D1 Time Travel for the control plane, Cloudflare's point-in-time recovery for SQLite Durable Objects, the products CSV export, and Settings → Backup, which downloads every product and location as one JSON file (admins). Restore is by CSV import. Until the R2 job exists, take a backup before any risky change.
 
 A restore is rehearsed quarterly into the preview environment and the result recorded. No rehearsal has been done yet.
 
