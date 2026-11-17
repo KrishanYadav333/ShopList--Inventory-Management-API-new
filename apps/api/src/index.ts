@@ -269,7 +269,7 @@ export const ROUTES: { method: string; path: string; access: Access }[] = [];
 const api = new Hono<{ Bindings: Bindings; Variables: Vars }>();
 api.use('*', rateLimit, originCheck);
 
-const COST_FIELDS = new Set(['costMinor', 'inventoryValueMinor', 'unitCostMinor', 'totalMinor']);
+const COST_FIELDS = new Set(['costMinor', 'inventoryValueMinor', 'unitCostMinor', 'totalCostMinor']);
 const stripCost = (v: unknown): unknown => {
   if (Array.isArray(v)) return v.map(stripCost);
   if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).filter(([k]) => !COST_FIELDS.has(k)).map(([k, x]) => [k, stripCost(x)]));

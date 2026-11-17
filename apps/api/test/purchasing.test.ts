@@ -20,7 +20,7 @@ describe('F13 purchasing', () => {
     const order = await po();
     expect(order.state).toBe('draft');
     expect(order.number).toMatch(/^PO-\d+$/);
-    expect(order.totalMinor).toBe(10 * 120 + 5 * 350);
+    expect(order.totalCostMinor).toBe(10 * 120 + 5 * 350);
     expect((await call(admin.cookie, 'POST', `${admin.base}/purchase-orders/${order.id}/receive`, { lines: [{ lineId: order.lines[0].id, quantity: 1 }] })).status).toBe(409); // not sent yet
 
     const sent = (await call(admin.cookie, 'POST', `${admin.base}/purchase-orders/${order.id}/send`, {})).body.order;

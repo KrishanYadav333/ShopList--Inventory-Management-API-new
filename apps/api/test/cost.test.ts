@@ -32,3 +32,16 @@ describe('cost visibility', () => {
     }
   });
 });
+
+describe('order totals are not cost data', () => {
+  it('sales and viewers still see what an order costs the customer', async () => {
+    const admin = await newOrg();
+    const p = await product(admin, { priceMinor: 1500, costMinor: 400, initialQuantity: 5 });
+    const o = await call(admin.cookie, 'POST', `${admin.base}/orders`, { customerName: 'Pat', lines: [{ productId: p.id, quantity: 2 }] });
+    expect(o.body.order.totalMinor).toBe(3000);
+    for (const role of ['sales', 'stock', 'viewer'] as const) {
+      const who = await addMember(admin, role);
+      expect((await call(who.cookie, 'GET', `${admin.base}/orders/${o.body.order.id}`)).body.order.totalMinor, role).toBe(3000);
+    }
+  });
+});

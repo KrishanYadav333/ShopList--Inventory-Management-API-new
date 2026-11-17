@@ -1409,7 +1409,7 @@ export class InventoryDO extends DurableObject<Bindings> {
       return {
         id: r.id as string, number: r.number as string, supplierId: r.supplier_id as string, supplierName: r.supplier_name as string, locationId: r.location_id as string, state: r.state as PoState,
         expectedAt: (r.expected_at as string) ?? null, note: (r.note as string) ?? null, createdBy: r.created_by as string, createdAt: r.created_at as string, updatedAt: r.updated_at as string, version: r.version as number,
-        lines: ls, totalMinor: ls.reduce((a, l) => a + l.quantity * l.unitCostMinor, 0),
+        lines: ls, totalCostMinor: ls.reduce((a, l) => a + l.quantity * l.unitCostMinor, 0),
       };
     });
   }

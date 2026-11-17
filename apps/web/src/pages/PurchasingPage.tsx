@@ -80,7 +80,7 @@ export function PurchasingPage() {
                 <li key={o.id}>
                   <span>
                     <strong>{o.number}</strong> <span className="tag">{STATE[o.state] ?? o.state}</span> · {o.supplierName}
-                    <div className="time">{o.lines.length} item{o.lines.length === 1 ? '' : 's'}{seeCost ? ` · ${money(o.totalMinor)}` : ''}{o.expectedAt ? ` · expected ${dateParts(`${o.expectedAt}T00:00:00Z`).date}` : ''} · {o.lines.reduce((a, l) => a + l.received, 0)}/{o.lines.reduce((a, l) => a + l.quantity, 0)} received</div>
+                    <div className="time">{o.lines.length} item{o.lines.length === 1 ? '' : 's'}{seeCost ? ` · ${money(o.totalCostMinor)}` : ''}{o.expectedAt ? ` · expected ${dateParts(`${o.expectedAt}T00:00:00Z`).date}` : ''} · {o.lines.reduce((a, l) => a + l.received, 0)}/{o.lines.reduce((a, l) => a + l.quantity, 0)} received</div>
                   </span>
                   <span className="row">
                     {buy && o.state === 'draft' && <button className="btn btn-primary" onClick={() => act.mutate({ id: o.id, what: 'send', done: `${o.number} marked as sent` })}>Mark sent</button>}

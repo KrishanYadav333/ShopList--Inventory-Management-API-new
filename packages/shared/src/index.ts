@@ -496,7 +496,7 @@ export interface PurchaseOrderLine { id: string; productId: string; sku: string;
 export interface PurchaseOrder {
   id: string; number: string; supplierId: string; supplierName: string; locationId: string; state: PoState;
   expectedAt: string | null; note: string | null; createdBy: string; createdAt: string; updatedAt: string; version: number;
-  lines: PurchaseOrderLine[]; totalMinor: number;
+  lines: PurchaseOrderLine[]; totalCostMinor: number;
 }
 
 // ---------------------------------------------------------------- count tasks
