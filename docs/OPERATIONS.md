@@ -239,3 +239,5 @@ These are local numbers, not the deployed Workers free plan under sustained load
 
 
 Secrets: `BREVO_API_KEY`, `EMAIL_FROM` (`wrangler secret put`). Brevo's IP allow-list must be off, because Workers have no fixed address.
+
+Secrets for the usage page: `CF_ANALYTICS_TOKEN` (read-only), `CF_ACCOUNT_ID`. The hourly job warns the owner when any free allowance passes 70%. To turn on per-business counting: enable Analytics Engine in the dashboard, then add `"analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "shoplist_requests" }]` to `wrangler.jsonc`.

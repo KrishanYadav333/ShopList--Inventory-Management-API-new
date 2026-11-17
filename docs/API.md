@@ -252,3 +252,5 @@ While maintenance is on, every write outside `/admin` and `/auth` answers `503 m
 `PATCH /me/notification-preferences` takes `{ orgId, kind, inApp?, email? }`; `kind` may be `digest` (the 08:00 summary, email only). `GET /email/unsubscribe?t=` is public and signed.
 
 | Links | `POST/DELETE /orgs/{orgId}/orders/{id}/share`, `POST/DELETE /orgs/{orgId}/purchase-orders/{id}/share`; public: `GET /s/o/{token}`, `GET /s/po/{token}`, `POST /s/po/{token}/confirm`, `POST /s/po/{token}/dispatched` |
+
+`GET /admin/usage` (owner): 30 days of platform usage, today's warnings against the free limits, and the busiest businesses when Analytics Engine is on. Needs the secrets `CF_ANALYTICS_TOKEN` (Account Analytics: Read) and `CF_ACCOUNT_ID`.

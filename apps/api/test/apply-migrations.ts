@@ -4,7 +4,8 @@ await applyD1Migrations(env.DB, (env as unknown as { TEST_MIGRATIONS: Parameters
 
 // Brevo is never called for real in tests. Every send is recorded here so tests can look at it.
 export interface SentMail { to: string; subject: string; text: string; html: string; headers?: Record<string, string> }
-const g = globalThis as unknown as { __mail?: SentMail[]; __mailFail?: boolean };
+const g = globalThis as unknown as { __mail?: SentMail[]; __mailFail?: boolean; __cf?: { graphql: unknown; sql: unknown[]; status: number } };
+g.__cf = { graphql: { data: { viewer: { accounts: [{ w: [], d: [], o: [], q: [] }] } }, errors: null }, sql: [], status: 200 };
 g.__mail = [];
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -15,5 +16,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     g.__mail!.push({ to: b.to?.[0]?.email, subject: b.subject, text: b.textContent, html: b.htmlContent, headers: b.headers });
     return Response.json({ messageId: 'test' }, { status: 201 });
   }
+  if (url === 'https://api.cloudflare.com/client/v4/graphql') return g.__cf!.status === 200 ? Response.json(g.__cf!.graphql) : new Response('{}', { status: g.__cf!.status });
+  if (url.includes('/analytics_engine/sql')) return Response.json({ data: g.__cf!.sql });
   return realFetch(input as RequestInfo, init);
 }) as typeof fetch;

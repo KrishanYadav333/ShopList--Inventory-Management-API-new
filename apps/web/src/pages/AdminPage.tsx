@@ -29,6 +29,8 @@ interface UserDetail {
 }
 interface SecuritySummary { signIns: number; refused: Record<string, number>; rateLimited: number; notMe: number }
 interface Security { last24h: SecuritySummary; last7d: SecuritySummary; notable: { repeatedRefusals: { emailHash: string; refusals: number; lastAt: string }[]; ownerDoorRefusals: { at: string; country: string | null; browser: string | null }[]; adminNewCountry: { at: string; email: string; country: string }[]; notMeReports: { at: string; email: string }[] } }
+interface UsageDay { date: string; requests: number; errors: number; cpuP50Us: number; cpuP99Us: number; d1RowsRead: number; d1RowsWritten: number; doRequests: number; queueOps: number }
+interface Usage { days: UsageDay[]; limits: Record<string, number>; cpuLimitUs: number; labels: Record<string, string>; warnings: { metric: string; label: string; pct: number }[]; businesses: { orgId: string; name: string; requests: number; errors: number; products: number | null; members: number; lastActivityAt: string | null }[] }
 interface Ann { id: string; message: string; severity: string; audience: string; orgId: string | null; startsAt: string; endsAt: string | null; endedAt: string | null }
 interface Maint { id: string; orgId: string | null; orgName: string | null; message: string; startedAt: string }
 interface AuditRow { id: string; action: string; target: string | null; createdAt: string; requestId: string }
@@ -46,6 +48,7 @@ export function AdminPage() {
   const overview = useQuery({ enabled, queryKey: ['admin', 'overview'], queryFn: () => api<Overview>('GET', '/admin/overview') });
   const orgs = useQuery({ enabled, queryKey: ['admin', 'orgs'], queryFn: () => api<{ data: AdminOrg[] }>('GET', '/admin/orgs?limit=100').then((r) => r.data) });
   const users = useQuery({ enabled, queryKey: ['admin', 'users'], queryFn: () => api<{ data: AdminUser[] }>('GET', '/admin/users?limit=100').then((r) => r.data) });
+  const usage = useQuery({ enabled, queryKey: ['admin', 'usage'], queryFn: () => api<Usage>('GET', '/admin/usage'), retry: false, staleTime: 120_000 });
   const security = useQuery({ enabled, queryKey: ['admin', 'security'], queryFn: () => api<Security>('GET', '/admin/security') });
   const support = useQuery({ enabled, queryKey: ['admin', 'support'], queryFn: () => api<{ data: { id: string; orgId: string; orgName: string; note: string | null; includeCustomers: boolean; expiresAt: string }[] }>('GET', '/admin/support').then((r) => r.data), refetchInterval: 30_000 });
   const anns = useQuery({ enabled, queryKey: ['admin', 'announcements'], queryFn: () => api<{ data: Ann[] }>('GET', '/admin/announcements').then((r) => r.data) });
@@ -134,6 +137,48 @@ export function AdminPage() {
           {[['Users', o?.users], ['Organizations', o?.organizations], ['Suspended orgs', o?.suspendedOrganizations], ['Disabled users', o?.disabledUsers], ['Active sessions', o?.activeSessions]].map(([label, n]) => (
             <div className="tile" key={label as string}><div className="num">{n ?? '–'}</div><div className="lbl">{label}</div></div>
           ))}
+        </section>
+
+        <section className="admin-section" aria-labelledby="h-usage">
+          <h2 id="h-usage">Usage against the free limits</h2>
+          {usage.data ? (() => {
+            const u = usage.data;
+            const today = u.days.at(-1);
+            const rows = Object.keys(u.limits) as (keyof UsageDay)[];
+            const peak = Math.max(0, ...u.days.map((d) => d.requests));
+            return (
+              <>
+                {u.warnings.length > 0 && <p className="banner banner-warn" role="status">Close to a limit today: {u.warnings.map((w) => `${w.label} (${Math.round(w.pct * 100)}%)`).join(', ')}.</p>}
+                {today ? (
+                  <ul className="list" aria-label="Today's usage">
+                    {rows.map((k) => {
+                      const used = today[k] as number;
+                      const max = u.limits[k]!;
+                      return <li key={k}><span style={{ flex: 1 }}><strong>{u.labels[k]}</strong><div className="time">{used.toLocaleString()} of {max.toLocaleString()} today ({Math.round((used / max) * 100)}%)</div><progress max={max} value={Math.min(used, max)} aria-label={`${u.labels[k]} used today`} style={{ width: '100%' }} /></span></li>;
+                    })}
+                    <li><span><strong>Slowest 1% of requests</strong><div className="time">{(today.cpuP99Us / 1000).toFixed(1)} ms of CPU (median {(today.cpuP50Us / 1000).toFixed(1)} ms; the free limit is {u.cpuLimitUs / 1000} ms per request)</div></span></li>
+                    <li><span><strong>Errors today</strong><div className="time">{today.errors.toLocaleString()} of {today.requests.toLocaleString()} requests</div></span></li>
+                  </ul>
+                ) : <p className="hint">No traffic recorded yet today.</p>}
+                <details>
+                  <summary>Last 30 days</summary>
+                  <table className="orders-table">
+                    <caption className="sr-only">Daily usage, newest first</caption>
+                    <thead><tr><th scope="col">Day</th><th scope="col">Requests</th><th scope="col">Errors</th><th scope="col">DB rows written</th><th scope="col">DB rows read</th><th scope="col">Queue ops</th></tr></thead>
+                    <tbody>{[...u.days].reverse().map((d) => <tr key={d.date}><th scope="row">{d.date}</th><td>{d.requests.toLocaleString()}{peak && d.requests === peak ? ' (peak)' : ''}</td><td>{d.errors}</td><td>{d.d1RowsWritten.toLocaleString()}</td><td>{d.d1RowsRead.toLocaleString()}</td><td>{d.queueOps}</td></tr>)}</tbody>
+                  </table>
+                </details>
+                <h3>Busiest businesses (last 24 hours)</h3>
+                {u.businesses.length ? (
+                  <table className="orders-table">
+                    <caption className="sr-only">Requests per business</caption>
+                    <thead><tr><th scope="col">Business</th><th scope="col">Requests</th><th scope="col">Errors</th><th scope="col">Products</th><th scope="col">People</th><th scope="col">Last active</th></tr></thead>
+                    <tbody>{u.businesses.map((b) => <tr key={b.orgId}><th scope="row">{b.name}</th><td>{b.requests.toLocaleString()}</td><td>{b.errors}</td><td>{b.products ?? '—'}</td><td>{b.members}</td><td>{when(b.lastActivityAt)}</td></tr>)}</tbody>
+                  </table>
+                ) : <p className="hint">Per-business counting started with this release; numbers appear after some traffic.</p>}
+              </>
+            );
+          })() : <p className="hint">{usage.isLoading ? 'Loading…' : (usage.error as ApiError)?.message ?? 'Could not load.'}</p>}
         </section>
 
         <section className="admin-section" aria-labelledby="h-notices">

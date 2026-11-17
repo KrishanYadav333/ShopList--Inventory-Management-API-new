@@ -23,6 +23,11 @@ export interface Bindings {
   /** Brevo API key (secret) and the verified sender address (secret, so it is not in the public repo). Email is off without both. */
   BREVO_API_KEY?: string;
   EMAIL_FROM?: string;
+  /** Read-only Cloudflare API token (Account Analytics: Read) and the account id, both secrets. The usage page is off without them. */
+  CF_ANALYTICS_TOKEN?: string;
+  CF_ACCOUNT_ID?: string;
+  /** Workers Analytics Engine: one data point per business request, for the per-business usage list. Optional. */
+  ANALYTICS?: { writeDataPoint(p: { indexes?: string[]; blobs?: string[]; doubles?: number[] }): void };
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   /** Random 32+ byte secret used to sign the short-lived OAuth state cookie. */

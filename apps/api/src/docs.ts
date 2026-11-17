@@ -147,6 +147,7 @@ export const DOCS: Record<string, Doc> = {
   'POST /orgs/:orgId/orders/:id/cancel': { tag: 'Orders', summary: 'Cancel an order and release its reserved stock', ifMatch: true },
   'GET /orgs/:orgId/audit': { tag: 'Activity', summary: 'The organization activity log. Add ?format=csv&from=YYYY-MM-DD&to=YYYY-MM-DD for a CSV file (5,000 rows at most)', query: pageQuery },
   'GET /admin/overview': { tag: 'Platform admin', summary: 'Platform counts and sign-in mode' },
+  'GET /admin/usage': { tag: 'Platform admin', summary: 'Platform usage against the free-plan limits: 30 days, today\'s warnings, busiest businesses' },
   'GET /admin/security': { tag: 'Platform admin', summary: 'Sign-in counts, refusals, rate limits and notable events' },
   'GET /admin/orgs': { tag: 'Platform admin', summary: 'All organizations with status', query: pageQuery },
   'POST /admin/orgs': { tag: 'Platform admin', summary: 'Onboard a business: create it with no members and invite its admin' },

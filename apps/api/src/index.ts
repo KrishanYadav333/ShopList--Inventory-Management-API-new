@@ -79,6 +79,7 @@ import type { Bindings } from './env';
 import { buildOpenApi, renderDocsPage } from './docs';
 import { checkWebhookUrl, flushEvents, forgetHooks, handleQueue, sendTestEvent, type DeliveryJob } from './webhooks';
 import { verifyAssertion, verifyRegistration } from './webauthn';
+import { fetchUsage, foldUsage, overLine, topBusinesses, FREE_LIMITS, CPU_LIMIT_US, METRIC_LABEL } from './usage';
 import { sendMail, unsubscribeUrl, DIGEST_KIND, EMAIL_DEFAULT_ON, wantsEmail } from './email';
 import { KIND_LABELS, NOTIFICATION_KINDS, notify, recipients } from './notify';
 import { pruneAuthEvents, recordAuthEvent, recordRateLimited, type AuthEventKind } from './authevents';
@@ -97,10 +98,19 @@ const MAX_BODY = 64 * 1024;
 const app = new Hono<{ Bindings: Bindings; Variables: Vars }>();
 
 // ------------------------------------------------------------ global middleware
+/** One counting data point per business request. Fire-and-forget: it can never slow down or fail a request. */
+function recordRequest(c: Context): void {
+  try {
+    const m = /^\/api\/v1\/orgs\/([^/]+)\/([^/?]+)/.exec(new URL(c.req.url).pathname);
+    if (m) (c.env as Bindings).ANALYTICS?.writeDataPoint({ indexes: [m[1]!.slice(0, 60)], blobs: [m[2]!, c.req.method], doubles: [c.res.status] });
+  } catch { /* counting is best effort */ }
+}
+
 app.use('*', async (c, next) => {
   const requestId = newId('req');
   c.set('requestId', requestId);
   await next();
+  recordRequest(c);
   const h = c.res.headers;
   h.set('X-Request-Id', requestId);
   h.set('X-Content-Type-Options', 'nosniff');
@@ -1880,6 +1890,20 @@ route('post', '/admin/orgs/:id/restore', 'super', async (c) => {
   return c.json({ ok: true });
 });
 
+route('get', '/admin/usage', 'super', async (c) => {
+  let days;
+  try { days = await fetchUsage(c.env, 30); } catch (e) { throw new AppError(503, 'usage_unavailable', (e as Error).message); }
+  const today = days.at(-1);
+  const top = await topBusinesses(c.env, 20);
+  const names = top.length ? (await c.env.DB.prepare(`SELECT id, name FROM organizations WHERE id IN (${top.map(() => '?').join(',')})`).bind(...top.map((t) => t.orgId)).all<{ id: string; name: string }>()).results : [];
+  const businesses = await Promise.all(top.map(async (t) => {
+    const stats = await orgStub(c.env, t.orgId).stats().catch(() => null);
+    const people = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM memberships WHERE org_id = ? AND deactivated_at IS NULL`).bind(t.orgId).first<{ n: number }>();
+    return { ...t, name: names.find((n) => n.id === t.orgId)?.name ?? t.orgId, products: stats?.products ?? null, members: people?.n ?? 0, lastActivityAt: stats?.lastActivityAt ?? null };
+  }));
+  return c.json({ days, limits: FREE_LIMITS, cpuLimitUs: CPU_LIMIT_US, labels: METRIC_LABEL, warnAt: 0.7, warnings: overLine(today).map((w) => ({ ...w, label: METRIC_LABEL[w.metric] })), businesses });
+});
+
 route('get', '/admin/security', 'super', async (c) => {
   const now = Date.now();
   const d1 = new Date(now - 86400_000).toISOString();
@@ -1999,7 +2023,23 @@ export async function pruneRetention(env: Bindings): Promise<void> {
 }
 
 /** Deletes rows past their retention. Each step is independent so one failure does not stop the rest. */
+/** Tells the owner, once per metric per day, when a free-plan allowance passes 70%. */
+export async function checkUsage(env: Bindings): Promise<number> {
+  if (!env.CF_ANALYTICS_TOKEN) return 0;
+  const today = (await fetchUsage(env, 2)).at(-1);
+  let told = 0;
+  for (const w of overLine(today)) {
+    const first = await env.DB.prepare(`INSERT OR IGNORE INTO usage_alerts(day, metric) VALUES (?, ?)`).bind(today!.date, w.metric).run();
+    if (!first.meta.changes) continue;
+    const owner = await env.DB.prepare(`SELECT user_id AS id FROM oauth_accounts WHERE provider = 'github' AND provider_user_id = ?`).bind(env.SUPER_ADMIN_GITHUB_ID ?? '').first<{ id: string }>();
+    if (owner) await notify(env, '_platform', [owner.id], { kind: 'usage.alert', title: `${METRIC_LABEL[w.metric]} is at ${Math.round(w.pct * 100)}% of today's free allowance (${w.used.toLocaleString()} of ${w.limit.toLocaleString()})`, link: '/admin' });
+    told++;
+  }
+  return told;
+}
+
 export async function dailyJob(env: Bindings, hourUtc = new Date().getUTCHours()): Promise<void> {
+  await checkUsage(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'usage check failed', error: (e as Error).message })));
   await sendDigests(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'digest failed', error: (e as Error).message })));
   if (hourUtc !== 3) return; // the rest runs once a day
   await purgeDueOrgs(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'purge failed', error: (e as Error).message })));
