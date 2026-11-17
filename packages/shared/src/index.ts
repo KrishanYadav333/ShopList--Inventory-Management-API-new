@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 // ---------------------------------------------------------------- roles
-export const ROLES = ['admin', 'manager', 'sales', 'stock', 'viewer'] as const;
+export const ROLES = ['admin', 'manager', 'sales', 'stock', 'accountant', 'viewer'] as const;
 export type Role = (typeof ROLES)[number];
 
 /**
@@ -11,14 +11,15 @@ export type Role = (typeof ROLES)[number];
  *   admin: the business owner. One per organization. Everything in their own organization.
  *   manager, sales, stock, viewer: staff roles the admin assigns. The admin chooses a role; nobody can redefine one.
  */
-export const ROLE_LABELS: Record<Role, string> = { admin: 'Admin', manager: 'Manager', sales: 'Sales', stock: 'Stock keeper', viewer: 'Viewer' };
+export const ROLE_LABELS: Record<Role, string> = { admin: 'Admin', manager: 'Manager', sales: 'Sales', stock: 'Stock keeper', accountant: 'Accountant', viewer: 'Viewer' };
 
 export const ROLE_SUMMARY: Record<Role, string> = {
   admin: 'The business owner. Everything, plus team, invitations, locations, API keys, webhooks, the activity log and deleting the organization.',
   manager: 'Runs daily operations: products, prices, stock, orders and imports. No team or settings.',
   sales: 'Works orders: create, take payment, ship, cancel. Can see products and stock. Cannot change products or stock.',
   stock: 'Moves stock: receive, adjust, transfer, count. Can see products and orders. Cannot change products or orders.',
-  viewer: 'Read-only: products, stock, orders and history.',
+  accountant: 'Reads the numbers: costs, stock value and the activity log. Cannot change stock, products or orders.',
+  viewer: 'Read-only: products, stock, orders and history. No costs.',
 };
 
 export const PERMISSIONS = ['inventory:read', 'cost:read', 'products:write', 'stock:write', 'orders:write', 'team:manage', 'settings:manage', 'audit:read', 'org:delete'] as const;
@@ -30,6 +31,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   viewer: ['inventory:read'],
   sales: ['inventory:read', 'orders:write'],
   stock: ['inventory:read', 'stock:write'],
+  accountant: ['inventory:read', 'cost:read', 'audit:read'],
   manager: ['inventory:read', 'cost:read', 'products:write', 'stock:write', 'orders:write'],
   admin: PERMISSIONS,
 };
