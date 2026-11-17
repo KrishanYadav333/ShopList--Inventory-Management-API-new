@@ -79,6 +79,7 @@ import type { Bindings } from './env';
 import { buildOpenApi, renderDocsPage } from './docs';
 import { checkWebhookUrl, flushEvents, forgetHooks, handleQueue, sendTestEvent, type DeliveryJob } from './webhooks';
 import { verifyAssertion, verifyRegistration } from './webauthn';
+import { backupOrg, readBackup, runBackups } from './backups';
 import { fetchUsage, foldUsage, overLine, topBusinesses, FREE_LIMITS, CPU_LIMIT_US, METRIC_LABEL } from './usage';
 import { sendMail, unsubscribeUrl, DIGEST_KIND, EMAIL_DEFAULT_ON, wantsEmail } from './email';
 import { KIND_LABELS, NOTIFICATION_KINDS, notify, recipients } from './notify';
@@ -1890,6 +1891,53 @@ route('post', '/admin/orgs/:id/restore', 'super', async (c) => {
   return c.json({ ok: true });
 });
 
+// ------------------------------------------------------------------ nightly backups (F29, kept in D1 until R2 is available)
+/** Metadata only: the owner sees when and how big, never the contents. */
+route('get', '/admin/backups', 'super', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT o.id AS orgId, o.name, r.day, r.ok, r.size_bytes AS sizeBytes, r.row_count AS rows, r.error, r.created_at AS at
+       FROM organizations o LEFT JOIN backup_runs r ON r.org_id = o.id AND r.day = (SELECT MAX(day) FROM backup_runs WHERE org_id = o.id)
+      WHERE o.deleted_at IS NULL ORDER BY o.name LIMIT 500`,
+  ).all<{ ok: number | null }>();
+  const { results: days } = await c.env.DB.prepare(`SELECT org_id AS orgId, day FROM backup_runs WHERE ok = 1 ORDER BY day DESC`).all<{ orgId: string; day: string }>();
+  const byOrg = new Map<string, string[]>();
+  for (const d of days) byOrg.set(d.orgId, [...(byOrg.get(d.orgId) ?? []), d.day]);
+  return c.json({ data: results.map((r) => ({ ...r, ok: r.ok === null ? null : r.ok === 1, days: byOrg.get((r as unknown as { orgId: string }).orgId) ?? [] })) });
+});
+
+route('post', '/admin/backups/run', 'super', async (c) => {
+  const { data } = await readJson(c, z.object({ orgId: z.string().max(60).optional() }).strict());
+  if (data.orgId) {
+    if (!(await c.env.DB.prepare(`SELECT 1 AS x FROM organizations WHERE id = ? AND deleted_at IS NULL`).bind(data.orgId).first())) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
+    const r = await backupOrg(c.env, data.orgId);
+    await platformAudit(c, 'backup.run', data.orgId, { ok: r.ok });
+    return c.json({ ok: r.ok ? 1 : 0, failed: r.ok ? 0 : 1 });
+  }
+  const r = await runBackups(c.env);
+  await platformAudit(c, 'backup.run', 'all', r);
+  return c.json(r);
+});
+
+/** Restore rehearsal and disaster recovery: load a copy into a brand-new business with no members, and invite its admin. */
+route('post', '/admin/backups/:orgId/:day/restore', 'super', async (c) => {
+  const { data } = await readJson(c, z.object({ adminEmail: z.string().trim().toLowerCase().email().max(254).optional() }).strict());
+  const orgId = c.req.param('orgId') ?? '';
+  const day = c.req.param('day') ?? '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new AppError(400, 'bad_day', 'The day must look like 2026-11-18.');
+  const src = await c.env.DB.prepare(`SELECT name, currency, settings FROM organizations WHERE id = ?`).bind(orgId).first<{ name: string; currency: string; settings: string }>();
+  const json = src ? await readBackup(c.env, orgId, day) : null;
+  if (!src || !json) throw new AppError(404, 'backup_not_found', 'There is no backup of that business for that day.');
+  const id = newId('org');
+  const name = `${src.name} (restored ${day})`.slice(0, 100);
+  await c.env.DB.prepare(`INSERT INTO organizations(id, name, slug, currency, settings, created_at) VALUES (?, ?, ?, ?, ?, ?)`).bind(id, name, slugFor(name), src.currency, src.settings ?? '{}', nowIso()).run();
+  try { await orgStub(c.env, id).restoreAll(json); }
+  catch (e) { await c.env.DB.prepare(`UPDATE organizations SET deleted_at = ? WHERE id = ?`).bind(nowIso(), id).run(); throw new AppError(500, 'restore_failed', `The backup could not be loaded: ${(e as Error).message}`); }
+  let invitation: { link: string; expiresAt: string } | null = null;
+  if (data.adminEmail) { const inv = await createInvitation(c, { orgId: id, email: data.adminEmail, role: 'admin', invitedBy: c.get('user').id }); invitation = { link: inv.link, expiresAt: inv.expiresAt }; }
+  await platformAudit(c, 'backup.restore', id, { from: orgId, day });
+  return c.json({ organization: { id, name }, invitation }, 201);
+});
+
 route('get', '/admin/usage', 'super', async (c) => {
   let days;
   try { days = await fetchUsage(c.env, 30); } catch (e) { throw new AppError(503, 'usage_unavailable', (e as Error).message); }
@@ -2042,6 +2090,11 @@ export async function dailyJob(env: Bindings, hourUtc = new Date().getUTCHours()
   await checkUsage(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'usage check failed', error: (e as Error).message })));
   await sendDigests(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'digest failed', error: (e as Error).message })));
   if (hourUtc !== 3) return; // the rest runs once a day
+  await runBackups(env).then(async (r) => {
+    if (!r.failed) return;
+    const owner = await env.DB.prepare(`SELECT user_id AS id FROM oauth_accounts WHERE provider = 'github' AND provider_user_id = ?`).bind(env.SUPER_ADMIN_GITHUB_ID ?? '').first<{ id: string }>();
+    if (owner) await notify(env, '_platform', [owner.id], { kind: 'backup.failed', title: `Nightly backup: ${r.failed} business${r.failed === 1 ? '' : 'es'} failed, ${r.ok} saved`, link: '/admin' });
+  }).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'backups failed', error: (e as Error).message })));
   await purgeDueOrgs(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'purge failed', error: (e as Error).message })));
   await pruneRetention(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'retention failed', error: (e as Error).message })));
   await pruneAuthEvents(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'prune auth events failed', error: (e as Error).message })));

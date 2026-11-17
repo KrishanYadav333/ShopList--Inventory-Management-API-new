@@ -31,6 +31,7 @@ interface SecuritySummary { signIns: number; refused: Record<string, number>; ra
 interface Security { last24h: SecuritySummary; last7d: SecuritySummary; notable: { repeatedRefusals: { emailHash: string; refusals: number; lastAt: string }[]; ownerDoorRefusals: { at: string; country: string | null; browser: string | null }[]; adminNewCountry: { at: string; email: string; country: string }[]; notMeReports: { at: string; email: string }[] } }
 interface UsageDay { date: string; requests: number; errors: number; cpuP50Us: number; cpuP99Us: number; d1RowsRead: number; d1RowsWritten: number; doRequests: number; queueOps: number }
 interface Usage { days: UsageDay[]; limits: Record<string, number>; cpuLimitUs: number; labels: Record<string, string>; warnings: { metric: string; label: string; pct: number }[]; businesses: { orgId: string; name: string; requests: number; errors: number; products: number | null; members: number; lastActivityAt: string | null }[] }
+interface BackupRow { orgId: string; name: string; day: string | null; ok: boolean | null; sizeBytes: number | null; rows: number | null; error: string | null; at: string | null; days: string[] }
 interface Ann { id: string; message: string; severity: string; audience: string; orgId: string | null; startsAt: string; endsAt: string | null; endedAt: string | null }
 interface Maint { id: string; orgId: string | null; orgName: string | null; message: string; startedAt: string }
 interface AuditRow { id: string; action: string; target: string | null; createdAt: string; requestId: string }
@@ -49,6 +50,14 @@ export function AdminPage() {
   const orgs = useQuery({ enabled, queryKey: ['admin', 'orgs'], queryFn: () => api<{ data: AdminOrg[] }>('GET', '/admin/orgs?limit=100').then((r) => r.data) });
   const users = useQuery({ enabled, queryKey: ['admin', 'users'], queryFn: () => api<{ data: AdminUser[] }>('GET', '/admin/users?limit=100').then((r) => r.data) });
   const usage = useQuery({ enabled, queryKey: ['admin', 'usage'], queryFn: () => api<Usage>('GET', '/admin/usage'), retry: false, staleTime: 120_000 });
+  const backups = useQuery({ enabled, queryKey: ['admin', 'backups'], queryFn: () => api<{ data: BackupRow[] }>('GET', '/admin/backups').then((r) => r.data) });
+  const [rehearse, setRehearse] = useState<{ orgId: string; day: string; email: string } | null>(null);
+  const runBackup = useMutation({ mutationFn: (orgId?: string) => api('POST', '/admin/backups/run', { body: orgId ? { orgId } : {} }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin', 'backups'] }); toast({ kind: 'success', text: 'Backup finished' }); }, onError: (e) => toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Backup failed.' }) });
+  const restoreCopy = useMutation({
+    mutationFn: (r: { orgId: string; day: string; email: string }) => api<{ organization: { id: string; name: string }; invitation: { link: string } | null }>('POST', `/admin/backups/${r.orgId}/${r.day}/restore`, { body: r.email ? { adminEmail: r.email } : {} }),
+    onSuccess: (r) => { setRehearse(null); qc.invalidateQueries({ queryKey: ['admin'] }); toast({ kind: 'success', text: `Created “${r.organization.name}”.${r.invitation ? ' Send its admin the invitation link from the business details.' : ''}` }); },
+    onError: (e) => toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Restore failed.' }),
+  });
   const security = useQuery({ enabled, queryKey: ['admin', 'security'], queryFn: () => api<Security>('GET', '/admin/security') });
   const support = useQuery({ enabled, queryKey: ['admin', 'support'], queryFn: () => api<{ data: { id: string; orgId: string; orgName: string; note: string | null; includeCustomers: boolean; expiresAt: string }[] }>('GET', '/admin/support').then((r) => r.data), refetchInterval: 30_000 });
   const anns = useQuery({ enabled, queryKey: ['admin', 'announcements'], queryFn: () => api<{ data: Ann[] }>('GET', '/admin/announcements').then((r) => r.data) });
@@ -137,6 +146,40 @@ export function AdminPage() {
           {[['Users', o?.users], ['Organizations', o?.organizations], ['Suspended orgs', o?.suspendedOrganizations], ['Disabled users', o?.disabledUsers], ['Active sessions', o?.activeSessions]].map(([label, n]) => (
             <div className="tile" key={label as string}><div className="num">{n ?? '–'}</div><div className="lbl">{label}</div></div>
           ))}
+        </section>
+
+        <section className="admin-section" aria-labelledby="h-backups">
+          <h2 id="h-backups">Nightly backups</h2>
+          <p className="hint">Each business is copied every night at 03:00 UTC and kept 30 days. You see when and how big, never the contents. To rehearse or recover, load a copy into a new business.</p>
+          <p><button className="btn btn-outline" disabled={runBackup.isPending} onClick={() => runBackup.mutate(undefined)}>Back up everything now</button></p>
+          {backups.data?.length ? (
+            <table className="orders-table">
+              <caption className="sr-only">Latest backup of each business</caption>
+              <thead><tr><th scope="col">Business</th><th scope="col">Last backup</th><th scope="col">Size</th><th scope="col">Days kept</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
+              <tbody>
+                {backups.data.map((b) => (
+                  <tr key={b.orgId}>
+                    <th scope="row">{b.name}</th>
+                    <td>{b.ok === null ? 'Never' : b.ok ? when(b.at) : <span className="field-error">Failed: {b.error}</span>}</td>
+                    <td>{b.sizeBytes ? `${Math.max(1, Math.round(b.sizeBytes / 1024))} KB` : '—'}</td>
+                    <td>{b.days.length}</td>
+                    <td>
+                      <button className="btn btn-outline cell-btn" onClick={() => runBackup.mutate(b.orgId)}>Back up now</button>{' '}
+                      {b.days[0] && <button className="btn btn-outline cell-btn" onClick={() => setRehearse({ orgId: b.orgId, day: b.days[0]!, email: '' })}>Restore to new…</button>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <p className="hint">No businesses yet.</p>}
+          {rehearse && (
+            <form className="inline-form" onSubmit={(e) => { e.preventDefault(); restoreCopy.mutate(rehearse); }}>
+              <div className="field"><label htmlFor="rb-day">Copy from</label><select id="rb-day" value={rehearse.day} onChange={(e) => setRehearse({ ...rehearse, day: e.target.value })}>{backups.data?.find((b) => b.orgId === rehearse.orgId)?.days.map((d) => <option key={d} value={d}>{d}</option>)}</select></div>
+              <div className="field"><label htmlFor="rb-email">Admin email for the new business (optional)</label><input id="rb-email" type="email" value={rehearse.email} onChange={(e) => setRehearse({ ...rehearse, email: e.target.value })} /></div>
+              <button className="btn btn-primary" disabled={restoreCopy.isPending}>Create restored business</button>
+              <button type="button" className="btn btn-outline" onClick={() => setRehearse(null)}>Cancel</button>
+            </form>
+          )}
         </section>
 
         <section className="admin-section" aria-labelledby="h-usage">

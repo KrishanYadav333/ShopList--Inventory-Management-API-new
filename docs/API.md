@@ -254,3 +254,5 @@ While maintenance is on, every write outside `/admin` and `/auth` answers `503 m
 | Links | `POST/DELETE /orgs/{orgId}/orders/{id}/share`, `POST/DELETE /orgs/{orgId}/purchase-orders/{id}/share`; public: `GET /s/o/{token}`, `GET /s/po/{token}`, `POST /s/po/{token}/confirm`, `POST /s/po/{token}/dispatched` |
 
 `GET /admin/usage` (owner): 30 days of platform usage, today's warnings against the free limits, and the busiest businesses when Analytics Engine is on. Needs the secrets `CF_ANALYTICS_TOKEN` (Account Analytics: Read) and `CF_ACCOUNT_ID`.
+
+`GET /admin/backups` (metadata only), `POST /admin/backups/run`, `POST /admin/backups/{orgId}/{day}/restore` (loads a nightly copy into a new business and optionally invites its admin). Copies are made by the 03 UTC cron.

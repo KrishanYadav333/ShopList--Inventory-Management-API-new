@@ -953,6 +953,49 @@ export class InventoryDO extends DurableObject<Bindings> {
     this.audit({ actor, requestId }, action, 'support', actor, detail);
   }
 
+  /** Tables a backup copies. Search index, outbox and idempotency keys are rebuilt or are not worth keeping. */
+  private backupTables(): string[] {
+    return this.all<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'products_fts%' AND name NOT IN ('meta', 'outbox', 'idempotency_keys') ORDER BY name`).map((r) => r.name);
+  }
+
+  /** Every row of the business as one JSON text, for the nightly backup. The ledger and activity log are capped per table. */
+  dumpAll(): { json: string; rows: number } {
+    const tables: Record<string, Row[]> = {};
+    let rows = 0;
+    for (const t of this.backupTables()) { tables[t] = this.all<Row>(`SELECT * FROM "${t}" LIMIT 200000`); rows += tables[t].length; }
+    const settings = this.one<{ value: string }>(`SELECT value FROM meta WHERE key = 'settings'`)?.value ?? null;
+    return { json: JSON.stringify({ format: 'shoplist-nightly', version: 1, takenAt: nowIso(), settings, tables }), rows };
+  }
+
+  /** Loads a nightly backup into a business that has nothing in it yet. Unknown tables and columns are ignored, so older backups still load. */
+  restoreAll(json: string): { rows: number } {
+    let data: { format?: string; settings?: string | null; tables?: Record<string, Row[]> };
+    try { data = JSON.parse(json); } catch { throw new Fail(400, 'bad_backup', 'That backup could not be read.'); }
+    if (data.format !== 'shoplist-nightly' || !data.tables) throw new Fail(400, 'bad_backup', 'That is not a nightly backup.');
+    if (this.one<{ n: number }>(`SELECT (SELECT COUNT(*) FROM products) + (SELECT COUNT(*) FROM orders) AS n`)!.n > 0) throw new Fail(409, 'not_empty', 'Restore only into a business with no products or orders.');
+    let rows = 0;
+    this.ctx.storage.transactionSync(() => {
+      this.run(`PRAGMA defer_foreign_keys = ON`);
+      const known = new Set(this.backupTables());
+      for (const t of known) this.run(`DELETE FROM "${t}"`);
+      for (const [t, list] of Object.entries(data.tables!)) {
+        if (!known.has(t)) continue;
+        const cols = new Set(this.all<{ name: string }>(`SELECT name FROM pragma_table_info(?)`, t).map((c) => c.name));
+        for (const r of list) {
+          const keys = Object.keys(r).filter((k) => cols.has(k));
+          if (!keys.length) continue;
+          this.run(`INSERT INTO "${t}"(${keys.map((k) => `"${k}"`).join(',')}) VALUES (${keys.map(() => '?').join(',')})`, ...keys.map((k) => r[k] as SqlStorageValue));
+          rows++;
+        }
+      }
+      if (data.settings) this.run(`INSERT INTO meta(key, value) VALUES ('settings', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, data.settings);
+      this.run(`DELETE FROM products_fts`);
+      this.run(`INSERT INTO products_fts(product_id, name, sku, barcode, description) SELECT id, name, sku, COALESCE(barcode, ''), COALESCE(description, '') FROM products`);
+      if (!this.one(`SELECT 1 AS x FROM locations LIMIT 1`)) this.ensureDefaultLocation();
+    });
+    return { rows };
+  }
+
   /** Final step of a scheduled deletion: every row this business ever stored, gone. */
   async wipe(): Promise<void> {
     await this.ctx.storage.deleteAll();
