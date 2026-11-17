@@ -360,6 +360,28 @@ export const ROUTES: { method: string; path: string; access: Access }[] = [];
 const api = new Hono<{ Bindings: Bindings; Variables: Vars }>();
 api.use('*', rateLimit, originCheck);
 
+// Maintenance: every write is refused with 503 while a switch is on; reads keep working. Looked up at most every 5 s per isolate.
+let maintenanceCache: { at: number; rows: { id: string; orgId: string | null; message: string }[] } | null = null;
+const maintenanceRows = async (env: Bindings) => {
+  if (!maintenanceCache || Date.now() - maintenanceCache.at > 5000) {
+    const { results } = await env.DB.prepare(`SELECT id, org_id AS orgId, message FROM maintenance WHERE ended_at IS NULL`).all<{ id: string; orgId: string | null; message: string }>();
+    maintenanceCache = { at: Date.now(), rows: results };
+  }
+  return maintenanceCache.rows;
+};
+api.use('*', async (c, next) => {
+  if (c.req.method === 'GET' || c.req.method === 'HEAD' || c.req.method === 'OPTIONS') return next();
+  const parts = new URL(c.req.url).pathname.split('/'); // ['', 'api', 'v1', area, ...]
+  // The owner's console and signing in or out must keep working, or nobody could end it.
+  if (parts[3] === 'admin' || parts[3] === 'auth') return next();
+  const orgId = parts[3] === 'orgs' ? parts[4] : undefined;
+  const hit = (await maintenanceRows(c.env)).find((m) => m.orgId === null || m.orgId === orgId);
+  if (!hit) return next();
+  const res = problemResponse(new AppError(503, 'maintenance', hit.message || 'ShopList is being updated. You can read, but not change anything. Please try again in a few minutes.').toProblem(c.get('requestId')));
+  res.headers.set('Retry-After', '120');
+  return res;
+});
+
 const COST_FIELDS = new Set(['costMinor', 'inventoryValueMinor', 'unitCostMinor', 'totalCostMinor']);
 const CONTACT_FIELDS = new Set(['customerEmail']);
 const strip = (v: unknown, drop: Set<string>): unknown => {
@@ -1548,6 +1570,78 @@ route('get', '/admin/support', 'super', async (c) => {
       WHERE g.ended_at IS NULL AND g.expires_at > ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL ORDER BY g.created_at DESC`,
   ).bind(nowIso()).all<{ includeCustomers: number }>();
   return c.json({ data: results.map((g) => ({ ...g, includeCustomers: g.includeCustomers === 1 })) });
+});
+
+// ------------------------------------------------------------------ announcements and maintenance (F28)
+const announcementInput = z.object({
+  message: z.string().trim().min(1).max(500),
+  severity: z.enum(['info', 'warning']),
+  audience: z.enum(['everyone', 'admins', 'org']),
+  orgId: z.string().max(60).optional(),
+  startsAt: z.string().datetime().optional(),
+  endsAt: z.string().datetime().optional(),
+}).strict();
+
+/** What this person should see: announcements for them, and any maintenance that affects them. */
+route('get', '/announcements', 'user', async (c) => {
+  const user = c.get('user');
+  const now = nowIso();
+  const { results: mine } = await c.env.DB.prepare(`SELECT org_id AS orgId, role FROM memberships WHERE user_id = ? AND deactivated_at IS NULL`).bind(user.id).all<{ orgId: string; role: string }>();
+  const orgIds = new Set(mine.map((m) => m.orgId));
+  const isAdmin = user.isSuperAdmin || mine.some((m) => m.role === 'admin');
+  const { results } = await c.env.DB.prepare(`SELECT id, message, severity, audience, org_id AS orgId, starts_at AS startsAt, ends_at AS endsAt FROM announcements WHERE ended_at IS NULL AND starts_at <= ? AND (ends_at IS NULL OR ends_at > ?) ORDER BY starts_at DESC LIMIT 20`).bind(now, now).all<{ audience: string; orgId: string | null }>();
+  const data = results.filter((a) => a.audience === 'everyone' || (a.audience === 'admins' && isAdmin) || (a.audience === 'org' && a.orgId && (orgIds.has(a.orgId) || user.isSuperAdmin)));
+  maintenanceCache = null;
+  const maintenance = (await maintenanceRows(c.env)).filter((m) => m.orgId === null || orgIds.has(m.orgId)).map((m) => ({ id: m.id, scope: m.orgId ? 'business' : 'platform', message: m.message }));
+  return c.json({ data, maintenance });
+});
+
+route('get', '/admin/announcements', 'super', async (c) => {
+  const { results } = await c.env.DB.prepare(`SELECT id, message, severity, audience, org_id AS orgId, starts_at AS startsAt, ends_at AS endsAt, ended_at AS endedAt FROM announcements ORDER BY created_at DESC LIMIT 50`).all();
+  return c.json({ data: results });
+});
+
+route('post', '/admin/announcements', 'super', async (c) => {
+  const { data } = await readJson(c, announcementInput);
+  if (data.audience === 'org' && !data.orgId) throw new AppError(400, 'org_required', 'Pick the business this notice is for.', { errors: [{ field: 'orgId', code: 'required' }] });
+  if (data.endsAt && data.startsAt && data.endsAt <= data.startsAt) throw new AppError(400, 'bad_dates', 'The end must be after the start.');
+  const id = newId('ann');
+  await c.env.DB.prepare(`INSERT INTO announcements(id, message, severity, audience, org_id, starts_at, ends_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(id, data.message, data.severity, data.audience, data.audience === 'org' ? data.orgId! : null, data.startsAt ?? nowIso(), data.endsAt ?? null, nowIso()).run();
+  await platformAudit(c, 'announcement.create', id, { audience: data.audience, severity: data.severity });
+  return c.json({ id }, 201);
+});
+
+route('delete', '/admin/announcements/:id', 'super', async (c) => {
+  const r = await c.env.DB.prepare(`UPDATE announcements SET ended_at = ? WHERE id = ? AND ended_at IS NULL`).bind(nowIso(), c.req.param('id') ?? '').run();
+  if (!r.meta.changes) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  await platformAudit(c, 'announcement.end', c.req.param('id') ?? null);
+  return c.json({ ok: true });
+});
+
+route('get', '/admin/maintenance', 'super', async (c) => {
+  const { results } = await c.env.DB.prepare(`SELECT m.id, m.org_id AS orgId, o.name AS orgName, m.message, m.started_at AS startedAt FROM maintenance m LEFT JOIN organizations o ON o.id = m.org_id WHERE m.ended_at IS NULL ORDER BY m.started_at DESC`).all();
+  return c.json({ data: results });
+});
+
+route('post', '/admin/maintenance', 'super', async (c) => {
+  const { data } = await readJson(c, z.object({ orgId: z.string().max(60).optional(), message: z.string().trim().max(300).optional() }).strict());
+  if (data.orgId && !(await c.env.DB.prepare(`SELECT 1 AS x FROM organizations WHERE id = ?`).bind(data.orgId).first())) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
+  const open = await c.env.DB.prepare(`SELECT 1 AS x FROM maintenance WHERE ended_at IS NULL AND org_id IS ?`).bind(data.orgId ?? null).first();
+  if (open) throw new AppError(409, 'already_on', 'Maintenance is already on for that scope.');
+  const id = newId('mnt');
+  await c.env.DB.prepare(`INSERT INTO maintenance(id, org_id, message, started_at) VALUES (?, ?, ?, ?)`).bind(id, data.orgId ?? null, data.message ?? '', nowIso()).run();
+  maintenanceCache = null;
+  await platformAudit(c, 'maintenance.on', data.orgId ?? 'platform', { message: data.message });
+  return c.json({ id }, 201);
+});
+
+route('delete', '/admin/maintenance/:id', 'super', async (c) => {
+  const r = await c.env.DB.prepare(`UPDATE maintenance SET ended_at = ? WHERE id = ? AND ended_at IS NULL`).bind(nowIso(), c.req.param('id') ?? '').run();
+  if (!r.meta.changes) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  maintenanceCache = null;
+  await platformAudit(c, 'maintenance.off', c.req.param('id') ?? null);
+  return c.json({ ok: true });
 });
 
 route('get', '/admin/plans', 'super', async (c) => c.json({ data: await planRows(c) }));

@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { Icon } from '../icons';
 import { NotificationBell } from './NotificationBell';
+import { Announcements } from './Announcements';
 import { clearSupport, getSupport } from '../support';
 import { useDashboard, useLocations, useMe, usePlan, canDo, type OrgSummary } from '../queries';
 import { AdjustDialog } from './AdjustDialog';
@@ -197,6 +198,7 @@ export function Shell() {
 
       <main className="main-content" id="main" tabIndex={-1}>
         {!online && <div className="banner banner-warn" role="status">You are offline. Showing saved data; changes are disabled until you reconnect.</div>}
+        <Announcements />
         {org.deleteAfter && (
           <div className="banner banner-warn" role="status">
             <strong>{org.name} is scheduled for deletion on {new Date(org.deleteAfter).toLocaleDateString()}.</strong> It is read-only until then.{org.role === 'admin' && <> <NavLink to={`/o/${orgId}/settings`}>Cancel deletion in Settings</NavLink></>}

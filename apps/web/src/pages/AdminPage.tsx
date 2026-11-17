@@ -7,6 +7,7 @@ import { dateParts } from '../format';
 import { Icon } from '../icons';
 import { useMe } from '../queries';
 import { setSupport } from '../support';
+import { Announcements } from '../components/Announcements';
 import { useToast } from '../toast';
 
 interface Overview { users: number; disabledUsers: number; organizations: number; suspendedOrganizations: number; activeSessions: number; signin: 'open' | 'owner-only' | 'invite-only' }
@@ -28,6 +29,8 @@ interface UserDetail {
 }
 interface SecuritySummary { signIns: number; refused: Record<string, number>; rateLimited: number; notMe: number }
 interface Security { last24h: SecuritySummary; last7d: SecuritySummary; notable: { repeatedRefusals: { emailHash: string; refusals: number; lastAt: string }[]; ownerDoorRefusals: { at: string; country: string | null; browser: string | null }[]; adminNewCountry: { at: string; email: string; country: string }[]; notMeReports: { at: string; email: string }[] } }
+interface Ann { id: string; message: string; severity: string; audience: string; orgId: string | null; startsAt: string; endsAt: string | null; endedAt: string | null }
+interface Maint { id: string; orgId: string | null; orgName: string | null; message: string; startedAt: string }
 interface AuditRow { id: string; action: string; target: string | null; createdAt: string; requestId: string }
 
 const when = (iso: string | null) => { if (!iso) return '—'; const { date, time } = dateParts(iso); return `${date} ${time}`; };
@@ -45,6 +48,16 @@ export function AdminPage() {
   const users = useQuery({ enabled, queryKey: ['admin', 'users'], queryFn: () => api<{ data: AdminUser[] }>('GET', '/admin/users?limit=100').then((r) => r.data) });
   const security = useQuery({ enabled, queryKey: ['admin', 'security'], queryFn: () => api<Security>('GET', '/admin/security') });
   const support = useQuery({ enabled, queryKey: ['admin', 'support'], queryFn: () => api<{ data: { id: string; orgId: string; orgName: string; note: string | null; includeCustomers: boolean; expiresAt: string }[] }>('GET', '/admin/support').then((r) => r.data), refetchInterval: 30_000 });
+  const anns = useQuery({ enabled, queryKey: ['admin', 'announcements'], queryFn: () => api<{ data: Ann[] }>('GET', '/admin/announcements').then((r) => r.data) });
+  const maint = useQuery({ enabled, queryKey: ['admin', 'maintenance'], queryFn: () => api<{ data: Maint[] }>('GET', '/admin/maintenance').then((r) => r.data) });
+  const [ann, setAnn] = useState({ message: '', severity: 'info', audience: 'everyone', orgId: '' });
+  const [mnt, setMnt] = useState({ orgId: '', message: '' });
+  const refreshNotices = () => { qc.invalidateQueries({ queryKey: ['admin', 'announcements'] }); qc.invalidateQueries({ queryKey: ['admin', 'maintenance'] }); qc.invalidateQueries({ queryKey: ['announcements'] }); };
+  const failMsg = (e: unknown) => toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Something went wrong.' });
+  const addAnn = useMutation({ mutationFn: () => api('POST', '/admin/announcements', { body: { message: ann.message, severity: ann.severity, audience: ann.audience, orgId: ann.audience === 'org' ? ann.orgId : undefined } }), onSuccess: () => { setAnn({ ...ann, message: '' }); refreshNotices(); toast({ kind: 'success', text: 'Published' }); }, onError: failMsg });
+  const endAnn = useMutation({ mutationFn: (id: string) => api('DELETE', `/admin/announcements/${id}`), onSuccess: refreshNotices, onError: failMsg });
+  const startMnt = useMutation({ mutationFn: () => api('POST', '/admin/maintenance', { body: { orgId: mnt.orgId || undefined, message: mnt.message || undefined } }), onSuccess: () => { setMnt({ orgId: '', message: '' }); refreshNotices(); toast({ text: 'Maintenance is on: writes are refused, reads work' }); }, onError: failMsg });
+  const stopMnt = useMutation({ mutationFn: (id: string) => api('DELETE', `/admin/maintenance/${id}`), onSuccess: () => { refreshNotices(); toast({ text: 'Maintenance is off' }); }, onError: failMsg });
   const audit = useQuery({ enabled, queryKey: ['admin', 'audit'], queryFn: () => api<{ data: AuditRow[] }>('GET', '/admin/audit?limit=20').then((r) => r.data) });
 
   const [orgId, setOrgId] = useState<string | null>(null);
@@ -114,12 +127,41 @@ export function AdminPage() {
 
       <main className="main-content" id="main" tabIndex={-1}>
         <header className="top-header"><div className="breadcrumb"><span>Platform</span><Icon name="chevron" size={12} /><h1 className="current">Overview</h1></div></header>
+        <Announcements />
         {failed && <div className="banner banner-warn" role="alert">Could not load some data: {(failed.error as ApiError).message}</div>}
 
         <section className="tiles" aria-label="Totals">
           {[['Users', o?.users], ['Organizations', o?.organizations], ['Suspended orgs', o?.suspendedOrganizations], ['Disabled users', o?.disabledUsers], ['Active sessions', o?.activeSessions]].map(([label, n]) => (
             <div className="tile" key={label as string}><div className="num">{n ?? '–'}</div><div className="lbl">{label}</div></div>
           ))}
+        </section>
+
+        <section className="admin-section" aria-labelledby="h-notices">
+          <h2 id="h-notices">Announcements and maintenance</h2>
+          <form className="inline-form" onSubmit={(e) => { e.preventDefault(); addAnn.mutate(); }}>
+            <div className="field"><label htmlFor="an-msg">Notice</label><input id="an-msg" required maxLength={500} value={ann.message} onChange={(e) => setAnn({ ...ann, message: e.target.value })} /></div>
+            <div className="field narrow"><label htmlFor="an-sev">Kind</label><select id="an-sev" value={ann.severity} onChange={(e) => setAnn({ ...ann, severity: e.target.value })}><option value="info">Information</option><option value="warning">Warning</option></select></div>
+            <div className="field narrow"><label htmlFor="an-aud">Who sees it</label><select id="an-aud" value={ann.audience} onChange={(e) => setAnn({ ...ann, audience: e.target.value })}><option value="everyone">Everyone</option><option value="admins">Admins only</option><option value="org">One business</option></select></div>
+            {ann.audience === 'org' && <div className="field"><label htmlFor="an-org">Business</label><select id="an-org" required value={ann.orgId} onChange={(e) => setAnn({ ...ann, orgId: e.target.value })}><option value="">Choose…</option>{orgs.data?.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></div>}
+            <button className="btn btn-primary" disabled={addAnn.isPending}>Publish</button>
+          </form>
+          {anns.data?.filter((a) => !a.endedAt && (!a.endsAt || a.endsAt > new Date().toISOString())).length ? (
+            <ul className="list" aria-label="Live announcements">
+              {anns.data.filter((a) => !a.endedAt && (!a.endsAt || a.endsAt > new Date().toISOString())).map((a) => <li key={a.id}><span><strong>{a.message}</strong><div className="time">{a.severity} · {a.audience === 'org' ? orgs.data?.find((o) => o.id === a.orgId)?.name ?? 'one business' : a.audience}</div></span><button className="btn btn-outline cell-btn" onClick={() => endAnn.mutate(a.id)}>End</button></li>)}
+            </ul>
+          ) : null}
+          <h3>Maintenance</h3>
+          <p className="hint">While on, every change is refused with a clear message and reads keep working. You can still sign in and use this console.</p>
+          {maint.data?.length ? (
+            <ul className="list" aria-label="Maintenance switches">
+              {maint.data.map((m) => <li key={m.id}><span><strong>{m.orgName ?? 'Whole platform'}</strong> is in maintenance<div className="time">since {when(m.startedAt)}{m.message ? ` · ${m.message}` : ''}</div></span><button className="btn btn-danger cell-btn" onClick={() => stopMnt.mutate(m.id)}>Turn off</button></li>)}
+            </ul>
+          ) : null}
+          <form className="inline-form" onSubmit={(e) => { e.preventDefault(); if (confirm(mnt.orgId ? 'Stop all changes for this business?' : 'Stop all changes on the whole platform?')) startMnt.mutate(); }}>
+            <div className="field"><label htmlFor="mn-org">Scope</label><select id="mn-org" value={mnt.orgId} onChange={(e) => setMnt({ ...mnt, orgId: e.target.value })}><option value="">Whole platform</option>{orgs.data?.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></div>
+            <div className="field"><label htmlFor="mn-msg">Message (optional)</label><input id="mn-msg" maxLength={300} value={mnt.message} onChange={(e) => setMnt({ ...mnt, message: e.target.value })} /></div>
+            <button className="btn btn-danger" disabled={startMnt.isPending}>Turn maintenance on</button>
+          </form>
         </section>
 
         <section className="admin-section" aria-labelledby="h-support">
