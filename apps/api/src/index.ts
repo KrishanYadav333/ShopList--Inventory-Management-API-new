@@ -79,6 +79,7 @@ import type { Bindings } from './env';
 import { buildOpenApi, renderDocsPage } from './docs';
 import { checkWebhookUrl, flushEvents, forgetHooks, handleQueue, sendTestEvent, type DeliveryJob } from './webhooks';
 import { verifyAssertion, verifyRegistration } from './webauthn';
+import { sendMail, unsubscribeUrl, DIGEST_KIND, EMAIL_DEFAULT_ON, wantsEmail } from './email';
 import { KIND_LABELS, NOTIFICATION_KINDS, notify, recipients } from './notify';
 import { pruneAuthEvents, recordAuthEvent, recordRateLimited, type AuthEventKind } from './authevents';
 import { clerkConfigured, fetchClerkProfile, verifyClerkToken } from './clerk';
@@ -622,6 +623,19 @@ route('delete', '/auth/sessions/:id', 'user', async (c) => {
   return c.json({ ok: true });
 });
 
+/** One click from an email. The link is signed, so it can only switch off the one kind it was made for. */
+route('get', '/email/unsubscribe', 'public', async (c) => {
+  const p = await verifyPayload<{ u: string; o: string; k: string }>(c.env, c.req.query('t'));
+  const page = (title: string, body: string, status: 200 | 400) => {
+    c.header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'");
+    c.header('Referrer-Policy', 'no-referrer');
+    return c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${title}</title><style>body{font-family:Arial,sans-serif;max-width:520px;margin:15vh auto;padding:0 16px;color:#222;line-height:1.5}</style></head><body><h1>${title}</h1><p>${body}</p></body></html>`, status);
+  };
+  if (!p || typeof p.u !== 'string' || typeof p.o !== 'string' || typeof p.k !== 'string') return page('This link is not valid', 'It may be damaged. You can change email settings in ShopList under Settings.', 400);
+  await c.env.DB.prepare(`INSERT INTO email_prefs(user_id, org_id, kind, email) VALUES (?, ?, ?, 0) ON CONFLICT(user_id, org_id, kind) DO UPDATE SET email = 0`).bind(p.u, p.o, p.k).run();
+  return page('You will not get these emails', 'This kind of email is switched off. You can switch it back on any time in ShopList under Settings.', 200);
+});
+
 // ------------------------------------------------------------------ sign-in history (F22)
 route('get', '/auth/events', 'user', async (c) => {
   const { results } = await c.env.DB.prepare(`SELECT at, kind, door, country, browser, reason FROM auth_events WHERE user_id = ? ORDER BY at DESC LIMIT 20`).bind(c.get('user').id).all();
@@ -689,15 +703,23 @@ route('get', '/me/notification-preferences', 'user', async (c) => {
   if (!member) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
   const { results } = await c.env.DB.prepare(`SELECT kind FROM notification_prefs WHERE user_id = ? AND org_id = ? AND in_app = 0`).bind(uid, orgId).all<{ kind: string }>();
   const off = new Set(results.map((r) => r.kind));
-  return c.json({ data: NOTIFICATION_KINDS.map((kind) => ({ kind, label: KIND_LABELS[kind], inApp: !off.has(kind) })) });
+  const { results: em } = await c.env.DB.prepare(`SELECT kind, email FROM email_prefs WHERE user_id = ? AND org_id = ?`).bind(uid, orgId).all<{ kind: string; email: number }>();
+  const saved = new Map(em.map((r) => [r.kind, r.email === 1]));
+  const byEmail = (kind: string) => saved.get(kind) ?? EMAIL_DEFAULT_ON.has(kind);
+  return c.json({ data: NOTIFICATION_KINDS.map((kind) => ({ kind, label: KIND_LABELS[kind], inApp: !off.has(kind), email: byEmail(kind) })), digest: byEmail(DIGEST_KIND) });
 });
 
 route('patch', '/me/notification-preferences', 'user', async (c) => {
-  const { data } = await readJson(c, z.object({ orgId: z.string().max(60), kind: z.enum(NOTIFICATION_KINDS), inApp: z.boolean() }).strict());
+  const { data } = await readJson(c, z.object({ orgId: z.string().max(60), kind: z.enum([...NOTIFICATION_KINDS, DIGEST_KIND]), inApp: z.boolean().optional(), email: z.boolean().optional() }).strict());
   const uid = c.get('user').id;
   const member = await c.env.DB.prepare(`SELECT 1 AS x FROM memberships WHERE org_id = ? AND user_id = ?`).bind(data.orgId, uid).first();
   if (!member) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
-  await c.env.DB.prepare(`INSERT INTO notification_prefs(user_id, org_id, kind, in_app) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, org_id, kind) DO UPDATE SET in_app = excluded.in_app`).bind(uid, data.orgId, data.kind, data.inApp ? 1 : 0).run();
+  if (data.inApp !== undefined && data.kind !== DIGEST_KIND) {
+    await c.env.DB.prepare(`INSERT INTO notification_prefs(user_id, org_id, kind, in_app) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, org_id, kind) DO UPDATE SET in_app = excluded.in_app`).bind(uid, data.orgId, data.kind, data.inApp ? 1 : 0).run();
+  }
+  if (data.email !== undefined) {
+    await c.env.DB.prepare(`INSERT INTO email_prefs(user_id, org_id, kind, email) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, org_id, kind) DO UPDATE SET email = excluded.email`).bind(uid, data.orgId, data.kind, data.email ? 1 : 0).run();
+  }
   return c.json({ ok: true });
 });
 
@@ -898,7 +920,13 @@ async function createInvitation(c: Ctx, o: { orgId: string; email: string; role:
     c.env.DB.prepare(`UPDATE invitations SET revoked_at = ? WHERE org_id = ? AND lower(email) = ? AND accepted_at IS NULL AND revoked_at IS NULL`).bind(now, o.orgId, o.email.toLowerCase()),
     c.env.DB.prepare(`INSERT INTO invitations(id, token_hash, org_id, email, role, invited_by, created_at, expires_at, location_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, await sha256Hex(token), o.orgId, o.email, o.role, o.invitedBy, now, expiresAt, o.locationIds && o.role !== 'admin' ? JSON.stringify(o.locationIds) : null),
   ]);
-  return { id, token, link: `${c.env.APP_ORIGIN}/invite/${token}`, expiresAt };
+  const link = `${c.env.APP_ORIGIN}/invite/${token}`;
+  // The invitation also goes by email, so nobody has to pass a link around by hand.
+  c.executionCtx.waitUntil((async () => {
+    const biz = (await c.env.DB.prepare(`SELECT name FROM organizations WHERE id = ?`).bind(o.orgId).first<{ name: string }>())?.name ?? 'a business';
+    await sendMail(c.env, o.orgId, { to: { email: o.email }, subject: `You are invited to ${biz} on ShopList`, lines: [`${c.get('user').name} invited you to join ${biz} on ShopList as ${o.role}.`, `The link works once, for this email address only, and expires in 7 days.`], link: { url: link, label: 'Accept the invitation' }, footer: 'If you were not expecting this, ignore this email.' });
+  })());
+  return { id, token, link, expiresAt };
 }
 
 /** Members plus open invitations, so sending invitations cannot get around the limit. */
@@ -1861,6 +1889,31 @@ export async function purgeDueOrgs(env: Bindings): Promise<number> {
   return results.length;
 }
 
+/** 08:00 in each business's own timezone: low stock, approvals waiting, yesterday's sales (sales only for people who may see reports). */
+export async function sendDigests(env: Bindings, now = new Date()): Promise<number> {
+  if (!env.BREVO_API_KEY) return 0;
+  const { results } = await env.DB.prepare(`SELECT o.id, o.name, o.currency, o.settings FROM organizations o WHERE o.deleted_at IS NULL AND o.suspended_at IS NULL AND o.delete_after IS NULL AND EXISTS (SELECT 1 FROM email_prefs p WHERE p.org_id = o.id AND p.kind = ? AND p.email = 1) LIMIT 500`).bind(DIGEST_KIND).all<{ id: string; name: string; currency: string; settings: string | null }>();
+  let sent = 0;
+  for (const o of results) {
+    let tz = 'UTC';
+    try { tz = (JSON.parse(o.settings ?? '{}') as { timezone?: string }).timezone || 'UTC'; } catch { /* UTC */ }
+    let hour = -1;
+    try { hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', hourCycle: 'h23' }).format(now)); } catch { continue; }
+    if (hour !== 8) continue;
+    const { results: people } = await env.DB.prepare(`SELECT u.id, u.email, u.name, m.role FROM email_prefs p JOIN memberships m ON m.user_id = p.user_id AND m.org_id = p.org_id AND m.deactivated_at IS NULL JOIN users u ON u.id = p.user_id AND u.disabled_at IS NULL WHERE p.org_id = ? AND p.kind = ? AND p.email = 1`).bind(o.id, DIGEST_KIND).all<{ id: string; email: string; name: string; role: Role }>();
+    if (!people.length) continue;
+    const d = await env.INVENTORY.get(env.INVENTORY.idFromName(o.id)).digest();
+    const money = (m: number) => new Intl.NumberFormat('en', { style: 'currency', currency: o.currency }).format(m / 100);
+    for (const u of people) {
+      const lines = [`Good morning. Here is ${o.name} today.`, `Low stock: ${d.lowStock} product${d.lowStock === 1 ? '' : 's'} (${d.outOfStock} out of stock).`];
+      if (can(u.role, 'approvals:decide')) lines.push(`Waiting for approval: ${d.pendingApprovals}.`);
+      if (can(u.role, 'reports:read')) lines.push(`Yesterday: ${d.unitsSold} unit${d.unitsSold === 1 ? '' : 's'} sold, ${money(d.salesMinor)}.`);
+      if (await sendMail(env, o.id, { to: { email: u.email, name: u.name }, subject: `${o.name}: your morning summary`, lines, link: { url: `${env.APP_ORIGIN}/o/${o.id}/orders`, label: 'Open ShopList' }, footer: `Sent because you asked for a daily summary of ${o.name}.`, unsubscribe: await unsubscribeUrl(env, u.id, o.id, DIGEST_KIND) })) sent++;
+    }
+  }
+  return sent;
+}
+
 /** Retention (F30): activity log per business setting (default 2 years), platform audit 1 year, notifications 60 days. */
 export async function pruneRetention(env: Bindings): Promise<void> {
   const now = Date.now();
@@ -1876,7 +1929,9 @@ export async function pruneRetention(env: Bindings): Promise<void> {
 }
 
 /** Deletes rows past their retention. Each step is independent so one failure does not stop the rest. */
-export async function dailyJob(env: Bindings): Promise<void> {
+export async function dailyJob(env: Bindings, hourUtc = new Date().getUTCHours()): Promise<void> {
+  await sendDigests(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'digest failed', error: (e as Error).message })));
+  if (hourUtc !== 3) return; // the rest runs once a day
   await purgeDueOrgs(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'purge failed', error: (e as Error).message })));
   await pruneRetention(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'retention failed', error: (e as Error).message })));
   await pruneAuthEvents(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'prune auth events failed', error: (e as Error).message })));

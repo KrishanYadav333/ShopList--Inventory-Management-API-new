@@ -2,7 +2,7 @@
 
 ## Scheduled job
 
-One cron (`15 3 * * *`, 03:15 UTC) runs `dailyJob`: purge businesses whose 14 days are up, apply retention, prune sign-in events. Each step is independent and logs its own failure. Control-plane migrations 0011 to 0015 add sign-in events, plans, support grants, scheduled deletion, announcements and maintenance; apply them before deploying.
+One cron (`15 * * * *`, every hour at :15) runs `dailyJob`: the morning summary is checked every hour (08:00 in each business's timezone); in the 03 UTC run it also does: purge businesses whose 14 days are up, apply retention, prune sign-in events. Each step is independent and logs its own failure. Control-plane migrations 0011 to 0015 add sign-in events, plans, support grants, scheduled deletion, announcements and maintenance; apply them before deploying.
 
 ## Free-tier budget
 
@@ -236,3 +236,6 @@ Run against a local server with `DEV_AUTH=true`, never production. The audit too
 | 20,000-row CSV-style import (4 parallel batches of 100) | 51 s, 19,997 created, 3 invalid rows reported |
 
 These are local numbers, not the deployed Workers free plan under sustained load.
+
+
+Secrets: `BREVO_API_KEY`, `EMAIL_FROM` (`wrangler secret put`). Brevo's IP allow-list must be off, because Workers have no fixed address.

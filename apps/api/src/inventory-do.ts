@@ -952,6 +952,15 @@ export class InventoryDO extends DurableObject<Bindings> {
     await this.ctx.storage.deleteAll();
   }
 
+  /** Numbers for the morning email: what needs attention now, and yesterday's sales in the business's own day. */
+  digest(): { lowStock: number; outOfStock: number; pendingApprovals: number; unitsSold: number; salesMinor: number } {
+    const n = (name: string) => this.one<{ value: number }>(`SELECT value FROM counters WHERE name = ?`, name)?.value ?? 0;
+    const y = new Date(`${this.today()}T00:00:00Z`);
+    y.setUTCDate(y.getUTCDate() - 1);
+    const sold = this.one<{ u: number | null; m: number | null }>(`SELECT SUM(sold_qty) AS u, SUM(sold_minor) AS m FROM daily_stats WHERE day = ?`, y.toISOString().slice(0, 10));
+    return { lowStock: n('low_stock'), outOfStock: n('out_of_stock'), pendingApprovals: this.one<{ n: number }>(`SELECT COUNT(*) AS n FROM approval_requests WHERE state = 'pending'`)?.n ?? 0, unitsSold: sold?.u ?? 0, salesMinor: sold?.m ?? 0 };
+  }
+
   /** What counts against the plan's limits. Numbers only. */
   planUsage(): { products: number; locations: number; ordersThisMonth: number; importsToday: number } {
     const n = (sql: string, ...b: SqlStorageValue[]) => this.one<{ n: number }>(sql, ...b)?.n ?? 0;

@@ -20,6 +20,9 @@ export interface Bindings {
   CLERK_SECRET_KEY?: string;
   /** Clerk frontend API URL, e.g. https://example-12.clerk.accounts.dev. Must equal the token's `iss`. */
   CLERK_ISSUER?: string;
+  /** Brevo API key (secret) and the verified sender address (secret, so it is not in the public repo). Email is off without both. */
+  BREVO_API_KEY?: string;
+  EMAIL_FROM?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   /** Random 32+ byte secret used to sign the short-lived OAuth state cookie. */

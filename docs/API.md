@@ -248,3 +248,5 @@ All under `/orgs/{orgId}` unless noted. The generated reference at `/api/docs` i
 | Platform (owner only) | `GET /admin/security`, `GET/PATCH /admin/plans`, `PATCH /admin/orgs/{id}/plan`, `GET /admin/support`, `POST /admin/orgs/{id}/cancel-deletion`, `GET/POST/DELETE /admin/announcements`, `GET/POST/DELETE /admin/maintenance`, `GET /admin/audit?format=csv` |
 
 While maintenance is on, every write outside `/admin` and `/auth` answers `503 maintenance` with `Retry-After`; reads keep working.
+
+`PATCH /me/notification-preferences` takes `{ orgId, kind, inApp?, email? }`; `kind` may be `digest` (the 08:00 summary, email only). `GET /email/unsubscribe?t=` is public and signed.

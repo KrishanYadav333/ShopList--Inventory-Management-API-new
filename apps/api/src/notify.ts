@@ -1,5 +1,6 @@
 import type { Role } from '@shoplist/shared';
 import type { Bindings } from './env';
+import { sendMail, unsubscribeUrl, wantsEmail, type MailEnv } from './email';
 import { newId, nowIso } from './util';
 
 export const NOTIFICATION_KINDS = ['stock.low', 'stock.out', 'order.created', 'approval.requested', 'approval.decided', 'count.assigned', 'security.not_me', 'support.granted'] as const;
@@ -38,17 +39,42 @@ export async function recipients(env: Pick<Bindings, 'DB'>, orgId: string, roles
   return results.map((r) => r.id);
 }
 
-export async function notify(env: Pick<Bindings, 'DB'>, orgId: string, userIds: string[], note: Note): Promise<void> {
+export async function notify(env: MailEnv, orgId: string, userIds: string[], note: Note): Promise<void> {
   const ids = [...new Set(userIds)];
   if (!ids.length) return;
   const now = nowIso();
   for (let i = 0; i < ids.length; i += 40) {
     await env.DB.batch(ids.slice(i, i + 40).map((u) => env.DB.prepare(`INSERT INTO notifications(id, user_id, org_id, kind, title, link, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(newId('ntf'), u, orgId, note.kind, note.title, note.link ?? null, now)));
   }
+  await emailNote(env, orgId, ids, note);
+}
+
+/** The same notice by email, for people who want this kind that way. Failures never reach the caller. */
+async function emailNote(env: MailEnv, orgId: string, ids: string[], note: Note): Promise<void> {
+  if (!env.BREVO_API_KEY) return;
+  try {
+    const want = await wantsEmail(env, ids, orgId, note.kind);
+    if (!want.size) return;
+    const marks = [...want].map(() => '?').join(',');
+    const { results: users } = await env.DB.prepare(`SELECT id, email, name FROM users WHERE disabled_at IS NULL AND id IN (${marks})`).bind(...want).all<{ id: string; email: string; name: string }>();
+    const biz = orgId === '_platform' ? 'ShopList' : ((await env.DB.prepare(`SELECT name FROM organizations WHERE id = ?`).bind(orgId).first<{ name: string }>())?.name ?? 'ShopList');
+    for (const u of users) {
+      await sendMail(env, orgId, {
+        to: { email: u.email, name: u.name },
+        subject: `${biz}: ${note.title}`.slice(0, 150),
+        lines: [note.title],
+        link: note.link ? { url: `${env.APP_ORIGIN}${note.link}`, label: 'Open in ShopList' } : undefined,
+        footer: `You get this because of your role in ${biz}.`,
+        unsubscribe: await unsubscribeUrl(env, u.id, orgId, note.kind),
+      });
+    }
+  } catch (e) {
+    console.error(JSON.stringify({ level: 'error', message: 'email notice failed', error: (e as Error).message }));
+  }
 }
 
 /** Turns a recorded inventory event into notifications for the people it concerns. */
-export async function notifyForEvent(env: Pick<Bindings, 'DB'>, orgId: string, type: string, data: Record<string, unknown>): Promise<void> {
+export async function notifyForEvent(env: MailEnv, orgId: string, type: string, data: Record<string, unknown>): Promise<void> {
   const kind = type as NotificationKind;
   if (kind === 'count.assigned') {
     const who = String(data.assignedTo ?? '');

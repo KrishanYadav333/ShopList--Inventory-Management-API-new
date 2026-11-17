@@ -57,7 +57,7 @@ describe('delete with a 14-day grace period (F27)', () => {
     expect((await call(org.cookie, 'POST', `${org.base}/cancel-deletion`, {})).status).toBe(200);
     expect((await call(org.cookie, 'POST', `${org.base}/cancel-deletion`, {})).status).toBe(409);
     expect((await call(org.cookie, 'POST', `${org.base}/products`, { sku: `S-${uid()}`, name: 'Back', priceMinor: 1 })).status).toBe(201);
-    await dailyJob(env);
+    await dailyJob(env, 3);
     expect((await call(org.cookie, 'GET', `${org.base}/products`)).status).toBe(200);
   });
 
@@ -65,7 +65,7 @@ describe('delete with a 14-day grace period (F27)', () => {
     const org = await newOrg('Doomed Co');
     await schedule(org);
     const dev = await loginAdmin();
-    await dailyJob(env); // not due yet
+    await dailyJob(env, 3); // not due yet
     expect((await call(org.cookie, 'GET', `${org.base}/products`)).status).toBe(200);
     expect((await call(org.cookie, 'POST', '/admin/orgs/' + org.orgId + '/cancel-deletion', {})).status).toBe(404);
     expect((await call(dev, 'POST', `/admin/orgs/${org.orgId}/cancel-deletion`, {})).status).toBe(200);
@@ -79,7 +79,7 @@ describe('delete with a 14-day grace period (F27)', () => {
     await call(org.cookie, 'POST', `${org.base}/webhooks`, { url: 'https://example.com/h', events: ['*'] });
     await schedule(org);
     await past(org.orgId);
-    await dailyJob(env);
+    await dailyJob(env, 3);
     // Gone for everyone who belonged to it.
     expect((await call(org.cookie, 'GET', `${org.base}/products`)).status).toBe(404);
     expect((await call(staff.cookie, 'GET', '/me')).body.organizations.find((o: { id: string }) => o.id === org.orgId)).toBeUndefined();
@@ -92,6 +92,6 @@ describe('delete with a 14-day grace period (F27)', () => {
     expect(detail.body.counts.products).toBe(0);
     expect(JSON.stringify((await call(dev, 'GET', '/admin/audit?limit=50')).body)).toContain('org.purged');
     // Running the job again changes nothing.
-    await dailyJob(env);
+    await dailyJob(env, 3);
   });
 });

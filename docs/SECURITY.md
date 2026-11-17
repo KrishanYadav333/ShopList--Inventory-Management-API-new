@@ -134,6 +134,7 @@ Rules:
 - **Plans.** Limits and switches are resolved on the server for every request, for people and API keys alike. A switched-off feature is a `404`, so it cannot be probed.
 - **Scheduled deletion.** The business name must be typed; 14 days read-only; the admin or the owner can cancel; then a daily job empties the Durable Object and removes the rows (the organization row stays as a tombstone for the audit trail).
 - **Maintenance.** Writes return `503`; reads, sign-in and the owner console keep working so it can always be turned off.
+- **Email.** Sent through Brevo with the key and the sender address held as Worker secrets (`BREVO_API_KEY`, `EMAIL_FROM`). Emails carry the same text as the in-app notice, never cost or contact data beyond that. Approvals, security reports and support windows are emailed by default; everything else, and the morning summary, only if the person opts in. Every non-invitation email has a signed one-click unsubscribe for that kind. At most 50 emails a day per business and 250 in total. A failed send never fails the request.
 - **Retention.** Activity log 2 years (1 to 7, per business), platform audit 1 year, sign-in events 90 days, notifications 60 days. A daily cron at 03:15 UTC does the deleting.
 
 ## Web application security

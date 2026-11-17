@@ -355,3 +355,6 @@ a.btn { text-decoration: none; }
 .banner-info { background: #eaf2fb; color: #1f3b57; border: 1px solid #c5d9ee; }
 .announcements .banner { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0 0 8px; }
 .announcements .banner .btn { margin-left: auto; }
+
+.check-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 4px 0; }
+.check-row > span { flex: 1 1 220px; }

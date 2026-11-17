@@ -86,6 +86,7 @@ export const DOCS: Record<string, Doc> = {
   'DELETE /orgs/:orgId': { tag: 'Organizations', summary: 'Schedule deletion in 14 days (admin only; type the business name). Read-only until then' },
   'POST /orgs/:orgId/cancel-deletion': { tag: 'Organizations', summary: 'Cancel a scheduled deletion (admin only)' },
   'POST /admin/orgs/:id/cancel-deletion': { tag: 'Platform admin', summary: 'Cancel a business\'s scheduled deletion' },
+  'GET /email/unsubscribe': { tag: 'Account', summary: 'One-click unsubscribe from an email (signed link, no sign-in needed)' },
   'GET /announcements': { tag: 'Account', summary: 'Notices and maintenance that apply to you' },
   'GET /admin/announcements': { tag: 'Platform admin', summary: 'List announcements' },
   'POST /admin/announcements': { tag: 'Platform admin', summary: 'Publish an announcement (everyone, admins, or one business)' },

@@ -69,10 +69,10 @@ describe('retention (F30)', () => {
     const org = await newOrg();
     await product(org);
     await ageAudit(org.orgId, 400); // older than a year, younger than two
-    await dailyJob(env);
+    await dailyJob(env, 3);
     expect(await auditCount(org)).toBeGreaterThan(0);
     await ageAudit(org.orgId, 800);
-    await dailyJob(env);
+    await dailyJob(env, 3);
     expect(await auditCount(org)).toBe(0);
   });
 
@@ -84,7 +84,7 @@ describe('retention (F30)', () => {
     expect((await call(org.cookie, 'PATCH', `${org.base}/settings`, { auditRetentionYears: 1 })).status).toBe(200);
     await product(org);
     await ageAudit(org.orgId, 400);
-    await dailyJob(env);
+    await dailyJob(env, 3);
     expect(await auditCount(org)).toBe(0);
     expect((await call(org.cookie, 'PATCH', `${org.base}/settings`, { auditRetentionYears: 7 })).body.settings.auditRetentionYears).toBe(7);
   });
@@ -96,7 +96,7 @@ describe('retention (F30)', () => {
     const org = await newOrg();
     const me = (await call(org.cookie, 'GET', '/me')).body.user.id;
     await env.DB.prepare(`INSERT INTO notifications(id, user_id, org_id, kind, title, created_at) VALUES (?, ?, ?, 'stock.low', 't', ?), (?, ?, ?, 'stock.low', 't', ?)`).bind(`ntf_old_${uid()}`, me, org.orgId, ago(61), `ntf_new_${uid()}`, me, org.orgId, ago(59)).run();
-    await dailyJob(env);
+    await dailyJob(env, 3);
     const pa = await env.DB.prepare(`SELECT id FROM platform_audit WHERE id IN (?, ?)`).bind(id, fresh).all<{ id: string }>();
     expect(pa.results.map((r) => r.id)).toEqual([fresh]);
     const n = await env.DB.prepare(`SELECT COUNT(*) AS n FROM notifications WHERE user_id = ?`).bind(me).first<{ n: number }>();
