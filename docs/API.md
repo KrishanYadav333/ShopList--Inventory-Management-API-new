@@ -217,3 +217,20 @@ Events: `product.created`, `product.updated`, `product.deleted`, `stock.changed`
 | SKU, barcode | 64 characters |
 | Locations per org | 50 |
 | Members per org | 50 |
+
+
+## Added with the access-level work
+
+All under `/orgs/{orgId}` unless noted. The generated reference at `/api/docs` is the full list.
+
+| Area | Endpoints |
+|---|---|
+| Settings | `GET/PATCH /settings` |
+| Approvals | `GET /approvals`, `POST /approvals/{id}/approve`, `/reject`, `/withdraw` (a risky write may answer `202 { approval }`) |
+| Reports | `GET /reports/{sales, sales-by-product, valuation, movements, low-stock, dead-stock, shrinkage}?from&to&location&days&format=csv` |
+| Purchasing | `/suppliers`, `/purchase-orders` (+ `/send`, `/receive`, `/cancel`, `/close`), `/purchasing/reorder`, `/purchasing/reorder/draft` |
+| Counts | `/count-tasks` (+ `/lines`, `/submit`, `/cancel`) |
+| Customers | `/customers`, `GET /orders/{id}/document?type=invoice\|receipt` |
+| Team | `/invitations` (list, resend, revoke), `/members/{id}/deactivate`, `/reactivate`, `/admin-handover`; `PATCH /members/{id}` takes `locationIds` |
+| Me | `GET /me/notifications`, `/me/notifications/unread-count`, `POST /me/notifications/read`, `/me/notification-preferences` |
+| Platform (developer only) | `POST /admin/orgs` (onboard), `GET /admin/orgs/{id}`, `/admin/users/{id}`, `POST /admin/orgs/{id}/transfer-admin`, `/resend-invitation`, `POST /admin/users/{id}/sign-out` |
