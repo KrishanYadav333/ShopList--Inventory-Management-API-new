@@ -22,17 +22,17 @@ export const ROLE_SUMMARY: Record<Role, string> = {
   viewer: 'Read-only: products, stock, orders and history. No costs.',
 };
 
-export const PERMISSIONS = ['inventory:read', 'cost:read', 'reports:read', 'purchasing:write', 'counts:assign', 'approvals:decide', 'products:write', 'stock:write', 'orders:write', 'team:manage', 'settings:manage', 'audit:read', 'org:delete'] as const;
+export const PERMISSIONS = ['inventory:read', 'cost:read', 'reports:read', 'purchasing:write', 'counts:assign', 'customers:read', 'approvals:decide', 'products:write', 'stock:write', 'orders:write', 'team:manage', 'settings:manage', 'audit:read', 'org:delete'] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 /** Never available to an API key, whatever its scopes: these need a signed-in person. */
 export const SESSION_ONLY: readonly Permission[] = ['team:manage', 'settings:manage', 'audit:read', 'org:delete'];
 
 export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   viewer: ['inventory:read'],
-  sales: ['inventory:read', 'orders:write'],
+  sales: ['inventory:read', 'customers:read', 'orders:write'],
   stock: ['inventory:read', 'stock:write'],
-  accountant: ['inventory:read', 'cost:read', 'reports:read', 'audit:read'],
-  manager: ['inventory:read', 'cost:read', 'reports:read', 'purchasing:write', 'counts:assign', 'approvals:decide', 'products:write', 'stock:write', 'orders:write'],
+  accountant: ['inventory:read', 'customers:read', 'cost:read', 'reports:read', 'audit:read'],
+  manager: ['inventory:read', 'customers:read', 'cost:read', 'reports:read', 'purchasing:write', 'counts:assign', 'approvals:decide', 'products:write', 'stock:write', 'orders:write'],
   admin: PERMISSIONS,
 };
 export const can = (role: Role, permission: Permission): boolean => ROLE_PERMISSIONS[role].includes(permission);
@@ -235,8 +235,9 @@ export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
 export function keyPermissions(scopes: readonly string[]): Permission[] {
   const out = new Set<Permission>(['inventory:read']);
   for (const sc of scopes) {
-    if (sc === 'inventory:write') ['products:write', 'stock:write', 'orders:write', 'cost:read'].forEach((p) => out.add(p as Permission));
+    if (sc === 'inventory:write') ['products:write', 'stock:write', 'orders:write', 'cost:read', 'customers:read'].forEach((p) => out.add(p as Permission));
     else if (['products:write', 'stock:write', 'orders:write', 'reports:read', 'cost:read'].includes(sc)) out.add(sc as Permission);
+    if (sc === 'orders:write') out.add('customers:read'); // an order integration reads back the customer details it sent
   }
   return [...out];
 }
@@ -300,6 +301,7 @@ export const orderInput = z
     customerName: text(120),
     customerEmail: z.string().trim().toLowerCase().email().max(254).nullish(),
     country: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, 'Use a two-letter country code').nullish(),
+    customerId: text(40).nullish(),
     channel: z.enum(ORDER_CHANNELS).default('manual'),
     note: z.string().trim().max(500).nullish(),
     locationId: text(40).nullish(),
@@ -344,7 +346,12 @@ export interface Order {
   locationId: string;
   paid: boolean;
   state: OrderState;
+  customerId: string | null;
+  /** What the customer pays: lines plus tax when tax is added on top. */
   totalMinor: number;
+  subtotalMinor: number;
+  taxMinor: number;
+  taxMode: 'none' | 'inclusive' | 'exclusive';
   lines: OrderLine[];
   version: number;
   createdAt: string;
@@ -524,4 +531,27 @@ export interface CountTaskLine { productId: string; sku: string; name: string; c
 export interface CountTask {
   id: string; title: string | null; locationId: string; blind: boolean; assignedTo: string | null; dueAt: string | null; state: CountState;
   createdBy: string; createdAt: string; submittedAt: string | null; lines: CountTaskLine[]; summary: { total: number; counted: number; variances: number } | null;
+}
+
+// ---------------------------------------------------------------- customers and tax
+export const customerInput = z
+  .object({
+    name: text(120),
+    email: z.string().trim().toLowerCase().email().max(254).nullish().or(z.literal('')),
+    phone: z.string().trim().max(40).nullish(),
+    address: z.string().trim().max(300).nullish(),
+    taxId: z.string().trim().max(40).nullish(),
+    note: z.string().trim().max(500).nullish(),
+  })
+  .strict();
+export type CustomerInput = z.infer<typeof customerInput>;
+export interface Customer {
+  id: string; name: string; email: string | null; phone: string | null; address: string | null; taxId: string | null; note: string | null;
+  archivedAt: string | null; createdAt: string; orders: number; spentMinor: number; lastOrderAt: string | null;
+}
+export type TaxMode = 'none' | 'inclusive' | 'exclusive';
+/** Tax for one line, rounded half up per line. Inclusive prices already contain the tax; exclusive adds it on top. */
+export function lineTax(mode: TaxMode, rateBp: number, lineMinor: number): number {
+  if (mode === 'none' || rateBp <= 0) return 0;
+  return mode === 'exclusive' ? Math.round((lineMinor * rateBp) / 10_000) : Math.round((lineMinor * rateBp) / (10_000 + rateBp));
 }

@@ -1,10 +1,10 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ORDER_CHANNELS, type Order, type Product } from '@shoplist/shared';
+import { ORDER_CHANNELS, type Customer, type Order, type Product } from '@shoplist/shared';
 import { api, ApiError, newKey } from '../api';
 import { money } from '../format';
 import { Icon } from '../icons';
-import { useLocations, type OrgSummary } from '../queries';
+import { canDo, useLocations, type OrgSummary } from '../queries';
 import { useToast } from '../toast';
 import { Modal } from './Modal';
 import { ScanButton } from './Scanner';
@@ -18,6 +18,8 @@ export function OrderDialog({ org, onClose }: { org: OrgSummary; onClose: () => 
   const locations = useLocations(org.id);
   const [key] = useState(newKey);
   const [f, setF] = useState({ customerName: '', customerEmail: '', country: '', channel: 'manual', note: '', locationId: '', paid: false });
+  const [customerId, setCustomerId] = useState('');
+  const customers = useQuery({ enabled: canDo(org.role, 'customers:read'), queryKey: ['org', org.id, 'customers', 'pick'], queryFn: () => api<{ data: Customer[] }>('GET', `/orgs/${org.id}/customers`).then((r) => r.data) });
   const [lines, setLines] = useState<Line[]>([]);
   const [term, setTerm] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -54,7 +56,7 @@ export function OrderDialog({ org, onClose }: { org: OrgSummary; onClose: () => 
       return api<{ order: Order }>('POST', `/orgs/${org.id}/orders`, {
         idempotencyKey: key,
         body: {
-          customerName: f.customerName.trim(), customerEmail: f.customerEmail.trim() || null, country: f.country.trim() || null,
+          customerId: customerId || null, customerName: f.customerName.trim(), customerEmail: f.customerEmail.trim() || null, country: f.country.trim() || null,
           channel: f.channel, note: f.note.trim() || null, locationId: f.locationId || null, paid: f.paid,
           lines: lines.map((l) => ({ productId: l.product.id, quantity: Number(l.quantity) })),
         },
@@ -79,6 +81,15 @@ export function OrderDialog({ org, onClose }: { org: OrgSummary; onClose: () => 
       <form onSubmit={submit} noValidate>
         <div className="modal-body">
           <div className="form-grid">
+            {!!customers.data?.length && (
+              <div className="field span-2">
+                <label htmlFor="o-existing">Existing customer</label>
+                <select id="o-existing" value={customerId} onChange={(e) => { const c = customers.data!.find((x) => x.id === e.target.value); setCustomerId(e.target.value); if (c) setF((v) => ({ ...v, customerName: c.name, customerEmail: c.email ?? '' })); }}>
+                  <option value="">New or one-time customer</option>
+                  {customers.data.map((c) => <option key={c.id} value={c.id}>{c.name}{c.email ? ` (${c.email})` : ''}</option>)}
+                </select>
+              </div>
+            )}
             <div className="field span-2">
               <label htmlFor="o-cust">Customer</label>
               <input id="o-cust" value={f.customerName} onChange={set('customerName')} maxLength={120} autoComplete="off" aria-invalid={!!errors.customerName} />

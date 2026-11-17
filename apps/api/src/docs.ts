@@ -1,7 +1,7 @@
 import { z, type ZodType } from 'zod';
 import {
   apiKeyInput, countInput, importRequest, inviteInput, locationInput, memberPatch, movementInput, movementListQuery, orderInput, orderListQuery,
-  orgInput, pageQuery, paidInput, productInput, productListQuery, countTaskInput, productPatch, purchaseOrderInput, supplierInput, transferInput, webhookInput,
+  orgInput, pageQuery, paidInput, productInput, productListQuery, countTaskInput, customerInput, productPatch, purchaseOrderInput, supplierInput, transferInput, webhookInput,
 } from '@shoplist/shared';
 
 export interface RouteInfo { method: string; path: string; access: string }
@@ -72,6 +72,11 @@ export const DOCS: Record<string, Doc> = {
   'POST /orgs/:orgId/count-tasks/:id/lines': { tag: 'Counts', summary: 'Save counted quantities (progress)' },
   'POST /orgs/:orgId/count-tasks/:id/submit': { tag: 'Counts', summary: 'Submit: differences become count movements; lines nobody counted are left alone' },
   'POST /orgs/:orgId/count-tasks/:id/cancel': { tag: 'Counts', summary: 'Cancel an open count' },
+  'GET /orgs/:orgId/customers': { tag: 'Customers', summary: 'Customers with order counts and what they have spent (?q= to search)' },
+  'POST /orgs/:orgId/customers': { tag: 'Customers', summary: 'Add a customer', body: customerInput },
+  'GET /orgs/:orgId/customers/:id': { tag: 'Customers', summary: 'One customer and their orders' },
+  'PATCH /orgs/:orgId/customers/:id': { tag: 'Customers', summary: 'Edit or archive a customer' },
+  'GET /orgs/:orgId/orders/:id/document': { tag: 'Orders', summary: 'Invoice or receipt data (?type=invoice|receipt) for printing' },
   'GET /orgs/:orgId/settings': { tag: 'Organizations', summary: "The business's settings (currency, tax, timezone, numbering)" },
   'PATCH /orgs/:orgId/settings': { tag: 'Organizations', summary: 'Change business settings (admin only)' },
   'POST /orgs/:orgId/invitations': { tag: 'Members', summary: 'Create a one-time invitation link', body: inviteInput },
@@ -142,6 +147,7 @@ const ACCESS_TEXT: Record<string, string> = {
   'reports:read': 'Accountant, manager or admin',
   'purchasing:write': 'Manager or admin',
   'counts:assign': 'Manager or admin',
+  'customers:read': 'Sales, accountant, manager or admin',
   'team:manage': 'Admin session (not API keys)',
   'settings:manage': 'Admin session (not API keys)',
   'audit:read': 'Admin session (not API keys)',

@@ -23,6 +23,8 @@ import {
   purchaseOrderInput,
   purchaseOrderPatch,
   receiveInput,
+  customerInput,
+  type TaxMode,
   countTaskInput,
   countLinesInput,
   REPORTS,
@@ -270,16 +272,18 @@ const api = new Hono<{ Bindings: Bindings; Variables: Vars }>();
 api.use('*', rateLimit, originCheck);
 
 const COST_FIELDS = new Set(['costMinor', 'inventoryValueMinor', 'unitCostMinor', 'totalCostMinor']);
-const stripCost = (v: unknown): unknown => {
-  if (Array.isArray(v)) return v.map(stripCost);
-  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).filter(([k]) => !COST_FIELDS.has(k)).map(([k, x]) => [k, stripCost(x)]));
+const CONTACT_FIELDS = new Set(['customerEmail']);
+const strip = (v: unknown, drop: Set<string>): unknown => {
+  if (Array.isArray(v)) return v.map((x) => strip(x, drop));
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).filter(([k]) => !drop.has(k)).map(([k, x]) => [k, strip(x, drop)]));
   return v;
 };
-async function withoutCost(res: Response): Promise<Response> {
+/** Removes fields the caller's role may not see, from any JSON response of any route. */
+async function shaped(res: Response, drop: Set<string>): Promise<Response> {
   const text = await res.text();
   let body: unknown;
   try { body = JSON.parse(text); } catch { return new Response(text, res); }
-  const out = new Response(JSON.stringify(stripCost(body)), res);
+  const out = new Response(JSON.stringify(strip(body, drop)), res);
   out.headers.delete('content-length');
   return out;
 }
@@ -294,7 +298,12 @@ function route(method: 'get' | 'post' | 'patch' | 'delete', path: string, access
     let res = await handler(c);
     const org = c.get('org');
     // Roles without cost:read never receive cost or inventory value, in any response from any route.
-    if (org && !allowed(org, 'cost:read') && res.headers.get('content-type')?.includes('json')) res = await withoutCost(res);
+    if (org && res.headers.get('content-type')?.includes('json')) {
+      const drop = new Set<string>();
+      if (!allowed(org, 'cost:read')) COST_FIELDS.forEach((f) => drop.add(f));
+      if (!allowed(org, 'customers:read')) CONTACT_FIELDS.forEach((f) => drop.add(f));
+      if (drop.size) res = await shaped(res, drop);
+    }
     // `x-no-drain` lets local tests inspect the raw outbox. It only works when DEV_AUTH is on, never in production.
     const hold = c.env.DEV_AUTH === 'true' && c.req.header('x-no-drain') === '1';
     if (method !== 'get' && res.status < 400 && org && !hold) c.executionCtx.waitUntil(flushEvents(c.env, org.id).then(() => undefined, () => undefined));
@@ -602,7 +611,7 @@ route('patch', '/orgs/:orgId/settings', 'settings:manage', async (c) => {
   }
   const { currency, ...rest } = next;
   await c.env.DB.prepare(`UPDATE organizations SET settings = ?, currency = ? WHERE id = ?`).bind(JSON.stringify(rest), currency, c.get('org').id).run();
-  await inventory(c).setSettings({ orderPrefix: next.orderPrefix, defaultReorderPoint: next.defaultReorderPoint, approvals: next.approvals, timezone: next.timezone, poPrefix: next.poPrefix });
+  await inventory(c).setSettings({ orderPrefix: next.orderPrefix, defaultReorderPoint: next.defaultReorderPoint, approvals: next.approvals, timezone: next.timezone, poPrefix: next.poPrefix, taxMode: next.taxMode, taxRateBp: next.taxRateBp });
   return c.json({ settings: next });
 });
 
@@ -1182,6 +1191,38 @@ route('post', '/orgs/:orgId/count-tasks/:id/submit', 'stock:write', async (c) =>
 route('post', '/orgs/:orgId/count-tasks/:id/cancel', 'counts:assign', async (c) => {
   const out = unwrap(await inventory(c).cancelCountTask(caller(c), c.req.param('id') ?? ''));
   return c.json(out.body, out.status as 200);
+});
+
+// -------------------------------------------------------------- customers and invoices
+route('get', '/orgs/:orgId/customers', 'customers:read', async (c) => c.json({ data: await inventory(c).listCustomers(c.req.query('q')) }));
+
+route('post', '/orgs/:orgId/customers', 'orders:write', async (c) => {
+  const { data } = await readJson(c, customerInput);
+  const out = unwrap(await inventory(c).createCustomer(caller(c), data));
+  return c.json(out.body, out.status as 201);
+});
+
+route('get', '/orgs/:orgId/customers/:id', 'customers:read', async (c) => c.json(unwrap(await inventory(c).getCustomer(c.req.param('id') ?? ''))));
+
+route('patch', '/orgs/:orgId/customers/:id', 'orders:write', async (c) => {
+  const { data } = await readJson(c, customerInput.partial().extend({ archived: z.boolean().optional() }).strict());
+  const out = unwrap(await inventory(c).updateCustomer(caller(c), c.req.param('id') ?? '', data));
+  return c.json(out.body, out.status as 200);
+});
+
+/** The data for a printable invoice or receipt. The page prints it with the browser's own Save as PDF. */
+route('get', '/orgs/:orgId/orders/:id/document', 'customers:read', async (c) => {
+  const type = z.enum(['invoice', 'receipt']).default('invoice').parse(c.req.query('type') ?? 'invoice');
+  const doc = unwrap(await inventory(c).orderDocument(c.req.param('id') ?? ''));
+  if (type === 'receipt' && !doc.order.paid) throw new AppError(409, 'not_paid', 'A receipt is for an order that has been paid.');
+  const settings = await loadSettings(c);
+  const digits = doc.order.number.replace(/^\D+/, '');
+  return c.json({
+    type,
+    documentNumber: `${type === 'receipt' ? 'RCT-' : settings.invoicePrefix}${digits}`,
+    business: { name: settings.legalName, address: settings.address, phone: settings.phone, email: settings.email, taxId: settings.taxId, currency: settings.currency },
+    ...doc,
+  });
 });
 
 route('get', '/orgs/:orgId/audit', 'audit:read', async (c) => c.json(await inventory(c).listAudit(parse(pageQuery, c.req.query()))));

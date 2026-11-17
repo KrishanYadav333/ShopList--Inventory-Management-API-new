@@ -24,7 +24,8 @@ import {
   type StockLevel,
   type TransferInput,
 } from '@shoplist/shared';
-import { APPROVAL_DEFAULTS, type ApprovalRules, type ApprovalView, type CountTask, type CountTaskInput, type PoState, type PurchaseOrder, type PurchaseOrderInput, type ReceiveInput, type ReportName, type ReportResult, type Supplier, type SupplierInput } from '@shoplist/shared';
+import { lineTax, type TaxMode } from '@shoplist/shared';
+import { APPROVAL_DEFAULTS, type ApprovalRules, type ApprovalView, type Customer, type CustomerInput, type CountTask, type CountTaskInput, type PoState, type PurchaseOrder, type PurchaseOrderInput, type ReceiveInput, type ReportName, type ReportResult, type Supplier, type SupplierInput } from '@shoplist/shared';
 import type { Bindings } from './env';
 import { ok, type Problem, type Result } from './errors';
 import { decodeCursor, encodeCursor, newId, nowIso } from './util';
@@ -284,6 +285,33 @@ const MIGRATIONS: string[][] = [
        expected INTEGER,
        PRIMARY KEY (task_id, product_id)
      )`,
+  ],  // Step 9: customers, tax and order totals. Totals are stored on the order so they never change after the fact,
+  // even if the tax settings change later. Existing orders get tax 0 and customers grouped by email.
+  [
+    `CREATE TABLE customers (
+       id TEXT PRIMARY KEY,
+       name TEXT NOT NULL,
+       email TEXT COLLATE NOCASE,
+       phone TEXT,
+       address TEXT,
+       tax_id TEXT,
+       note TEXT,
+       created_at TEXT NOT NULL,
+       archived_at TEXT
+     )`,
+    `CREATE UNIQUE INDEX customers_email ON customers(email) WHERE email IS NOT NULL`,
+    `ALTER TABLE orders ADD COLUMN customer_id TEXT`,
+    `ALTER TABLE orders ADD COLUMN subtotal_minor INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE orders ADD COLUMN tax_minor INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE orders ADD COLUMN total_minor INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE orders ADD COLUMN tax_mode TEXT NOT NULL DEFAULT 'none'`,
+    `ALTER TABLE order_lines ADD COLUMN tax_rate_bp INTEGER NOT NULL DEFAULT 0`,
+    `CREATE INDEX orders_customer_id ON orders(customer_id)`,
+    `INSERT INTO customers(id, name, email, created_at)
+       SELECT 'cus_' || lower(hex(randomblob(9))), MAX(customer_name), lower(customer_email), MIN(created_at) FROM orders WHERE customer_email IS NOT NULL GROUP BY lower(customer_email)`,
+    `UPDATE orders SET customer_id = (SELECT c.id FROM customers c WHERE c.email = lower(orders.customer_email)) WHERE customer_email IS NOT NULL`,
+    `UPDATE orders SET subtotal_minor = COALESCE((SELECT SUM(l.quantity * l.unit_price_minor) FROM order_lines l WHERE l.order_id = orders.id), 0)`,
+    `UPDATE orders SET total_minor = subtotal_minor`,
   ],
 ];
 
@@ -355,6 +383,11 @@ interface OrderRow {
   location_id: string;
   paid: number;
   state: OrderState;
+  customer_id: string | null;
+  subtotal_minor: number;
+  tax_minor: number;
+  total_minor: number;
+  tax_mode: TaxMode;
   version: number;
   created_at: string;
   updated_at: string;
@@ -893,7 +926,7 @@ export class InventoryDO extends DurableObject<Bindings> {
     this.run(`INSERT INTO meta(key, value) VALUES ('settings', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, JSON.stringify(settings));
   }
 
-  private settings(): { poPrefix?: string; orderPrefix?: string; defaultReorderPoint?: number | null; approvals?: ApprovalRules; timezone?: string } {
+  private settings(): { poPrefix?: string; orderPrefix?: string; defaultReorderPoint?: number | null; approvals?: ApprovalRules; timezone?: string; taxMode?: TaxMode; taxRateBp?: number } {
     try { return JSON.parse(this.one<{ value: string }>(`SELECT value FROM meta WHERE key = 'settings'`)?.value ?? '{}'); } catch { return {}; }
   }
 
@@ -1111,8 +1144,8 @@ export class InventoryDO extends DurableObject<Bindings> {
       const lines = byOrder.get(r.id) ?? [];
       return {
         id: r.id, number: r.number, channel: r.channel, customerName: r.customer_name, customerEmail: r.customer_email, country: r.country, note: r.note,
-        locationId: r.location_id, paid: r.paid === 1, state: r.state,
-        totalMinor: lines.reduce((sum, l) => sum + l.quantity * l.unit_price_minor, 0),
+        locationId: r.location_id, paid: r.paid === 1, state: r.state, customerId: r.customer_id,
+        totalMinor: r.total_minor, subtotalMinor: r.subtotal_minor, taxMinor: r.tax_minor, taxMode: r.tax_mode,
         lines: lines.map((l) => ({ id: l.id, productId: l.product_id, sku: l.sku, name: l.name, quantity: l.quantity, reserved: l.reserved, unitPriceMinor: l.unit_price_minor })),
         version: r.version, createdAt: r.created_at, updatedAt: r.updated_at, shippedAt: r.shipped_at,
       };
@@ -1140,19 +1173,26 @@ export class InventoryDO extends DurableObject<Bindings> {
       const now = nowIso();
       this.run(`UPDATE counters SET value = value + 1 WHERE name = 'order_seq'`);
       const number = `${this.settings().orderPrefix ?? 'ORD-'}${this.one<{ value: number }>(`SELECT value FROM counters WHERE name = 'order_seq'`)!.value}`;
+      const customerId = this.customerFor(input);
+      const { taxMode, taxRateBp } = { taxMode: (this.settings().taxMode ?? 'none') as TaxMode, taxRateBp: this.settings().taxRateBp ?? 0 };
       this.run(
-        `INSERT INTO orders(id, number, channel, customer_name, customer_email, country, note, location_id, paid, state, version, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'payment_required', 1, ?, ?)`,
-        id, number, input.channel, input.customerName, input.customerEmail ?? null, input.country ?? null, input.note ?? null, locationId, input.paid ? 1 : 0, now, now,
+        `INSERT INTO orders(id, number, channel, customer_name, customer_email, country, note, location_id, paid, state, version, created_at, updated_at, customer_id, tax_mode)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'payment_required', 1, ?, ?, ?, ?)`,
+        id, number, input.channel, input.customerName, input.customerEmail ?? null, input.country ?? null, input.note ?? null, locationId, input.paid ? 1 : 0, now, now, customerId, taxMode,
       );
+      let subtotal = 0;
+      let tax = 0;
       const made: { quantity: number; reserved: number }[] = [];
       for (const line of input.lines) {
         const p = this.liveProduct(line.productId);
         const reserved = this.reserveUpTo(p.id, locationId, line.quantity);
-        this.run(`INSERT INTO order_lines(id, order_id, product_id, quantity, reserved, unit_price_minor, sku, name, open) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`, newId('oln'), id, p.id, line.quantity, reserved, p.price_minor, p.sku, p.name);
+        const lineMinor = line.quantity * p.price_minor;
+        subtotal += lineMinor;
+        tax += lineTax(taxMode, taxRateBp, lineMinor);
+        this.run(`INSERT INTO order_lines(id, order_id, product_id, quantity, reserved, unit_price_minor, sku, name, open, tax_rate_bp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`, newId('oln'), id, p.id, line.quantity, reserved, p.price_minor, p.sku, p.name, taxMode === 'none' ? 0 : taxRateBp);
         made.push({ quantity: line.quantity, reserved });
       }
-      this.run(`UPDATE orders SET state = ? WHERE id = ?`, openState(input.paid, made), id);
+      this.run(`UPDATE orders SET state = ?, subtotal_minor = ?, tax_minor = ?, total_minor = ? WHERE id = ?`, openState(input.paid, made), subtotal, tax, taxMode === 'exclusive' ? subtotal + tax : subtotal, id);
       this.audit(c, 'order.create', 'order', id, { number, customer: input.customerName, lines: input.lines.length });
       this.emit('order.created', { orderId: id, number, customerName: input.customerName, lines: input.lines.length });
       return { status: 201, body: { order: this.orderViews([this.orderRow(id)])[0] } };
@@ -1546,6 +1586,91 @@ export class InventoryDO extends DurableObject<Bindings> {
       out.push({ productId: r.id as string, sku: r.sku as string, name: r.name as string, available: Number(r.available), onOrder: onOrder[r.id as string] ?? 0, reorderPoint: rp, avgDaily: Math.round(avgDaily * 100) / 100, daysOfCover: cover === null ? null : Math.floor(cover), suggested, unitCostMinor: Number(r.last_cost ?? r.cost_minor ?? 0), supplierId: s ? (r.supplier_id as string) : null, supplierName: s ? (s.name as string) : null, leadTimeDays: lead });
     }
     return out.sort((a, b) => (a.daysOfCover ?? 9999) - (b.daysOfCover ?? 9999) || a.name.localeCompare(b.name)).slice(0, 500);
+  }
+
+  // ---------------------------------------------------------- customers
+  /** Which customer an order belongs to: the one chosen, or the one with that email (made on first use). Name-only orders stay unlinked. */
+  private customerFor(input: { customerId?: string | null; customerName: string; customerEmail?: string | null }): string | null {
+    if (input.customerId) {
+      const c = this.one<Row>(`SELECT archived_at FROM customers WHERE id = ?`, input.customerId);
+      if (!c || c.archived_at) throw new Fail(404, 'customer_not_found', 'That customer does not exist.');
+      return input.customerId;
+    }
+    const email = input.customerEmail?.trim().toLowerCase();
+    if (!email) return null;
+    const hit = this.one<{ id: string }>(`SELECT id FROM customers WHERE email = ?`, email);
+    if (hit) return hit.id;
+    const id = newId('cus');
+    this.run(`INSERT INTO customers(id, name, email, created_at) VALUES (?, ?, ?, ?)`, id, input.customerName, email, nowIso());
+    return id;
+  }
+
+  private customerView(r: Row): Customer {
+    return {
+      id: r.id as string, name: r.name as string, email: (r.email as string) ?? null, phone: (r.phone as string) ?? null, address: (r.address as string) ?? null, taxId: (r.tax_id as string) ?? null, note: (r.note as string) ?? null,
+      archivedAt: (r.archived_at as string) ?? null, createdAt: r.created_at as string, orders: Number(r.orders ?? 0), spentMinor: Number(r.spent ?? 0), lastOrderAt: (r.last_order as string) ?? null,
+    };
+  }
+
+  private customerRows(where: string, ...args: SqlStorageValue[]): Row[] {
+    return this.all<Row>(
+      `SELECT c.*, COUNT(o.id) AS orders, COALESCE(SUM(CASE WHEN o.state <> 'cancelled' THEN o.total_minor ELSE 0 END), 0) AS spent, MAX(o.created_at) AS last_order
+         FROM customers c LEFT JOIN orders o ON o.customer_id = c.id ${where} GROUP BY c.id ORDER BY MAX(o.created_at) IS NULL, MAX(o.created_at) DESC, c.name COLLATE NOCASE LIMIT 200`, ...args);
+  }
+
+  listCustomers(q?: string): Customer[] {
+    if (q?.trim()) {
+      const like = `%${q.trim().replace(/[%_]/g, '')}%`;
+      return this.customerRows(`WHERE c.archived_at IS NULL AND (c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?)`, like, like, like).map((r) => this.customerView(r));
+    }
+    return this.customerRows(`WHERE c.archived_at IS NULL`).map((r) => this.customerView(r));
+  }
+
+  getCustomer(id: string): Result<{ customer: Customer; orders: { id: string; number: string; state: string; totalMinor: number; createdAt: string }[] }> {
+    const r = this.customerRows(`WHERE c.id = ?`, id)[0];
+    if (!r) return { ok: false, status: 404, code: 'customer_not_found', detail: 'That customer does not exist.' };
+    const orders = this.all<Row>(`SELECT id, number, state, total_minor, created_at FROM orders WHERE customer_id = ? ORDER BY created_at DESC LIMIT 50`, id)
+      .map((o) => ({ id: o.id as string, number: o.number as string, state: o.state as string, totalMinor: o.total_minor as number, createdAt: o.created_at as string }));
+    return ok({ customer: this.customerView(r), orders });
+  }
+
+  createCustomer(c: Caller, input: CustomerInput): Result<Out<{ customer: Customer }>> {
+    return this.tx(undefined, c, () => {
+      const email = input.email ? input.email.toLowerCase() : null;
+      if (email && this.one(`SELECT 1 FROM customers WHERE email = ?`, email)) throw new Fail(409, 'customer_exists', 'A customer with that email already exists.');
+      const id = newId('cus');
+      this.run(`INSERT INTO customers(id, name, email, phone, address, tax_id, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, id, input.name, email, input.phone ?? null, input.address ?? null, input.taxId ?? null, input.note ?? null, nowIso());
+      this.audit(c, 'customer.create', 'customer', id, { name: input.name });
+      return { status: 201, body: { customer: this.customerView(this.customerRows(`WHERE c.id = ?`, id)[0]) } };
+    });
+  }
+
+  updateCustomer(c: Caller, id: string, patch: Partial<CustomerInput> & { archived?: boolean }): Result<Out<{ customer: Customer }>> {
+    return this.tx(undefined, c, () => {
+      const cur = this.one<Row>(`SELECT * FROM customers WHERE id = ?`, id);
+      if (!cur) throw new Fail(404, 'customer_not_found', 'That customer does not exist.');
+      const email = patch.email !== undefined ? (patch.email ? patch.email.toLowerCase() : null) : (cur.email as string | null);
+      if (email && email !== cur.email && this.one(`SELECT 1 FROM customers WHERE email = ? AND id <> ?`, email, id)) throw new Fail(409, 'customer_exists', 'A customer with that email already exists.');
+      this.run(`UPDATE customers SET name = ?, email = ?, phone = ?, address = ?, tax_id = ?, note = ?, archived_at = ? WHERE id = ?`,
+        patch.name ?? (cur.name as string), email, patch.phone !== undefined ? patch.phone : (cur.phone as string | null), patch.address !== undefined ? patch.address : (cur.address as string | null),
+        patch.taxId !== undefined ? patch.taxId : (cur.tax_id as string | null), patch.note !== undefined ? patch.note : (cur.note as string | null),
+        patch.archived === undefined ? (cur.archived_at as string | null) : patch.archived ? nowIso() : null, id);
+      this.audit(c, 'customer.update', 'customer', id, patch);
+      return { status: 200, body: { customer: this.customerView(this.customerRows(`WHERE c.id = ?`, id)[0]) } };
+    });
+  }
+
+  /** Everything a printed invoice or receipt needs, with tax worked out per line the way the order was priced. */
+  orderDocument(id: string): Result<{ order: Order; customer: Customer | null; lines: { name: string; sku: string; quantity: number; unitPriceMinor: number; taxRateBp: number; lineMinor: number; taxMinor: number }[] }> {
+    const row = this.one<OrderRow>(`SELECT * FROM orders WHERE id = ?`, id);
+    if (!row) return { ok: false, status: 404, code: 'order_not_found', detail: 'That order does not exist.' };
+    const order = this.orderViews([row])[0];
+    const lines = this.all<LineRow & { tax_rate_bp: number }>(`SELECT * FROM order_lines WHERE order_id = ? ORDER BY id`, id).map((l) => {
+      const lineMinor = l.quantity * l.unit_price_minor;
+      return { name: l.name, sku: l.sku, quantity: l.quantity, unitPriceMinor: l.unit_price_minor, taxRateBp: l.tax_rate_bp, lineMinor, taxMinor: lineTax(row.tax_mode, l.tax_rate_bp, lineMinor) };
+    });
+    const cust = row.customer_id ? this.customerRows(`WHERE c.id = ?`, row.customer_id)[0] : undefined;
+    return ok({ order, customer: cust ? this.customerView(cust) : null, lines });
   }
 
   // ---------------------------------------------------------- count tasks

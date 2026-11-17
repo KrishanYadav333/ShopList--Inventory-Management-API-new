@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Order, OrderState } from '@shoplist/shared';
 import { api, ApiError } from '../api';
@@ -30,6 +30,7 @@ export function OrdersPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [printing, setPrinting] = useState<Order[] | null>(null);
   const write = canDo(org.role, 'orders:write');
+  const nav = useNavigate();
   const state = (params.get('state') as OrderState | null) ?? undefined;
 
   useEffect(() => {
@@ -133,6 +134,7 @@ export function OrdersPage() {
                       <td className="customer-col"><div className="customer-name">{o.customerName}</div></td>
                       <td className="country-col">{o.country ?? ''}</td>
                       <td className="actions-col row-actions">
+                        {canDo(org.role, 'customers:read') && <button className="icon-btn" title="Print invoice" aria-label={`Print invoice for ${o.number}`} onClick={() => nav(`/o/${org.id}/orders/${o.id}/print${o.paid ? '?type=receipt' : ''}`)}><Icon name="printer" /></button>}
                         {write && o.state === 'payment_required' && <button className="btn btn-outline cell-btn" onClick={() => act.mutate({ o, what: 'paid', paid: true, done: `${o.number} marked paid` })}>Mark paid</button>}
                         {write && o.state === 'ready_to_ship' && <button className="btn btn-primary cell-btn" onClick={() => act.mutate({ o, what: 'ship', done: `${o.number} shipped` })}>Ship</button>}
                         {write && open && <button className="icon-btn" title="Cancel order" aria-label={`Cancel ${o.number}`} onClick={() => { if (confirm(`Cancel ${o.number}? Its held stock is released.`)) act.mutate({ o, what: 'cancel', done: `${o.number} cancelled` }); }}><Icon name="x" size={16} /></button>}

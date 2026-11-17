@@ -339,3 +339,9 @@ a.btn { text-decoration: none; }
 .bar { height: 6px; margin-top: 4px; border-radius: 3px; background: #3498db; min-width: 2px; }
 /* Ten possible icons: let the row wrap instead of overflowing the sidebar. */
 .nav-icons { flex-wrap: wrap; row-gap: 4px; }
+.invoice { max-width: 820px; margin: 24px auto; padding: 24px; background: #fff; color: #222; }
+.invoice-actions { display: flex; gap: 8px; justify-content: flex-end; margin-bottom: 16px; }
+.invoice-head { display: flex; justify-content: space-between; gap: 24px; margin-bottom: 20px; }
+.invoice-from { text-align: right; }
+.invoice-to { margin-bottom: 20px; }
+@media print { .no-print { display: none !important; } body { background: #fff; } .invoice { margin: 0; padding: 0; max-width: none; } }
