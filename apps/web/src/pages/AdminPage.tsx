@@ -6,6 +6,7 @@ import { api, ApiError } from '../api';
 import { dateParts } from '../format';
 import { Icon } from '../icons';
 import { useMe } from '../queries';
+import { setSupport } from '../support';
 import { useToast } from '../toast';
 
 interface Overview { users: number; disabledUsers: number; organizations: number; suspendedOrganizations: number; activeSessions: number; signin: 'open' | 'owner-only' | 'invite-only' }
@@ -43,6 +44,7 @@ export function AdminPage() {
   const orgs = useQuery({ enabled, queryKey: ['admin', 'orgs'], queryFn: () => api<{ data: AdminOrg[] }>('GET', '/admin/orgs?limit=100').then((r) => r.data) });
   const users = useQuery({ enabled, queryKey: ['admin', 'users'], queryFn: () => api<{ data: AdminUser[] }>('GET', '/admin/users?limit=100').then((r) => r.data) });
   const security = useQuery({ enabled, queryKey: ['admin', 'security'], queryFn: () => api<Security>('GET', '/admin/security') });
+  const support = useQuery({ enabled, queryKey: ['admin', 'support'], queryFn: () => api<{ data: { id: string; orgId: string; orgName: string; note: string | null; includeCustomers: boolean; expiresAt: string }[] }>('GET', '/admin/support').then((r) => r.data), refetchInterval: 30_000 });
   const audit = useQuery({ enabled, queryKey: ['admin', 'audit'], queryFn: () => api<{ data: AuditRow[] }>('GET', '/admin/audit?limit=20').then((r) => r.data) });
 
   const [orgId, setOrgId] = useState<string | null>(null);
@@ -118,6 +120,24 @@ export function AdminPage() {
           {[['Users', o?.users], ['Organizations', o?.organizations], ['Suspended orgs', o?.suspendedOrganizations], ['Disabled users', o?.disabledUsers], ['Active sessions', o?.activeSessions]].map(([label, n]) => (
             <div className="tile" key={label as string}><div className="num">{n ?? '–'}</div><div className="lbl">{label}</div></div>
           ))}
+        </section>
+
+        <section className="admin-section" aria-labelledby="h-support">
+          <h2 id="h-support">Support</h2>
+          {support.data?.length ? (
+            <ul className="list">
+              {support.data.map((g) => (
+                <li key={g.id}>
+                  <span><strong>{g.orgName}</strong>{g.note ? ` · ${g.note}` : ''}<div className="time">Read-only · {g.includeCustomers ? 'customer details included' : 'no customer details'} · open until {when(g.expiresAt)} ({Math.max(1, Math.round((Date.parse(g.expiresAt) - Date.now()) / 60000))} min left)</div></span>
+                  <button className="btn btn-primary" onClick={async () => {
+                    const d = await api<OrgDetail>('GET', `/admin/orgs/${g.orgId}`);
+                    setSupport({ orgId: g.orgId, grantId: g.id, orgName: g.orgName, currency: d.organization.currency, expiresAt: g.expiresAt });
+                    nav(`/o/${g.orgId}/products`);
+                  }}>Open</button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="hint">No business has opened a support window. When one does, it appears here.</p>}
         </section>
 
         <section className="admin-section" aria-labelledby="h-sec">

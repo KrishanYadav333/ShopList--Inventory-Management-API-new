@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { Icon } from '../icons';
 import { NotificationBell } from './NotificationBell';
+import { clearSupport, getSupport } from '../support';
 import { useDashboard, useLocations, useMe, usePlan, canDo, type OrgSummary } from '../queries';
 import { AdjustDialog } from './AdjustDialog';
 import { OrderDialog } from './OrderDialog';
@@ -31,7 +32,10 @@ export function Shell() {
   const [dialog, setDialog] = useState<Dialog>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
-  const org = me.data?.organizations.find((o) => o.id === orgId);
+  const support = me.data?.user.isSuperAdmin ? getSupport() : null;
+  const supportOrg = support && support.orgId === orgId ? support : null;
+  // The owner is no member: inside a support window the business is shown as if viewed by a read-only person.
+  const org = me.data?.organizations.find((o) => o.id === orgId) ?? (supportOrg ? { id: orgId, name: supportOrg.orgName, slug: '', currency: supportOrg.currency, role: 'viewer' as const } : undefined);
   const dash = useDashboard(orgId);
   const locations = useLocations(orgId);
   const plan = usePlan(orgId);
@@ -180,10 +184,10 @@ export function Shell() {
             {org && canDo(org.role, 'customers:read') && <NavLink to={`/o/${orgId}/customers`} className="nav-icon" title="Customers" aria-label="Customers"><Icon name="users" size={18} /></NavLink>}
             {org && canDo(org.role, 'stock:write') && <NavLink to={`/o/${orgId}/counts`} className="nav-icon" title="Counts" aria-label="Counts"><Icon name="scan" size={18} /></NavLink>}
             {feat('purchasing') && <NavLink to={`/o/${orgId}/purchasing`} className="nav-icon" title="Purchasing" aria-label="Purchasing"><Icon name="truck" size={18} /></NavLink>}
-            {org && feat('reports') && canDo(org.role, 'reports:read') && <NavLink to={`/o/${orgId}/reports`} className="nav-icon" title="Reports" aria-label="Reports"><Icon name="chart" size={18} /></NavLink>}
-            {feat('approvals') && <NavLink to={`/o/${orgId}/approvals`} className="nav-icon" title="Approvals" aria-label="Approvals"><Icon name="check" size={18} /></NavLink>}
-            <NavLink to={`/o/${orgId}/settings`} className="nav-icon" title="Settings" aria-label="Settings"><Icon name="cog" size={18} /></NavLink>
-            <NotificationBell />
+            {org && feat('reports') && (supportOrg || canDo(org.role, 'reports:read')) && <NavLink to={`/o/${orgId}/reports`} className="nav-icon" title="Reports" aria-label="Reports"><Icon name="chart" size={18} /></NavLink>}
+            {feat('approvals') && !supportOrg && <NavLink to={`/o/${orgId}/approvals`} className="nav-icon" title="Approvals" aria-label="Approvals"><Icon name="check" size={18} /></NavLink>}
+            {!supportOrg && <NavLink to={`/o/${orgId}/settings`} className="nav-icon" title="Settings" aria-label="Settings"><Icon name="cog" size={18} /></NavLink>}
+            {!supportOrg && <NotificationBell />}
             {me.data?.user.isSuperAdmin && <NavLink to="/admin" className="nav-icon" title="Platform admin" aria-label="Platform admin"><Icon name="shield" size={18} /></NavLink>}
             <button className="nav-icon" title="Sign out" aria-label="Sign out" onClick={async () => { await api('POST', '/auth/logout', { body: {} }).catch(() => {}); qc.clear(); nav('/login'); }}><Icon name="logout" size={18} /></button>
           </div>
@@ -193,6 +197,12 @@ export function Shell() {
 
       <main className="main-content" id="main" tabIndex={-1}>
         {!online && <div className="banner banner-warn" role="status">You are offline. Showing saved data; changes are disabled until you reconnect.</div>}
+        {supportOrg && (
+          <div className="banner banner-support" role="status">
+            <strong>Support view of {supportOrg.orgName}.</strong> Read-only. Ends at {new Date(supportOrg.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Every page you open is logged.
+            <button className="btn btn-outline" onClick={() => { clearSupport(); nav('/admin'); }}>Leave</button>
+          </div>
+        )}
         <Outlet context={ctx} />
       </main>
 

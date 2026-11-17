@@ -35,6 +35,8 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
+import { getSupport } from './support';
+
 export const newKey = () => crypto.randomUUID();
 
 export async function api<T>(method: string, path: string, opts: RequestOptions = {}): Promise<T> {
@@ -42,6 +44,9 @@ export async function api<T>(method: string, path: string, opts: RequestOptions 
   if (opts.body !== undefined) headers['content-type'] = 'application/json';
   if (opts.ifMatch !== undefined) headers['if-match'] = `"${opts.ifMatch}"`;
   if (opts.idempotencyKey) headers['idempotency-key'] = opts.idempotencyKey;
+  // Inside a support window, requests for that business carry the grant. Everything else is unaffected.
+  const support = getSupport();
+  if (support && path.startsWith(`/orgs/${support.orgId}`)) headers['x-support-grant'] = support.grantId;
 
   let res: Response;
   try {

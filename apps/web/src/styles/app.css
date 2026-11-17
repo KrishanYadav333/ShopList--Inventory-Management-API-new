@@ -348,3 +348,6 @@ a.btn { text-decoration: none; }
 
 .plan-editor { margin: 12px 0; }
 .plan-editor summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+
+.banner-support { background: #c0392b; color: #fff; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 16px; margin: 0 0 12px; }
+.banner-support .btn { margin-left: auto; background: #fff; color: #c0392b; }

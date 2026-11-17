@@ -28,7 +28,12 @@ export function SettingsPage() {
 
   const passkeys = useQuery({ queryKey: ['passkeys'], queryFn: () => api<{ data: { id: string; name: string; created_at: string; last_used_at: string | null }[] }>('GET', '/auth/passkeys'), enabled: passkeysSupported() });
   const plan = usePlan(org.id);
-  const feat = (k: 'apiKeys' | 'webhooks') => plan.data?.features[k] !== false;
+  const feat = (k: 'apiKeys' | 'webhooks' | 'supportAccess') => plan.data?.features[k] !== false;
+  const [sup, setSup] = useState({ minutes: 60, note: '', includeCustomers: false });
+  interface Grant { id: string; note: string | null; includeCustomers: boolean; createdAt: string; expiresAt: string; endedAt: string | null; active: boolean; views: number; firstViewAt: string | null; lastViewAt: string | null }
+  const grants = useQuery({ enabled: admin && plan.data?.features.supportAccess !== false, queryKey: ['org', org.id, 'support-grants'], queryFn: () => api<{ data: Grant[] }>('GET', `/orgs/${org.id}/support-grants`).then((r) => r.data) });
+  const allow = useMutation({ mutationFn: () => api('POST', `/orgs/${org.id}/support-grants`, { body: { minutes: sup.minutes, note: sup.note.trim() || undefined, includeCustomers: sup.includeCustomers } }), onSuccess: () => { setSup({ ...sup, note: '' }); qc.invalidateQueries({ queryKey: ['org', org.id, 'support-grants'] }); toast({ kind: 'success', text: 'ShopList support can look until the time shown. You can end it any time.' }); }, onError: fail });
+  const endGrant = useMutation({ mutationFn: (id: string) => api('DELETE', `/orgs/${org.id}/support-grants/${id}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['org', org.id, 'support-grants'] }); toast({ text: 'Support access ended' }); }, onError: fail });
   const [pkName, setPkName] = useState('');
   const addPk = useMutation({
     mutationFn: () => addPasskey(pkName.trim() || 'Passkey'),
@@ -274,6 +279,37 @@ export function SettingsPage() {
                 );
               })}
             </ul>
+          </section>
+        )}
+
+        {admin && feat('supportAccess') && (
+          <section className="card" aria-labelledby="h-support">
+            <h2 id="h-support">Support access</h2>
+            <p className="hint">Stuck? Let the ShopList owner look at your business for a short time. They can only read, never change anything, and cannot see your team or settings. Every page they open is logged here and in your activity log. You can end it at any time.</p>
+            {grants.data?.find((g) => g.active) ? (() => {
+              const g = grants.data!.find((x) => x.active)!;
+              return (
+                <div role="status">
+                  <p><strong>Support access is on</strong> until {dateParts(g.expiresAt).time}{g.includeCustomers ? ' (customer details included)' : ''}. {g.views} page{g.views === 1 ? '' : 's'} viewed so far.</p>
+                  <button className="btn btn-danger" disabled={endGrant.isPending} onClick={() => endGrant.mutate(g.id)}>End now</button>
+                </div>
+              );
+            })() : (
+              <form className="settings-grid" onSubmit={submit(() => allow.mutate())}>
+                <div className="field"><label htmlFor="sup-min">For how long</label>
+                  <select id="sup-min" value={sup.minutes} onChange={(e) => setSup({ ...sup, minutes: Number(e.target.value) })}><option value={30}>30 minutes</option><option value={60}>1 hour</option><option value={240}>4 hours</option></select></div>
+                <div className="field"><label htmlFor="sup-note">What is the problem? (optional)</label><input id="sup-note" maxLength={300} value={sup.note} onChange={(e) => setSup({ ...sup, note: e.target.value })} /></div>
+                <label className="check"><input type="checkbox" checked={sup.includeCustomers} onChange={(e) => setSup({ ...sup, includeCustomers: e.target.checked })} /> Include customer names, emails and phone numbers</label>
+                <button className="btn btn-primary" disabled={allow.isPending}>Allow ShopList support</button>
+              </form>
+            )}
+            {grants.data?.filter((g) => !g.active).length ? (
+              <ul className="list" aria-label="Past support access">
+                {grants.data.filter((g) => !g.active).slice(0, 5).map((g) => (
+                  <li key={g.id}><span><strong>{dateParts(g.createdAt).date} {dateParts(g.createdAt).time}</strong>{g.note ? ` · ${g.note}` : ''}<div className="time">{g.views ? `ShopList support viewed ${g.views} page${g.views === 1 ? '' : 's'} between ${dateParts(g.firstViewAt!).time} and ${dateParts(g.lastViewAt!).time}.` : 'Nobody looked.'}</div></span></li>
+                ))}
+              </ul>
+            ) : null}
           </section>
         )}
 

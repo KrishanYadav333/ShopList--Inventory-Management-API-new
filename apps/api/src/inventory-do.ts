@@ -937,6 +937,16 @@ export class InventoryDO extends DurableObject<Bindings> {
     try { return JSON.parse(this.one<{ value: string }>(`SELECT value FROM meta WHERE key = 'settings'`)?.value ?? '{}'); } catch { return {}; }
   }
 
+  /** One line in the business's own activity log for each page a support session opens. */
+  supportView(actor: string, requestId: string, path: string): void {
+    this.audit({ actor, requestId }, 'support.view', 'support', actor, { path });
+  }
+
+  /** Granting and ending a support window are recorded in the business's own log too. */
+  supportNote(actor: string, requestId: string, action: 'support.grant' | 'support.end', detail: unknown): void {
+    this.audit({ actor, requestId }, action, 'support', actor, detail);
+  }
+
   /** What counts against the plan's limits. Numbers only. */
   planUsage(): { products: number; locations: number; ordersThisMonth: number; importsToday: number } {
     const n = (sql: string, ...b: SqlStorageValue[]) => this.one<{ n: number }>(sql, ...b)?.n ?? 0;

@@ -2,6 +2,7 @@ import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { z, type ZodType } from 'zod';
 import {
+  ROLE_PERMISSIONS,
   SESSION_ONLY,
   PLAN_FEATURE_KEYS,
   PLAN_LIMIT_KEYS,
@@ -88,7 +89,7 @@ import { base64url, decodeCursor, encodeCursor, newId, nowIso, randomToken, sha2
 export { InventoryDO } from './inventory-do';
 
 type OrgPlan = { id: string; limits: PlanLimits; features: PlanFeatures };
-type Vars = { requestId: string; user: AuthUser; org: { id: string; role: Role; locationIds: string[] | null; perms?: readonly Permission[]; plan: OrgPlan }; apiKey?: ApiKeyPrincipal };
+type Vars = { requestId: string; user: AuthUser; org: { id: string; role: Role; locationIds: string[] | null; perms?: readonly Permission[]; plan: OrgPlan; support?: { grantId: string } }; apiKey?: ApiKeyPrincipal };
 type Ctx = Context<{ Bindings: Bindings; Variables: Vars }>;
 
 const MAX_BODY = 64 * 1024;
@@ -189,7 +190,7 @@ const caller = (c: Ctx): Caller => {
 
 /** Which plan feature an organization route belongs to. A switched-off feature does not exist for that business. */
 const featureOf = (area: string, rest: string): PlanFeatureKey | null =>
-  area === 'orders' ? 'orders' : area === 'purchase-orders' || area === 'suppliers' || area === 'purchasing' ? 'purchasing' : area === 'approvals' ? 'approvals'
+  area === 'orders' ? 'orders' : area === 'support-grants' ? 'supportAccess' : area === 'purchase-orders' || area === 'suppliers' || area === 'purchasing' ? 'purchasing' : area === 'approvals' ? 'approvals'
   : area === 'reports' ? 'reports' : area === 'api-keys' ? 'apiKeys' : area === 'webhooks' ? 'webhooks' : area === 'products' && rest === 'import' ? 'import' : null;
 
 /** Refuses with a plain message when adding one more would pass the plan's limit. */
@@ -270,6 +271,41 @@ function gate(c: Ctx, plan: OrgPlan): void {
   const feature = featureOf(parts[5] ?? '', parts[6] ?? '');
   if (feature && !plan.features[feature]) throw new AppError(404, 'not_found', 'There is nothing at this address.');
 }
+/** What a support session may open: inventory screens and reports, never people, settings, keys or integrations. */
+const SUPPORT_AREAS = ['products', 'locations', 'stock', 'orders', 'dashboard', 'reports', 'customers', 'purchase-orders', 'suppliers', 'purchasing', 'count-tasks', 'plan'];
+
+async function supportAccess(c: Ctx, orgId: string, grantId: string, permission: Permission, next: () => Promise<void>) {
+  const gone = () => new AppError(404, 'org_not_found', 'That organization does not exist.');
+  const now = nowIso();
+  const g = await c.env.DB.prepare(
+    `SELECT g.include_customers AS customers, p.limits, p.features, o.plan_id AS planId, o.plan_overrides AS overrides
+       FROM support_grants g JOIN organizations o ON o.id = g.org_id JOIN plans p ON p.id = o.plan_id
+      WHERE g.id = ? AND g.org_id = ? AND g.ended_at IS NULL AND g.expires_at > ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL`,
+  ).bind(grantId, orgId, now).first<PlanRow & { customers: number }>();
+  if (!g) throw gone();
+  const plan = planOf(g);
+  if (!plan.features.supportAccess) throw gone();
+  // Read-only is enforced here, before any route runs.
+  if (c.req.method !== 'GET' && c.req.method !== 'HEAD') throw new AppError(403, 'support_read_only', 'Support access is read-only.');
+  const area = new URL(c.req.url).pathname.split('/')[5] ?? '';
+  if (!SUPPORT_AREAS.includes(area)) throw new AppError(403, 'forbidden', 'Support access does not include this page.');
+  gate(c, plan);
+  const perms: Permission[] = [...ROLE_PERMISSIONS.viewer, 'cost:read', 'reports:read', ...(g.customers ? (['customers:read'] as Permission[]) : [])];
+  if (SESSION_ONLY.includes(permission) || !perms.includes(permission)) throw new AppError(403, 'forbidden', 'Support access does not include this.');
+  const me = c.get('user').id;
+  const path = new URL(c.req.url).pathname.slice('/api/v1'.length);
+  // Logged at both ends: the platform audit, and the business's own activity log.
+  await Promise.all([
+    c.env.DB.batch([
+      c.env.DB.prepare(`UPDATE support_grants SET views = views + 1, first_view_at = COALESCE(first_view_at, ?), last_view_at = ? WHERE id = ?`).bind(now, now, grantId),
+      c.env.DB.prepare(`INSERT INTO platform_audit(id, actor, action, target, detail, request_id, created_at) VALUES (?, ?, 'support.view', ?, ?, ?, ?)`).bind(newId('pau'), me, orgId, JSON.stringify({ grant: grantId, path }), c.get('requestId'), now),
+    ]),
+    c.env.INVENTORY.get(c.env.INVENTORY.idFromName(orgId)).supportView(`support:${me}`, c.get('requestId'), path),
+  ]);
+  c.set('org', { id: orgId, role: 'viewer', locationIds: null, perms, plan, support: { grantId } });
+  return next();
+}
+
 const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> => async (c, next) => {
   const orgId = c.req.param('orgId') ?? '';
   const key = c.get('apiKey');
@@ -295,8 +331,12 @@ const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindin
   )
     .bind(orgId, c.get('user').id)
     .first<{ role: Role; locationIds: string | null } & PlanRow>();
-  // Not a member: 404, so organization ids cannot be probed.
-  if (!row) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
+  // Not a member: 404, so organization ids cannot be probed. The one exception is the owner inside a grant the business made.
+  if (!row) {
+    const grantId = c.req.header('x-support-grant');
+    if (grantId && c.get('user').isSuperAdmin) return supportAccess(c, orgId, grantId, permission, next);
+    throw new AppError(404, 'org_not_found', 'That organization does not exist.');
+  }
   if (!can(row.role, permission)) throw new AppError(403, 'forbidden', `Your role (${row.role}) cannot do this. Ask your admin for access.`);
   let locationIds: string[] | null = null;
   try { locationIds = row.locationIds ? (JSON.parse(row.locationIds) as string[]) : null; } catch { locationIds = []; }
@@ -583,8 +623,8 @@ route('get', '/me/notifications', 'user', async (c) => {
   await c.env.DB.prepare(`DELETE FROM notifications WHERE user_id = ? AND created_at < ?`).bind(uid, new Date(Date.now() - NOTIFICATION_KEEP_MS).toISOString()).run();
   const { results } = await c.env.DB.prepare(
     `SELECT n.id, n.org_id AS orgId, n.kind, n.title, n.link, n.created_at AS createdAt, n.read_at AS readAt
-       FROM notifications n JOIN memberships m ON m.org_id = n.org_id AND m.user_id = n.user_id AND m.deactivated_at IS NULL
-      WHERE n.user_id = ? ${cur ? 'AND (n.created_at < ? OR (n.created_at = ? AND n.id < ?))' : ''}
+       FROM notifications n LEFT JOIN memberships m ON m.org_id = n.org_id AND m.user_id = n.user_id AND m.deactivated_at IS NULL
+      WHERE n.user_id = ? AND (n.org_id = '_platform' OR m.user_id IS NOT NULL) ${cur ? 'AND (n.created_at < ? OR (n.created_at = ? AND n.id < ?))' : ''}
       ORDER BY n.created_at DESC, n.id DESC LIMIT ?`,
   ).bind(uid, ...(cur ? [cur.c, cur.c, cur.i] : []), q.limit + 1).all<{ id: string; createdAt: string }>();
   const hasMore = results.length > q.limit;
@@ -595,7 +635,7 @@ route('get', '/me/notifications', 'user', async (c) => {
 
 route('get', '/me/notifications/unread-count', 'user', async (c) => {
   const r = await c.env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM notifications n JOIN memberships m ON m.org_id = n.org_id AND m.user_id = n.user_id AND m.deactivated_at IS NULL WHERE n.user_id = ? AND n.read_at IS NULL`,
+    `SELECT COUNT(*) AS n FROM notifications n LEFT JOIN memberships m ON m.org_id = n.org_id AND m.user_id = n.user_id AND m.deactivated_at IS NULL WHERE n.user_id = ? AND (n.org_id = '_platform' OR m.user_id IS NOT NULL) AND n.read_at IS NULL`,
   ).bind(c.get('user').id).first<{ n: number }>();
   return c.json({ count: r?.n ?? 0 });
 });
@@ -1427,6 +1467,55 @@ route('post', '/admin/orgs/:id/resend-invitation', 'super', async (c) => {
 // ------------------------------------------------------------------ plans (F20)
 const planRows = async (c: Ctx) => (await c.env.DB.prepare(`SELECT id, name, limits, features FROM plans ORDER BY CASE id WHEN 'free' THEN 0 WHEN 'standard' THEN 1 ELSE 2 END, id`).all<{ id: string; name: string; limits: string; features: string }>()).results
   .map((r) => ({ id: r.id, name: r.name, limits: JSON.parse(r.limits) as PlanLimits, features: JSON.parse(r.features) as PlanFeatures }));
+
+// ------------------------------------------------------------------ support access (F19)
+const SUPPORT_MINUTES = [30, 60, 240] as const;
+const grantInput = z.object({ minutes: z.union([z.literal(30), z.literal(60), z.literal(240)]), note: z.string().trim().max(300).optional(), includeCustomers: z.boolean().optional() }).strict();
+
+route('post', '/orgs/:orgId/support-grants', 'settings:manage', async (c) => {
+  const { data } = await readJson(c, grantInput);
+  const org = c.get('org');
+  const now = nowIso();
+  const id = newId('sgr');
+  const expiresAt = new Date(Date.now() + data.minutes * 60_000).toISOString();
+  // One window at a time: a new grant replaces any open one.
+  await c.env.DB.batch([
+    c.env.DB.prepare(`UPDATE support_grants SET ended_at = ? WHERE org_id = ? AND ended_at IS NULL AND expires_at > ?`).bind(now, org.id, now),
+    c.env.DB.prepare(`INSERT INTO support_grants(id, org_id, granted_by, note, include_customers, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(id, org.id, c.get('user').id, data.note ?? null, data.includeCustomers ? 1 : 0, now, expiresAt),
+  ]);
+  await inventory(c).supportNote(c.get('user').id, c.get('requestId'), 'support.grant', { minutes: data.minutes, includeCustomers: !!data.includeCustomers });
+  const dev = await c.env.DB.prepare(`SELECT user_id AS id FROM oauth_accounts WHERE provider = 'github' AND provider_user_id = ?`).bind(c.env.SUPER_ADMIN_GITHUB_ID ?? '').first<{ id: string }>();
+  const name = (await c.env.DB.prepare(`SELECT name FROM organizations WHERE id = ?`).bind(org.id).first<{ name: string }>())?.name ?? 'A business';
+  // The owner belongs to no business, so platform notices use the '_platform' scope.
+  if (dev) await notify(c.env, '_platform', [dev.id], { kind: 'support.granted', title: `${name} opened support access for ${data.minutes} minutes${data.note ? `: ${data.note}` : ''}`, link: '/admin' });
+  return c.json({ id, expiresAt, includeCustomers: !!data.includeCustomers }, 201);
+});
+
+route('delete', '/orgs/:orgId/support-grants/:gid', 'settings:manage', async (c) => {
+  const r = await c.env.DB.prepare(`UPDATE support_grants SET ended_at = ? WHERE id = ? AND org_id = ? AND ended_at IS NULL`).bind(nowIso(), c.req.param('gid') ?? '', c.get('org').id).run();
+  if (!r.meta.changes) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  await inventory(c).supportNote(c.get('user').id, c.get('requestId'), 'support.end', { by: 'admin' });
+  return c.json({ ok: true });
+});
+
+route('get', '/orgs/:orgId/support-grants', 'settings:manage', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, note, include_customers AS includeCustomers, created_at AS createdAt, expires_at AS expiresAt, ended_at AS endedAt, views, first_view_at AS firstViewAt, last_view_at AS lastViewAt
+       FROM support_grants WHERE org_id = ? ORDER BY created_at DESC LIMIT 20`,
+  ).bind(c.get('org').id).all<{ id: string; expiresAt: string; endedAt: string | null; includeCustomers: number }>();
+  const now = nowIso();
+  return c.json({ data: results.map((g) => ({ ...g, includeCustomers: g.includeCustomers === 1, active: !g.endedAt && g.expiresAt > now })) });
+});
+
+/** Windows that are open right now, for the owner to open. */
+route('get', '/admin/support', 'super', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT g.id, g.org_id AS orgId, o.name AS orgName, g.note, g.include_customers AS includeCustomers, g.created_at AS createdAt, g.expires_at AS expiresAt
+       FROM support_grants g JOIN organizations o ON o.id = g.org_id JOIN plans p ON p.id = o.plan_id
+      WHERE g.ended_at IS NULL AND g.expires_at > ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL ORDER BY g.created_at DESC`,
+  ).bind(nowIso()).all<{ includeCustomers: number }>();
+  return c.json({ data: results.map((g) => ({ ...g, includeCustomers: g.includeCustomers === 1 })) });
+});
 
 route('get', '/admin/plans', 'super', async (c) => c.json({ data: await planRows(c) }));
 

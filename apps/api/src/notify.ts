@@ -2,7 +2,7 @@ import type { Role } from '@shoplist/shared';
 import type { Bindings } from './env';
 import { newId, nowIso } from './util';
 
-export const NOTIFICATION_KINDS = ['stock.low', 'stock.out', 'order.created', 'approval.requested', 'approval.decided', 'count.assigned', 'security.not_me'] as const;
+export const NOTIFICATION_KINDS = ['stock.low', 'stock.out', 'order.created', 'approval.requested', 'approval.decided', 'count.assigned', 'security.not_me', 'support.granted'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 export const KIND_LABELS: Record<NotificationKind, string> = {
@@ -13,6 +13,7 @@ export const KIND_LABELS: Record<NotificationKind, string> = {
   'approval.decided': 'My request was decided',
   'count.assigned': 'A stock count is assigned to me',
   'security.not_me': 'A team member reports a sign-in that was not theirs',
+  'support.granted': 'A business opened a support window for me',
 };
 
 /** Which roles hear about which event by default. */
