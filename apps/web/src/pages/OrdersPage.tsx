@@ -48,7 +48,7 @@ export function OrdersPage() {
 
   const act = useMutation({
     mutationFn: (v: { o: Order; what: 'ship' | 'cancel' | 'paid'; paid?: boolean; done: string }) =>
-      api<{ order: Order }>('POST', `/orgs/${org.id}/orders/${v.o.id}/${v.what}`, { body: v.what === 'paid' ? { paid: v.paid } : {}, ifMatch: v.o.version }).then(() => v.done),
+      api<{ order?: Order; approval?: { id: string } }>('POST', `/orgs/${org.id}/orders/${v.o.id}/${v.what}`, { body: v.what === 'paid' ? { paid: v.paid } : {}, ifMatch: v.o.version }).then((r) => (r.approval ? 'Sent for approval. The order stays as it is until a manager decides.' : v.done)),
     onSuccess: (done) => { refresh(); toast({ kind: 'success', text: done }); },
     onError: (e: ApiError) => { fail(e); refresh(); },
   });

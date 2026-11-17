@@ -59,12 +59,13 @@ export function AdjustDialog({ org, productId, onClose }: { org: OrgSummary; pro
 
   const save = useMutation({
     mutationFn: () =>
-      api<{ movement: Movement; stock: StockLevel }>('POST', `/orgs/${org.id}/stock/movements`, {
+      api<{ movement: Movement; stock: StockLevel } | { approval: { id: string } }>('POST', `/orgs/${org.id}/stock/movements`, {
         idempotencyKey: key,
         body: { productId: pid, locationId, delta: signed, reason, reference: reference.trim() || null, note: note.trim() || null },
       }),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ['org', org.id] });
+      if ('approval' in r) { toast({ kind: 'success', text: 'Sent for approval. A manager will decide; stock changes once approved.' }); onClose(); return; }
       const name = selected.data?.product.name ?? 'product';
       toast({
         kind: 'success',

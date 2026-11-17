@@ -334,3 +334,5 @@ a.btn { text-decoration: none; }
 .bell-list { list-style: none; margin: 0; padding: 0; }
 .bell-list li button { width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid #ecf0f1; padding: 10px 6px; cursor: pointer; display: grid; gap: 2px; color: inherit; font: inherit; }
 .bell-list li.unread button { background: #eef6fc; font-weight: 600; }
+.mini { width: 72px; padding: 4px 6px; }
+.approvals-rules .check { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; }
