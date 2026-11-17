@@ -871,7 +871,7 @@ route('patch', '/orgs/:orgId/settings', 'settings:manage', async (c) => {
   return c.json({ settings: next });
 });
 
-export const DELETE_GRACE_DAYS = 14;
+const DELETE_GRACE_DAYS = 14;
 
 /** Asks for the business name, then schedules deletion 14 days out. Nothing is removed yet. */
 route('delete', '/orgs/:orgId', 'org:delete', async (c) => {
