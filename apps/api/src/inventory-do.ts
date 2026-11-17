@@ -24,7 +24,7 @@ import {
   type StockLevel,
   type TransferInput,
 } from '@shoplist/shared';
-import { APPROVAL_DEFAULTS, type ApprovalRules, type ApprovalView, type PoState, type PurchaseOrder, type PurchaseOrderInput, type ReceiveInput, type ReportName, type ReportResult, type Supplier, type SupplierInput } from '@shoplist/shared';
+import { APPROVAL_DEFAULTS, type ApprovalRules, type ApprovalView, type CountTask, type CountTaskInput, type PoState, type PurchaseOrder, type PurchaseOrderInput, type ReceiveInput, type ReportName, type ReportResult, type Supplier, type SupplierInput } from '@shoplist/shared';
 import type { Bindings } from './env';
 import { ok, type Problem, type Result } from './errors';
 import { decodeCursor, encodeCursor, newId, nowIso } from './util';
@@ -261,6 +261,29 @@ const MIGRATIONS: string[][] = [
     `CREATE INDEX po_lines_po ON po_lines(po_id)`,
     `CREATE INDEX po_lines_product ON po_lines(product_id)`,
     `INSERT INTO counters(name, value) VALUES ('po_seq', 1000)`,
+  ],
+  // Step 8: count tasks. Lines are the products to count; `expected` is read from the shelves when the task is
+  // submitted, never earlier, so stock that moves during counting is judged against the truth at submit time.
+  [
+    `CREATE TABLE count_tasks (
+       id TEXT PRIMARY KEY,
+       title TEXT,
+       location_id TEXT NOT NULL,
+       blind INTEGER NOT NULL DEFAULT 1,
+       assigned_to TEXT,
+       due_at TEXT,
+       state TEXT NOT NULL CHECK (state IN ('open','submitted','cancelled')),
+       created_by TEXT NOT NULL,
+       created_at TEXT NOT NULL,
+       submitted_at TEXT
+     )`,
+    `CREATE TABLE count_task_lines (
+       task_id TEXT NOT NULL REFERENCES count_tasks(id),
+       product_id TEXT NOT NULL,
+       counted INTEGER,
+       expected INTEGER,
+       PRIMARY KEY (task_id, product_id)
+     )`,
   ],
 ];
 
@@ -1523,6 +1546,111 @@ export class InventoryDO extends DurableObject<Bindings> {
       out.push({ productId: r.id as string, sku: r.sku as string, name: r.name as string, available: Number(r.available), onOrder: onOrder[r.id as string] ?? 0, reorderPoint: rp, avgDaily: Math.round(avgDaily * 100) / 100, daysOfCover: cover === null ? null : Math.floor(cover), suggested, unitCostMinor: Number(r.last_cost ?? r.cost_minor ?? 0), supplierId: s ? (r.supplier_id as string) : null, supplierName: s ? (s.name as string) : null, leadTimeDays: lead });
     }
     return out.sort((a, b) => (a.daysOfCover ?? 9999) - (b.daysOfCover ?? 9999) || a.name.localeCompare(b.name)).slice(0, 500);
+  }
+
+  // ---------------------------------------------------------- count tasks
+  private taskView(r: Row, showExpected: boolean): CountTask {
+    const lines = this.all<Row>(
+      `SELECT l.product_id, l.counted, l.expected, p.sku, p.name FROM count_task_lines l JOIN products p ON p.id = l.product_id WHERE l.task_id = ? ORDER BY p.name COLLATE NOCASE`, r.id as string,
+    ).map((l) => {
+      // Blind counting: the counter does not see what the system expects, until the task is submitted.
+      const live = r.state === 'open' ? (this.one<{ n: number }>(`SELECT COALESCE(on_hand, 0) AS n FROM stock_levels WHERE product_id = ? AND location_id = ?`, l.product_id as string, r.location_id as string)?.n ?? 0) : null;
+      const expected = r.state === 'submitted' ? ((l.expected as number | null) ?? null) : showExpected || !r.blind ? live : null;
+      return { productId: l.product_id as string, sku: l.sku as string, name: l.name as string, counted: (l.counted as number | null) ?? null, expected };
+    });
+    const counted = lines.filter((l) => l.counted !== null).length;
+    return {
+      id: r.id as string, title: (r.title as string) ?? null, locationId: r.location_id as string, blind: r.blind === 1, assignedTo: (r.assigned_to as string) ?? null, dueAt: (r.due_at as string) ?? null,
+      state: r.state as CountTask['state'], createdBy: r.created_by as string, createdAt: r.created_at as string, submittedAt: (r.submitted_at as string) ?? null, lines,
+      summary: { total: lines.length, counted, variances: lines.filter((l) => l.counted !== null && l.expected !== null && l.counted !== l.expected).length },
+    };
+  }
+
+  createCountTask(c: Caller, input: CountTaskInput): Result<Out<{ task: CountTask }>> {
+    return this.tx(undefined, c, () => {
+      this.activeLocation(input.locationId);
+      let ids: string[];
+      const sc = input.scope;
+      if (sc.kind === 'list') ids = sc.productIds.filter((id) => this.one(`SELECT 1 FROM products WHERE id = ? AND deleted_at IS NULL`, id));
+      else if (sc.kind === 'tag') ids = this.all<{ id: string }>(`SELECT p.id FROM products p JOIN product_tags t ON t.product_id = p.id WHERE p.deleted_at IS NULL AND t.tag = ? LIMIT 500`, sc.tag.toLowerCase()).map((r) => r.id);
+      else if (sc.kind === 'stale') {
+        const cutoff = new Date(Date.now() - sc.days * 86400_000).toISOString();
+        ids = this.all<{ id: string }>(`SELECT p.id FROM products p WHERE p.deleted_at IS NULL AND COALESCE((SELECT MAX(m.created_at) FROM stock_movements m WHERE m.product_id = p.id AND m.location_id = ? AND m.reason = 'count'), '') < ? ORDER BY p.name LIMIT 500`, input.locationId, cutoff).map((r) => r.id);
+      } else ids = this.all<{ id: string }>(`SELECT id FROM products WHERE deleted_at IS NULL ORDER BY name LIMIT 500`).map((r) => r.id);
+      if (!ids.length) throw new Fail(409, 'nothing_to_count', 'No products match that selection.');
+      const id = newId('cnt');
+      this.run(`INSERT INTO count_tasks(id, title, location_id, blind, assigned_to, due_at, state, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)`, id, input.title ?? null, input.locationId, input.blind ? 1 : 0, input.assignedTo ?? null, input.dueAt ?? null, c.actor, nowIso());
+      for (const pid of [...new Set(ids)]) this.run(`INSERT INTO count_task_lines(task_id, product_id) VALUES (?, ?)`, id, pid);
+      this.audit(c, 'count_task.create', 'count_task', id, { lines: ids.length, assignedTo: input.assignedTo ?? null });
+      if (input.assignedTo) this.emit('count.assigned', { taskId: id, assignedTo: input.assignedTo, title: input.title ?? 'stock count', dueAt: input.dueAt ?? null });
+      return { status: 201, body: { task: this.taskView(this.one<Row>(`SELECT * FROM count_tasks WHERE id = ?`, id)!, true) } };
+    });
+  }
+
+  /** `mine` limits to tasks given to that person or to nobody in particular. Counters never see expected quantities on blind tasks. */
+  listCountTasks(q: { mine?: string; state?: string; limit: number }): Omit<CountTask, 'lines'>[] {
+    const where: string[] = [];
+    const args: SqlStorageValue[] = [];
+    if (q.state) { where.push('state = ?'); args.push(q.state); }
+    if (q.mine) { where.push('(assigned_to = ? OR assigned_to IS NULL)'); args.push(q.mine); }
+    return this.all<Row>(`SELECT * FROM count_tasks ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC LIMIT ?`, ...args, q.limit).map((r) => {
+      const { lines: _l, ...rest } = this.taskView(r, false);
+      return rest;
+    });
+  }
+
+  getCountTask(id: string, asManager: boolean): Result<{ task: CountTask }> {
+    const r = this.one<Row>(`SELECT * FROM count_tasks WHERE id = ?`, id);
+    if (!r) return { ok: false, status: 404, code: 'count_task_not_found', detail: 'That count does not exist.' };
+    return ok({ task: this.taskView(r, asManager) });
+  }
+
+  saveCountLines(c: Caller, id: string, lines: { productId: string; counted: number }[]): Result<Out<{ task: CountTask }>> {
+    return this.tx(undefined, c, () => {
+      const t = this.one<Row>(`SELECT * FROM count_tasks WHERE id = ?`, id);
+      if (!t) throw new Fail(404, 'count_task_not_found', 'That count does not exist.');
+      if (t.state !== 'open') throw new Fail(409, 'count_closed', 'This count is already closed.');
+      for (const l of lines) {
+        if (!this.one(`SELECT 1 FROM count_task_lines WHERE task_id = ? AND product_id = ?`, id, l.productId)) throw new Fail(404, 'not_in_count', 'One of those products is not part of this count.');
+        this.run(`UPDATE count_task_lines SET counted = ? WHERE task_id = ? AND product_id = ?`, l.counted, id, l.productId);
+      }
+      return { status: 200, body: { task: this.taskView(t, false) } };
+    });
+  }
+
+  /** Writes a `count` movement for every difference. Lines nobody counted are left alone. Big variances wait for approval unless the submitter can decide. */
+  submitCountTask(c: Caller, id: string, canDecide: boolean): Result<Out<{ task: CountTask; applied: number; waitingForApproval: number }>> {
+    return this.tx(undefined, c, () => {
+      const t = this.one<Row>(`SELECT * FROM count_tasks WHERE id = ?`, id);
+      if (!t) throw new Fail(404, 'count_task_not_found', 'That count does not exist.');
+      if (t.state !== 'open') throw new Fail(409, 'count_closed', 'This count is already closed.');
+      let applied = 0;
+      let waiting = 0;
+      for (const l of this.all<Row>(`SELECT * FROM count_task_lines WHERE task_id = ? AND counted IS NOT NULL`, id)) {
+        const pid = l.product_id as string;
+        const have = this.one<{ on_hand: number }>(`SELECT on_hand FROM stock_levels WHERE product_id = ? AND location_id = ?`, pid, t.location_id as string)?.on_hand ?? 0;
+        this.run(`UPDATE count_task_lines SET expected = ? WHERE task_id = ? AND product_id = ?`, have, id, pid);
+        if (have === l.counted) continue;
+        const input = { productId: pid, locationId: t.location_id as string, counted: l.counted as number, note: `Count task ${id}` };
+        if (!canDecide && this.checkApproval(c, 'count', input)) { waiting++; continue; }
+        this.move(c, pid, t.location_id as string, (l.counted as number) - have, 'count', null, `Count task ${id}`);
+        applied++;
+      }
+      this.run(`UPDATE count_tasks SET state = 'submitted', submitted_at = ? WHERE id = ?`, nowIso(), id);
+      this.audit(c, 'count_task.submit', 'count_task', id, { applied, waitingForApproval: waiting });
+      return { status: 200, body: { task: this.taskView(this.one<Row>(`SELECT * FROM count_tasks WHERE id = ?`, id)!, true), applied, waitingForApproval: waiting } };
+    });
+  }
+
+  cancelCountTask(c: Caller, id: string): Result<Out<{ task: CountTask }>> {
+    return this.tx(undefined, c, () => {
+      const t = this.one<Row>(`SELECT * FROM count_tasks WHERE id = ?`, id);
+      if (!t) throw new Fail(404, 'count_task_not_found', 'That count does not exist.');
+      if (t.state !== 'open') throw new Fail(409, 'count_closed', 'This count is already closed.');
+      this.run(`UPDATE count_tasks SET state = 'cancelled' WHERE id = ?`, id);
+      this.audit(c, 'count_task.cancel', 'count_task', id, undefined);
+      return { status: 200, body: { task: this.taskView(this.one<Row>(`SELECT * FROM count_tasks WHERE id = ?`, id)!, true) } };
+    });
   }
 
   // ---------------------------------------------------------- reports

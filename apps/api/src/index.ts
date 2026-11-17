@@ -22,6 +22,8 @@ import {
   purchaseOrderInput,
   purchaseOrderPatch,
   receiveInput,
+  countTaskInput,
+  countLinesInput,
   REPORTS,
   type ReportResult,
   SETTINGS_DEFAULTS,
@@ -1128,6 +1130,54 @@ route('post', '/orgs/:orgId/purchasing/reorder/draft', 'purchasing:write', async
     created.push(out.body.order);
   }
   return c.json({ created, skippedNoSupplier: skipped }, 201);
+});
+
+// ------------------------------------------------------------- count tasks
+/** The assigner (counts:assign) and the assignee, or anyone who can write stock when nobody was named, may work a count. */
+async function countTaskFor(c: Ctx, id: string) {
+  const asManager = can(c.get('org').role, 'counts:assign');
+  const { task } = unwrap(await inventory(c).getCountTask(id, asManager));
+  const mine = !task.assignedTo || task.assignedTo === c.get('user').id;
+  if (!asManager && !mine) throw new AppError(404, 'count_task_not_found', 'That count does not exist.');
+  return { task, asManager };
+}
+
+route('get', '/orgs/:orgId/count-tasks', 'inventory:read', async (c) => {
+  const q = z.object({ state: z.enum(['open', 'submitted', 'cancelled']).optional(), limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(c.req.query());
+  const asManager = can(c.get('org').role, 'counts:assign');
+  return c.json({ data: await inventory(c).listCountTasks({ ...q, mine: asManager ? undefined : c.get('user').id }) });
+});
+
+route('post', '/orgs/:orgId/count-tasks', 'counts:assign', async (c) => {
+  const { data } = await readJson(c, countTaskInput);
+  if (data.assignedTo) {
+    const ok_ = await c.env.DB.prepare(`SELECT 1 AS x FROM memberships WHERE org_id = ? AND user_id = ? AND deactivated_at IS NULL`).bind(c.get('org').id, data.assignedTo).first();
+    if (!ok_) throw new AppError(400, 'unknown_assignee', 'That person is not an active member.');
+  }
+  const out = unwrap(await inventory(c).createCountTask(caller(c), data));
+  return c.json(out.body, out.status as 201);
+});
+
+route('get', '/orgs/:orgId/count-tasks/:id', 'inventory:read', async (c) => c.json({ task: (await countTaskFor(c, c.req.param('id') ?? '')).task }));
+
+route('post', '/orgs/:orgId/count-tasks/:id/lines', 'stock:write', async (c) => {
+  const { data } = await readJson(c, countLinesInput);
+  const { task } = await countTaskFor(c, c.req.param('id') ?? '');
+  needLocation(c, task.locationId);
+  const out = unwrap(await inventory(c).saveCountLines(caller(c), task.id, data.lines));
+  return c.json(out.body, out.status as 200);
+});
+
+route('post', '/orgs/:orgId/count-tasks/:id/submit', 'stock:write', async (c) => {
+  const { task } = await countTaskFor(c, c.req.param('id') ?? '');
+  needLocation(c, task.locationId);
+  const out = unwrap(await inventory(c).submitCountTask(caller(c), task.id, can(c.get('org').role, 'approvals:decide')));
+  return c.json(out.body, out.status as 200);
+});
+
+route('post', '/orgs/:orgId/count-tasks/:id/cancel', 'counts:assign', async (c) => {
+  const out = unwrap(await inventory(c).cancelCountTask(caller(c), c.req.param('id') ?? ''));
+  return c.json(out.body, out.status as 200);
 });
 
 route('get', '/orgs/:orgId/audit', 'audit:read', async (c) => c.json(await inventory(c).listAudit(parse(pageQuery, c.req.query()))));

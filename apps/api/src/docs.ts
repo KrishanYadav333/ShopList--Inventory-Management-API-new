@@ -1,7 +1,7 @@
 import { z, type ZodType } from 'zod';
 import {
   apiKeyInput, countInput, importRequest, inviteInput, locationInput, memberPatch, movementInput, movementListQuery, orderInput, orderListQuery,
-  orgInput, pageQuery, paidInput, productInput, productListQuery, productPatch, purchaseOrderInput, supplierInput, transferInput, webhookInput,
+  orgInput, pageQuery, paidInput, productInput, productListQuery, countTaskInput, productPatch, purchaseOrderInput, supplierInput, transferInput, webhookInput,
 } from '@shoplist/shared';
 
 export interface RouteInfo { method: string; path: string; access: string }
@@ -66,6 +66,12 @@ export const DOCS: Record<string, Doc> = {
   'POST /orgs/:orgId/purchase-orders/:id/receive': { tag: 'Purchasing', summary: 'Receive goods against the order: writes receive movements and updates cost' },
   'GET /orgs/:orgId/purchasing/reorder': { tag: 'Purchasing', summary: 'What to reorder: low or fast-selling products with a suggested quantity' },
   'POST /orgs/:orgId/purchasing/reorder/draft': { tag: 'Purchasing', summary: 'Create one draft purchase order per usual supplier from chosen suggestions' },
+  'GET /orgs/:orgId/count-tasks': { tag: 'Counts', summary: 'Stock counts (assigners see all, others see theirs)' },
+  'POST /orgs/:orgId/count-tasks': { tag: 'Counts', summary: 'Create a count task and assign it', body: countTaskInput },
+  'GET /orgs/:orgId/count-tasks/:id': { tag: 'Counts', summary: 'One count; blind counts hide expected quantities from the counter' },
+  'POST /orgs/:orgId/count-tasks/:id/lines': { tag: 'Counts', summary: 'Save counted quantities (progress)' },
+  'POST /orgs/:orgId/count-tasks/:id/submit': { tag: 'Counts', summary: 'Submit: differences become count movements; lines nobody counted are left alone' },
+  'POST /orgs/:orgId/count-tasks/:id/cancel': { tag: 'Counts', summary: 'Cancel an open count' },
   'GET /orgs/:orgId/settings': { tag: 'Organizations', summary: "The business's settings (currency, tax, timezone, numbering)" },
   'PATCH /orgs/:orgId/settings': { tag: 'Organizations', summary: 'Change business settings (admin only)' },
   'POST /orgs/:orgId/invitations': { tag: 'Members', summary: 'Create a one-time invitation link', body: inviteInput },
@@ -135,6 +141,7 @@ const ACCESS_TEXT: Record<string, string> = {
   'approvals:decide': 'Manager or admin',
   'reports:read': 'Accountant, manager or admin',
   'purchasing:write': 'Manager or admin',
+  'counts:assign': 'Manager or admin',
   'team:manage': 'Admin session (not API keys)',
   'settings:manage': 'Admin session (not API keys)',
   'audit:read': 'Admin session (not API keys)',

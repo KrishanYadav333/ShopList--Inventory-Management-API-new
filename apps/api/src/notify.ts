@@ -2,7 +2,7 @@ import type { Role } from '@shoplist/shared';
 import type { Bindings } from './env';
 import { newId, nowIso } from './util';
 
-export const NOTIFICATION_KINDS = ['stock.low', 'stock.out', 'order.created', 'approval.requested', 'approval.decided'] as const;
+export const NOTIFICATION_KINDS = ['stock.low', 'stock.out', 'order.created', 'approval.requested', 'approval.decided', 'count.assigned'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 export const KIND_LABELS: Record<NotificationKind, string> = {
@@ -11,6 +11,7 @@ export const KIND_LABELS: Record<NotificationKind, string> = {
   'order.created': 'A new order arrives',
   'approval.requested': 'Something needs my approval',
   'approval.decided': 'My request was decided',
+  'count.assigned': 'A stock count is assigned to me',
 };
 
 /** Which roles hear about which event by default. */
@@ -47,6 +48,12 @@ export async function notify(env: Pick<Bindings, 'DB'>, orgId: string, userIds: 
 /** Turns a recorded inventory event into notifications for the people it concerns. */
 export async function notifyForEvent(env: Pick<Bindings, 'DB'>, orgId: string, type: string, data: Record<string, unknown>): Promise<void> {
   const kind = type as NotificationKind;
+  if (kind === 'count.assigned') {
+    const who = String(data.assignedTo ?? '');
+    const row = await env.DB.prepare(`SELECT 1 AS x FROM memberships m WHERE m.org_id = ? AND m.user_id = ? AND m.deactivated_at IS NULL AND NOT EXISTS (SELECT 1 FROM notification_prefs p WHERE p.user_id = m.user_id AND p.org_id = m.org_id AND p.kind = ? AND p.in_app = 0)`).bind(orgId, who, kind).first();
+    if (row) await notify(env, orgId, [who], { kind, title: `Count assigned to you: ${data.title ?? 'stock count'}${data.dueAt ? ` (due ${data.dueAt})` : ''}`, link: `/o/${orgId}/counts` });
+    return;
+  }
   if (kind === 'approval.decided') {
     const who = String(data.requestedBy ?? '');
     const row = await env.DB.prepare(`SELECT 1 AS x FROM memberships m WHERE m.org_id = ? AND m.user_id = ? AND m.deactivated_at IS NULL AND NOT EXISTS (SELECT 1 FROM notification_prefs p WHERE p.user_id = m.user_id AND p.org_id = m.org_id AND p.kind = ? AND p.in_app = 0)`).bind(orgId, who, kind).first();

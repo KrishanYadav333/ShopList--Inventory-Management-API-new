@@ -174,6 +174,7 @@ export function Shell() {
             <NavLink to={`/o/${orgId}/orders`} className="nav-icon" title="Orders" aria-label="Orders"><Icon name="cart" size={18} /></NavLink>
             <NavLink to={`/o/${orgId}/products`} className="nav-icon" title="Products" aria-label="Products"><Icon name="grid" size={18} /></NavLink>
             <NavLink to={`/o/${orgId}/history`} className="nav-icon" title="Stock history" aria-label="Stock history"><Icon name="clock" size={18} /></NavLink>
+            {org && canDo(org.role, 'stock:write') && <NavLink to={`/o/${orgId}/counts`} className="nav-icon" title="Counts" aria-label="Counts"><Icon name="scan" size={18} /></NavLink>}
             <NavLink to={`/o/${orgId}/purchasing`} className="nav-icon" title="Purchasing" aria-label="Purchasing"><Icon name="truck" size={18} /></NavLink>
             {org && canDo(org.role, 'reports:read') && <NavLink to={`/o/${orgId}/reports`} className="nav-icon" title="Reports" aria-label="Reports"><Icon name="chart" size={18} /></NavLink>}
             <NavLink to={`/o/${orgId}/approvals`} className="nav-icon" title="Approvals" aria-label="Approvals"><Icon name="check" size={18} /></NavLink>

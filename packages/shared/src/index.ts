@@ -22,7 +22,7 @@ export const ROLE_SUMMARY: Record<Role, string> = {
   viewer: 'Read-only: products, stock, orders and history. No costs.',
 };
 
-export const PERMISSIONS = ['inventory:read', 'cost:read', 'reports:read', 'purchasing:write', 'approvals:decide', 'products:write', 'stock:write', 'orders:write', 'team:manage', 'settings:manage', 'audit:read', 'org:delete'] as const;
+export const PERMISSIONS = ['inventory:read', 'cost:read', 'reports:read', 'purchasing:write', 'counts:assign', 'approvals:decide', 'products:write', 'stock:write', 'orders:write', 'team:manage', 'settings:manage', 'audit:read', 'org:delete'] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 /** Never available to an API key, whatever its scopes: these need a signed-in person. */
 export const SESSION_ONLY: readonly Permission[] = ['team:manage', 'settings:manage', 'audit:read', 'org:delete'];
@@ -32,7 +32,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   sales: ['inventory:read', 'orders:write'],
   stock: ['inventory:read', 'stock:write'],
   accountant: ['inventory:read', 'cost:read', 'reports:read', 'audit:read'],
-  manager: ['inventory:read', 'cost:read', 'reports:read', 'purchasing:write', 'approvals:decide', 'products:write', 'stock:write', 'orders:write'],
+  manager: ['inventory:read', 'cost:read', 'reports:read', 'purchasing:write', 'counts:assign', 'approvals:decide', 'products:write', 'stock:write', 'orders:write'],
   admin: PERMISSIONS,
 };
 export const can = (role: Role, permission: Permission): boolean => ROLE_PERMISSIONS[role].includes(permission);
@@ -479,4 +479,31 @@ export interface PurchaseOrder {
   id: string; number: string; supplierId: string; supplierName: string; locationId: string; state: PoState;
   expectedAt: string | null; note: string | null; createdBy: string; createdAt: string; updatedAt: string; version: number;
   lines: PurchaseOrderLine[]; totalMinor: number;
+}
+
+// ---------------------------------------------------------------- count tasks
+export const COUNT_STATES = ['open', 'submitted', 'cancelled'] as const;
+export type CountState = (typeof COUNT_STATES)[number];
+export const countScope = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('all') }).strict(),
+  z.object({ kind: z.literal('tag'), tag: text(40) }).strict(),
+  z.object({ kind: z.literal('list'), productIds: z.array(text(40)).min(1).max(500) }).strict(),
+  z.object({ kind: z.literal('stale'), days: z.number().int().min(1).max(365) }).strict(),
+]);
+export const countTaskInput = z
+  .object({
+    title: z.string().trim().max(100).nullish(),
+    locationId: text(40),
+    scope: countScope,
+    assignedTo: text(60).nullish(),
+    dueAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+    blind: z.boolean().default(true),
+  })
+  .strict();
+export type CountTaskInput = z.infer<typeof countTaskInput>;
+export const countLinesInput = z.object({ lines: z.array(z.object({ productId: text(40), counted: z.number().int().min(0).max(LIMITS.maxOnHand) }).strict()).min(1).max(500) }).strict();
+export interface CountTaskLine { productId: string; sku: string; name: string; counted: number | null; expected: number | null }
+export interface CountTask {
+  id: string; title: string | null; locationId: string; blind: boolean; assignedTo: string | null; dueAt: string | null; state: CountState;
+  createdBy: string; createdAt: string; submittedAt: string | null; lines: CountTaskLine[]; summary: { total: number; counted: number; variances: number } | null;
 }
