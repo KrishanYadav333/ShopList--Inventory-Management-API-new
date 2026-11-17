@@ -22,6 +22,8 @@ interface UserDetail {
   organizations: { id: string; name: string; role: string; deactivatedAt: string | null }[];
   sessions: { lastSeenAt: string; userAgent: string | null; country: string | null; via: string }[];
 }
+interface SecuritySummary { signIns: number; refused: Record<string, number>; rateLimited: number; notMe: number }
+interface Security { last24h: SecuritySummary; last7d: SecuritySummary; notable: { repeatedRefusals: { emailHash: string; refusals: number; lastAt: string }[]; ownerDoorRefusals: { at: string; country: string | null; browser: string | null }[]; adminNewCountry: { at: string; email: string; country: string }[]; notMeReports: { at: string; email: string }[] } }
 interface AuditRow { id: string; action: string; target: string | null; createdAt: string; requestId: string }
 
 const when = (iso: string | null) => { if (!iso) return '—'; const { date, time } = dateParts(iso); return `${date} ${time}`; };
@@ -37,6 +39,7 @@ export function AdminPage() {
   const overview = useQuery({ enabled, queryKey: ['admin', 'overview'], queryFn: () => api<Overview>('GET', '/admin/overview') });
   const orgs = useQuery({ enabled, queryKey: ['admin', 'orgs'], queryFn: () => api<{ data: AdminOrg[] }>('GET', '/admin/orgs?limit=100').then((r) => r.data) });
   const users = useQuery({ enabled, queryKey: ['admin', 'users'], queryFn: () => api<{ data: AdminUser[] }>('GET', '/admin/users?limit=100').then((r) => r.data) });
+  const security = useQuery({ enabled, queryKey: ['admin', 'security'], queryFn: () => api<Security>('GET', '/admin/security') });
   const audit = useQuery({ enabled, queryKey: ['admin', 'audit'], queryFn: () => api<{ data: AuditRow[] }>('GET', '/admin/audit?limit=20').then((r) => r.data) });
 
   const [orgId, setOrgId] = useState<string | null>(null);
@@ -112,6 +115,37 @@ export function AdminPage() {
           {[['Users', o?.users], ['Organizations', o?.organizations], ['Suspended orgs', o?.suspendedOrganizations], ['Disabled users', o?.disabledUsers], ['Active sessions', o?.activeSessions]].map(([label, n]) => (
             <div className="tile" key={label as string}><div className="num">{n ?? '–'}</div><div className="lbl">{label}</div></div>
           ))}
+        </section>
+
+        <section className="admin-section" aria-labelledby="h-sec">
+          <h2 id="h-sec">Security</h2>
+          {security.data ? (() => {
+            const sec = security.data;
+            const refused = (x: SecuritySummary) => Object.entries(x.refused);
+            const n = sec.notable;
+            const flags = n.repeatedRefusals.length + n.ownerDoorRefusals.length + n.adminNewCountry.length + n.notMeReports.length;
+            return (
+              <>
+                <table className="orders-table">
+                  <caption className="sr-only">Sign-in activity</caption>
+                  <thead><tr><th scope="col">Period</th><th scope="col">Sign-ins</th><th scope="col">Refused</th><th scope="col">Rate-limited</th><th scope="col">“Not me” reports</th></tr></thead>
+                  <tbody>
+                    {([['Last 24 hours', sec.last24h], ['Last 7 days', sec.last7d]] as const).map(([label, x]) => (
+                      <tr key={label}><th scope="row">{label}</th><td>{x.signIns}</td><td>{refused(x).length ? refused(x).map(([r, c]) => `${r.replaceAll('_', ' ')}: ${c}`).join(', ') : 0}</td><td>{x.rateLimited}</td><td>{x.notMe}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+                {flags === 0 ? <p className="hint">Nothing unusual in the last 7 days.</p> : (
+                  <ul className="list" aria-label="Notable events">
+                    {n.ownerDoorRefusals.map((e, i) => <li key={`g${i}`}><span><strong>Someone else tried the owner’s GitHub door</strong><div className="time">{[e.browser, e.country].filter(Boolean).join(' · ')} · {when(e.at)}</div></span></li>)}
+                    {n.repeatedRefusals.map((e) => <li key={e.emailHash}><span><strong>{e.refusals} refused sign-ins for one address in 24 hours</strong><div className="time">Address {e.emailHash.slice(0, 8)} (stored only as a hash) · last {when(e.lastAt)}</div></span></li>)}
+                    {n.adminNewCountry.map((e, i) => <li key={`c${i}`}><span><strong>Admin {e.email} signed in from a new country ({e.country})</strong><div className="time">{when(e.at)}</div></span></li>)}
+                    {n.notMeReports.map((e, i) => <li key={`m${i}`}><span><strong>{e.email} reported a sign-in that was not theirs</strong><div className="time">{when(e.at)}</div></span></li>)}
+                  </ul>
+                )}
+              </>
+            );
+          })() : <p className="hint">{security.isLoading ? 'Loading…' : 'Could not load.'}</p>}
         </section>
 
         <section className="admin-section" aria-labelledby="h-onboard">

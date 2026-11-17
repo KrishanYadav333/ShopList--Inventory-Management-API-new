@@ -39,6 +39,10 @@ export function SettingsPage() {
   const sessions = useQuery({ queryKey: ['sessions'], queryFn: () => api<{ data: Sess[] }>('GET', '/auth/sessions') });
   const revoke = useMutation({ mutationFn: (id: string) => api('DELETE', `/auth/sessions/${id}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['sessions'] }); toast({ text: 'Signed out' }); }, onError: fail });
   const revokeOthers = useMutation({ mutationFn: () => api('POST', '/auth/sessions/revoke-others', { body: {} }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['sessions'] }); toast({ text: 'Signed out everywhere else' }); }, onError: fail });
+  interface AuthEv { at: string; kind: string; door: string | null; country: string | null; browser: string | null; reason: string | null }
+  const events = useQuery({ queryKey: ['auth-events'], queryFn: () => api<{ data: AuthEv[] }>('GET', '/auth/events') });
+  const notMe = useMutation({ mutationFn: () => api('POST', '/auth/not-me', { body: {} }), onSuccess: () => { qc.clear(); nav('/login'); }, onError: fail });
+  const EVENT_LABEL: Record<string, string> = { signin_ok: 'Signed in', signin_refused: 'Sign-in refused', signout: 'Signed out', session_revoked: 'A session was ended', passkey_added: 'Passkey added', passkey_removed: 'Passkey removed', user_disabled: 'Account disabled', not_me: 'Reported “not me”' };
   const device = (ua: string | null) => (ua ? `${/iPhone|iPad|Android/.test(ua) ? 'Phone or tablet' : /Mac|Windows|Linux/.test(ua) ? 'Computer' : 'Device'} · ${/Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Browser'}` : 'Unknown device');
 
   const settingsQ = useQuery({ enabled: admin, queryKey: ['org', org.id, 'settings'], queryFn: () => api<{ settings: OrgSettings }>('GET', `/orgs/${org.id}/settings`).then((r) => r.settings) });
@@ -387,6 +391,19 @@ export function SettingsPage() {
             </ul>
           ) : <p className="hint">Loading…</p>}
           {(sessions.data?.data.length ?? 0) > 1 && <button className="btn btn-outline" disabled={revokeOthers.isPending} onClick={() => revokeOthers.mutate()}>Sign out everywhere else</button>}
+        </section>
+
+        <section className="card">
+          <h2>Recent sign-in activity</h2>
+          {events.data?.data.length ? (
+            <ul className="list">
+              {events.data.data.map((e, i) => (
+                <li key={i}><span><strong>{EVENT_LABEL[e.kind] ?? e.kind}</strong>{e.door ? ` · ${e.door}` : ''}<div className="time">{[e.browser, e.country].filter(Boolean).join(' · ')}{e.browser || e.country ? ' · ' : ''}{dateParts(e.at).date} {dateParts(e.at).time}</div></span></li>
+              ))}
+            </ul>
+          ) : <p className="hint">{events.isLoading ? 'Loading…' : 'Nothing recorded yet.'}</p>}
+          <p className="hint">See something you do not recognise? This signs you out everywhere and tells your admin.</p>
+          <button className="btn btn-danger" disabled={notMe.isPending} onClick={() => { if (window.confirm('Sign out everywhere and tell your admin that a sign-in was not you?')) notMe.mutate(); }}>This wasn’t me</button>
         </section>
 
         {passkeysSupported() && (

@@ -68,7 +68,8 @@ import type { Bindings } from './env';
 import { buildOpenApi, renderDocsPage } from './docs';
 import { checkWebhookUrl, flushEvents, forgetHooks, handleQueue, sendTestEvent, type DeliveryJob } from './webhooks';
 import { verifyAssertion, verifyRegistration } from './webauthn';
-import { KIND_LABELS, NOTIFICATION_KINDS } from './notify';
+import { KIND_LABELS, NOTIFICATION_KINDS, notify, recipients } from './notify';
+import { pruneAuthEvents, recordAuthEvent, recordRateLimited, type AuthEventKind } from './authevents';
 import { clerkConfigured, fetchClerkProfile, verifyClerkToken } from './clerk';
 import { AppError, problemResponse, unwrap } from './errors';
 import type { Caller, Idem } from './inventory-do';
@@ -115,6 +116,7 @@ const rateLimit: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> = as
     const key = c.req.header('cf-connecting-ip') ?? 'unknown';
     const { success } = await c.env.LIMITER.limit({ key });
     if (!success) {
+      await recordRateLimited(c.env, c.req.raw);
       const res = problemResponse(new AppError(429, 'rate_limited', 'Too many requests. Please wait a few seconds and try again.').toProblem(c.get('requestId')));
       res.headers.set('Retry-After', '10');
       return res;
@@ -200,6 +202,8 @@ function cookieOptions(c: Ctx, maxAge: number) {
 const setSessionCookie = (c: Ctx, token: string) => setCookie(c, SESSION_COOKIE, token, cookieOptions(c, 30 * 86400));
 const readSessionCookie = (c: Ctx) => getCookie(c, SESSION_COOKIE, cookiePrefix(c));
 const clearCookie = (c: Ctx, name: string) => deleteCookie(c, name, relaxed(c) ? { path: '/' } : { prefix: 'host', path: '/', secure: true });
+
+const authEvent = (c: Ctx, kind: AuthEventKind, d: { userId?: string; email?: string; door?: string; reason?: string } = {}) => recordAuthEvent(c.env, c.req.raw, kind, d);
 
 // ---------------------------------------------------------- access control
 /** Cookie sessions only. Used by every route that API keys must never reach. */
@@ -337,9 +341,13 @@ route('get', '/auth/oauth/github/callback', 'public', async (c) => {
   const profile = await githubProfile(c.env, code, saved.verifier);
   const isOwner = !!c.env.SUPER_ADMIN_GITHUB_ID && profile.id === c.env.SUPER_ADMIN_GITHUB_ID;
   // GitHub is the owner's door only, in every mode. Everyone else signs in through Clerk.
-  if (!isOwner) throw new AppError(403, 'signin_closed', 'GitHub sign-in is only for the site owner. Use the main sign-in instead.');
+  if (!isOwner) {
+    await authEvent(c, 'signin_refused', { email: profile.email, door: 'github', reason: 'owner_only' });
+    throw new AppError(403, 'signin_closed', 'GitHub sign-in is only for the site owner. Use the main sign-in instead.');
+  }
   const user = await upsertUser(c.env, profile, { provider: 'github', providerUserId: profile.id });
   const token = await createSession(c.env, user.id, c.req.raw, 'github');
+  await authEvent(c, 'signin_ok', { userId: user.id, door: 'github' });
   setSessionCookie(c, token);
   return c.redirect(c.env.APP_ORIGIN, 302);
 });
@@ -348,21 +356,29 @@ route('get', '/auth/oauth/github/callback', 'public', async (c) => {
 route('post', '/auth/clerk/session', 'public', async (c) => {
   if (!clerkConfigured(c.env)) throw new AppError(503, 'clerk_not_configured', 'Sign-in is not configured on this server.');
   const { data } = await readJson(c, z.object({ token: z.string().min(20).max(4096) }).strict());
-  const sub = await verifyClerkToken(c.env, data.token);
-  if (signinClosed(c.env)) throw new AppError(403, 'signin_closed', 'This ShopList is private. Only the site owner can sign in.');
-  const profile = await fetchClerkProfile(c.env, sub);
-  // By invitation: no account is created for someone the owner has not invited.
-  if ((await clerkAdmission(c.env, profile.email)) === 'not_invited') {
-    throw new AppError(403, 'not_invited', 'This ShopList is by invitation. Ask the owner to invite this email address, then sign in again.');
+  let email: string | undefined;
+  try {
+    const sub = await verifyClerkToken(c.env, data.token);
+    if (signinClosed(c.env)) throw new AppError(403, 'signin_closed', 'This ShopList is private. Only the site owner can sign in.');
+    const profile = await fetchClerkProfile(c.env, sub);
+    email = profile.email;
+    // By invitation: no account is created for someone the owner has not invited.
+    if ((await clerkAdmission(c.env, profile.email)) === 'not_invited') {
+      throw new AppError(403, 'not_invited', 'This ShopList is by invitation. Ask the owner to invite this email address, then sign in again.');
+    }
+    // The owner's account is reachable only through the owner's door. A customer-door identity must never attach to it.
+    const owner = await c.env.DB.prepare(`SELECT 1 AS x FROM users u JOIN oauth_accounts o ON o.user_id = u.id WHERE u.email = ? AND o.provider = 'github' LIMIT 1`).bind(profile.email.toLowerCase()).first();
+    if (owner) throw new AppError(409, 'email_in_use', 'That email belongs to a different kind of account. Use the other sign-in.');
+    const user = await upsertUser(c.env, profile, { provider: 'clerk', providerUserId: sub });
+    // Clerk verified this email, so any invitation sent to it is accepted now.
+    await acceptPendingInvitations(c.env, { id: user.id, email: profile.email });
+    setSessionCookie(c, await createSession(c.env, user.id, c.req.raw, 'clerk'));
+    await authEvent(c, 'signin_ok', { userId: user.id, door: 'clerk' });
+    return c.json({ user });
+  } catch (e) {
+    if (e instanceof AppError) await authEvent(c, 'signin_refused', { email, door: 'clerk', reason: e.code });
+    throw e;
   }
-  // The owner's account is reachable only through the owner's door. A customer-door identity must never attach to it.
-  const owner = await c.env.DB.prepare(`SELECT 1 AS x FROM users u JOIN oauth_accounts o ON o.user_id = u.id WHERE u.email = ? AND o.provider = 'github' LIMIT 1`).bind(profile.email.toLowerCase()).first();
-  if (owner) throw new AppError(409, 'email_in_use', 'That email belongs to a different kind of account. Use the other sign-in.');
-  const user = await upsertUser(c.env, profile, { provider: 'clerk', providerUserId: sub });
-  // Clerk verified this email, so any invitation sent to it is accepted now.
-  await acceptPendingInvitations(c.env, { id: user.id, email: profile.email });
-  setSessionCookie(c, await createSession(c.env, user.id, c.req.raw, 'clerk'));
-  return c.json({ user });
 });
 
 /** Local development and tests only. Refuses to run unless DEV_AUTH is exactly "true". */
@@ -430,6 +446,7 @@ route('post', '/auth/passkeys/register', 'user', async (c) => {
   } catch {
     throw new AppError(409, 'passkey_exists', 'That passkey is already registered.');
   }
+  await authEvent(c, 'passkey_added', { userId: user.id });
   return c.json({ id: credentialId, name: data.name ?? 'Passkey' }, 201);
 });
 
@@ -441,6 +458,7 @@ route('get', '/auth/passkeys', 'user', async (c) => {
 route('delete', '/auth/passkeys/:id', 'user', async (c) => {
   const r = await c.env.DB.prepare(`DELETE FROM passkeys WHERE id = ? AND user_id = ?`).bind(c.req.param('id'), c.get('user').id).run();
   if (!r.meta.changes) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  await authEvent(c, 'passkey_removed', { userId: c.get('user').id });
   return c.json({ ok: true });
 });
 
@@ -454,13 +472,18 @@ route('post', '/auth/passkeys/login/options', 'public', async (c) => {
 route('post', '/auth/passkeys/login', 'public', async (c) => {
   if (signinClosed(c.env)) throw new AppError(403, 'signin_closed', 'This ShopList is private. Only the site owner can sign in.');
   const { data } = await readJson(c, z.object({ token: z.string().max(2000), id: b64, clientDataJSON: b64, authenticatorData: b64, signature: b64 }).strict());
-  const ch = await openChallenge(c, data.token, 'login');
+  const ch = await openChallenge(c, data.token, 'login').catch(async (e) => { await authEvent(c, 'signin_refused', { door: 'passkey', reason: 'challenge_expired' }); throw e; });
   const row = await c.env.DB.prepare(`SELECT p.public_key, p.sign_count, p.user_id FROM passkeys p JOIN users u ON u.id = p.user_id WHERE p.id = ? AND u.disabled_at IS NULL`).bind(data.id).first<{ public_key: ArrayBuffer | number[]; sign_count: number; user_id: string }>();
   // Same answer for "unknown passkey" and "bad signature", so ids cannot be probed.
-  if (!row) throw new AppError(400, 'passkey_invalid', 'The passkey response was rejected (unknown passkey).');
-  const counter = await verifyAssertion(data, { publicKey: new Uint8Array(row.public_key), counter: row.sign_count }, { challenge: ch.challenge, origin: rp(c.env).origin, rpId: rp(c.env).id });
+  if (!row) {
+    await authEvent(c, 'signin_refused', { door: 'passkey', reason: 'unknown_or_disabled' });
+    throw new AppError(400, 'passkey_invalid', 'The passkey response was rejected (unknown passkey).');
+  }
+  const counter = await verifyAssertion(data, { publicKey: new Uint8Array(row.public_key), counter: row.sign_count }, { challenge: ch.challenge, origin: rp(c.env).origin, rpId: rp(c.env).id })
+    .catch(async (e) => { await authEvent(c, 'signin_refused', { userId: row.user_id, door: 'passkey', reason: 'bad_signature' }); throw e; });
   await c.env.DB.prepare(`UPDATE passkeys SET sign_count = ?, last_used_at = ? WHERE id = ?`).bind(counter, nowIso(), data.id).run();
   setSessionCookie(c, await createSession(c.env, row.user_id, c.req.raw, 'passkey'));
+  await authEvent(c, 'signin_ok', { userId: row.user_id, door: 'passkey' });
   return c.json({ ok: true });
 });
 
@@ -479,6 +502,7 @@ route('get', '/auth/sessions', 'user', async (c) => {
 route('post', '/auth/sessions/revoke-others', 'user', async (c) => {
   const current = await sha256Hex(readSessionCookie(c) ?? '');
   const r = await c.env.DB.prepare(`DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?`).bind(c.get('user').id, current).run();
+  if (r.meta.changes) await authEvent(c, 'session_revoked', { userId: c.get('user').id, reason: 'others' });
   return c.json({ revoked: r.meta.changes ?? 0 });
 });
 
@@ -487,7 +511,28 @@ route('delete', '/auth/sessions/:id', 'user', async (c) => {
   if (!/^[0-9a-f]{16}$/.test(id)) throw new AppError(404, 'not_found', 'There is nothing at this address.');
   const r = await c.env.DB.prepare(`DELETE FROM sessions WHERE user_id = ? AND substr(token_hash, 1, ?) = ?`).bind(c.get('user').id, SID, id).run();
   if (!r.meta.changes) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  await authEvent(c, 'session_revoked', { userId: c.get('user').id, reason: 'one' });
   return c.json({ ok: true });
+});
+
+// ------------------------------------------------------------------ sign-in history (F22)
+route('get', '/auth/events', 'user', async (c) => {
+  const { results } = await c.env.DB.prepare(`SELECT at, kind, door, country, browser, reason FROM auth_events WHERE user_id = ? ORDER BY at DESC LIMIT 20`).bind(c.get('user').id).all();
+  return c.json({ data: results });
+});
+
+/** "This wasn't me": ends every session, tells the admins of the user's businesses, and leaves a record. */
+route('post', '/auth/not-me', 'user', async (c) => {
+  const user = c.get('user');
+  const r = await c.env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(user.id).run();
+  await authEvent(c, 'not_me', { userId: user.id });
+  const { results: orgs } = await c.env.DB.prepare(`SELECT org_id FROM memberships WHERE user_id = ? AND deactivated_at IS NULL`).bind(user.id).all<{ org_id: string }>();
+  for (const o of orgs) {
+    const admins = await recipients(c.env, o.org_id, ['admin'], 'security.not_me');
+    await notify(c.env, o.org_id, admins.filter((a) => a !== user.id), { kind: 'security.not_me', title: `${user.name} reported a sign-in that was not theirs and was signed out everywhere`, link: `/o/${o.org_id}/settings` });
+  }
+  clearCookie(c, SESSION_COOKIE);
+  return c.json({ revoked: r.meta.changes ?? 0 });
 });
 
 // ------------------------------------------------------------------ notifications
@@ -551,6 +596,7 @@ route('patch', '/me/notification-preferences', 'user', async (c) => {
 
 route('post', '/auth/logout', 'user', async (c) => {
   await destroySession(c.env, readSessionCookie(c));
+  await authEvent(c, 'signout', { userId: c.get('user').id });
   clearCookie(c, SESSION_COOKIE);
   return c.json({ ok: true });
 });
@@ -1291,6 +1337,7 @@ route('post', '/admin/users/:id/disable', 'super', async (c) => {
   if (!res.meta.changes) throw new AppError(404, 'user_not_found', 'That user does not exist or is already disabled.');
   await c.env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(id).run(); // signed out immediately
   await platformAudit(c, 'user.disable', id);
+  await authEvent(c, 'user_disabled', { userId: id, reason: 'by_owner' });
   return c.json({ ok: true });
 });
 
@@ -1372,6 +1419,7 @@ route('post', '/admin/users/:id/sign-out', 'super', async (c) => {
   const id = c.req.param('id') ?? '';
   const r = await c.env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(id).run();
   await platformAudit(c, 'user.sign_out', id, { sessions: r.meta.changes ?? 0 });
+  await authEvent(c, 'session_revoked', { userId: id, reason: 'by_owner' });
   return c.json({ revoked: r.meta.changes ?? 0 });
 });
 
@@ -1389,6 +1437,35 @@ route('post', '/admin/orgs/:id/restore', 'super', async (c) => {
   if (!res.meta.changes) throw new AppError(404, 'org_not_found', 'That organization does not exist or is not suspended.');
   await platformAudit(c, 'org.restore', id);
   return c.json({ ok: true });
+});
+
+route('get', '/admin/security', 'super', async (c) => {
+  const now = Date.now();
+  const d1 = new Date(now - 86400_000).toISOString();
+  const d7 = new Date(now - 7 * 86400_000).toISOString();
+  const { results } = await c.env.DB.prepare(`SELECT kind, COALESCE(reason, '') AS reason, COUNT(*) AS n7, SUM(at >= ?) AS n1 FROM auth_events WHERE at >= ? GROUP BY kind, reason`).bind(d1, d7).all<{ kind: string; reason: string; n7: number; n1: number }>();
+  const sum = (key: 'n1' | 'n7') => {
+    const out = { signIns: 0, refused: {} as Record<string, number>, rateLimited: 0, notMe: 0 };
+    for (const r of results) {
+      if (r.kind === 'signin_ok') out.signIns += r[key];
+      else if (r.kind === 'signin_refused') out.refused[r.reason || 'unknown'] = (out.refused[r.reason || 'unknown'] ?? 0) + r[key];
+      else if (r.kind === 'rate_limited') out.rateLimited += r[key];
+      else if (r.kind === 'not_me') out.notMe += r[key];
+    }
+    return out;
+  };
+  const { results: repeated } = await c.env.DB.prepare(`SELECT email_hash AS emailHash, COUNT(*) AS refusals, MAX(at) AS lastAt FROM auth_events WHERE kind = 'signin_refused' AND email_hash IS NOT NULL AND at >= ? GROUP BY email_hash HAVING COUNT(*) >= 5 ORDER BY refusals DESC LIMIT 20`).bind(d1).all();
+  const { results: ownerDoor } = await c.env.DB.prepare(`SELECT at, country, browser, reason FROM auth_events WHERE kind = 'signin_refused' AND door = 'github' AND at >= ? ORDER BY at DESC LIMIT 20`).bind(d7).all();
+  const { results: newCountry } = await c.env.DB.prepare(
+    `SELECT e.at, u.email, e.country FROM auth_events e JOIN users u ON u.id = e.user_id
+      WHERE e.kind = 'signin_ok' AND e.at >= ? AND e.country IS NOT NULL
+        AND EXISTS (SELECT 1 FROM auth_events p WHERE p.user_id = e.user_id AND p.kind = 'signin_ok' AND p.at < e.at)
+        AND NOT EXISTS (SELECT 1 FROM auth_events p WHERE p.user_id = e.user_id AND p.kind = 'signin_ok' AND p.at < e.at AND p.country = e.country)
+        AND EXISTS (SELECT 1 FROM memberships m WHERE m.user_id = e.user_id AND m.role = 'admin')
+      ORDER BY e.at DESC LIMIT 20`,
+  ).bind(d7).all();
+  const { results: reports } = await c.env.DB.prepare(`SELECT e.at, u.email FROM auth_events e JOIN users u ON u.id = e.user_id WHERE e.kind = 'not_me' AND e.at >= ? ORDER BY e.at DESC LIMIT 20`).bind(d7).all();
+  return c.json({ last24h: sum('n1'), last7d: sum('n7'), notable: { repeatedRefusals: repeated, ownerDoorRefusals: ownerDoor, adminNewCountry: newCountry, notMeReports: reports } });
 });
 
 route('get', '/admin/audit', 'super', async (c) => {
@@ -1413,7 +1490,14 @@ app.get('/api/docs', (c) => {
 
 app.route('/api/v1', api);
 
+/** Deletes rows past their retention. Each step is independent so one failure does not stop the rest. */
+export async function dailyJob(env: Bindings): Promise<void> {
+  await pruneAuthEvents(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'prune auth events failed', error: (e as Error).message })));
+}
+
 export default {
   fetch: (req: Request, env: Bindings, ctx: ExecutionContext) => app.fetch(req, env, ctx),
   queue: (batch: MessageBatch<unknown>, env: Bindings) => handleQueue(batch as MessageBatch<DeliveryJob>, env),
+  // Daily housekeeping (cron in wrangler.jsonc).
+  scheduled: (_event: ScheduledController, env: Bindings, ctx: ExecutionContext) => { ctx.waitUntil(dailyJob(env)); },
 } satisfies ExportedHandler<Bindings>;
