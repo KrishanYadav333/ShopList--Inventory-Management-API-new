@@ -14,6 +14,13 @@ let counter = 0;
 export const ip = () => `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`;
 export const uid = () => `${Date.now().toString(36)}${(counter++).toString(36)}`;
 
+let noDrain = false;
+/** Runs a block whose requests must leave events in the outbox instead of draining them in the background. */
+export async function withoutDrain<T>(fn: () => Promise<T>): Promise<T> {
+  noDrain = true;
+  try { return await fn(); } finally { noDrain = false; }
+}
+
 export async function call<T = any>(
   cookie: string | null,
   method: string,
@@ -21,7 +28,7 @@ export async function call<T = any>(
   body?: unknown,
   headers: Record<string, string> = {},
 ): Promise<Res<T>> {
-  const h: Record<string, string> = { origin: ORIGIN, 'cf-connecting-ip': ip(), ...headers };
+  const h: Record<string, string> = { origin: ORIGIN, 'cf-connecting-ip': ip(), ...(noDrain ? { 'x-no-drain': '1' } : {}), ...headers };
   if (cookie) h.cookie = cookie;
   if (body !== undefined) h['content-type'] = 'application/json';
   if (method === 'POST' && !('idempotency-key' in headers) && /\/(products|orders|stock\/(movements|transfers|counts))$/.test(path)) {

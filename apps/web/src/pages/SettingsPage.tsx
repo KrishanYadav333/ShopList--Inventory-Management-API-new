@@ -50,6 +50,8 @@ export function SettingsPage() {
     onSuccess: (r) => { setForm(null); qc.setQueryData(['org', org.id, 'settings'], r.settings); qc.invalidateQueries({ queryKey: ['me'] }); toast({ kind: 'success', text: 'Business settings saved' }); },
     onError: fail,
   });
+  const prefs = useQuery({ queryKey: ['notification-prefs', org.id], queryFn: () => api<{ data: { kind: string; label: string; inApp: boolean }[] }>('GET', `/me/notification-preferences?org=${org.id}`).then((r) => r.data) });
+  const setPref = useMutation({ mutationFn: (v: { kind: string; inApp: boolean }) => api('PATCH', '/me/notification-preferences', { body: { orgId: org.id, ...v } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['notification-prefs', org.id] }), onError: fail });
   const [backingUp, setBackingUp] = useState(false);
   /** Pages through every product and downloads one JSON file: a copy you control, and the input for a CSV re-import. */
   const backup = async () => {
@@ -349,6 +351,14 @@ export function SettingsPage() {
             </form>
           </section>
         )}
+
+        <section className="card">
+          <h2>Notifications</h2>
+          <p className="hint">Choose what shows up under the bell. Only events relevant to your role are sent.</p>
+          <div className="modes">
+            {prefs.data?.map((k) => <label className="check" key={k.kind}><input type="checkbox" checked={k.inApp} onChange={(e) => setPref.mutate({ kind: k.kind, inApp: e.target.checked })} /> {k.label}</label>)}
+          </div>
+        </section>
 
         <section className="card">
           <h2>Where you are signed in</h2>

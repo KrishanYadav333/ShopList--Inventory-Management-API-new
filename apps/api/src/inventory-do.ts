@@ -310,7 +310,7 @@ function ftsQuery(q: string | undefined): string | null {
 export class InventoryDO extends DurableObject<Bindings> {
   private sql: SqlStorage;
   /** Events are only recorded while the organization has a webhook; the Worker keeps this switch in sync. */
-  private eventsOn = false;
+  private eventsOn = true;
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env);
@@ -318,7 +318,8 @@ export class InventoryDO extends DurableObject<Bindings> {
     ctx.blockConcurrencyWhile(async () => {
       this.migrate();
       this.ensureDefaultLocation();
-      this.eventsOn = this.one<{ value: string }>(`SELECT value FROM meta WHERE key = 'events_on'`)?.value === '1';
+      // Events are always recorded: they feed notifications as well as webhooks. Only an explicit off (tests) stops them.
+      this.eventsOn = this.one<{ value: string }>(`SELECT value FROM meta WHERE key = 'events_on'`)?.value !== '0';
     });
   }
 

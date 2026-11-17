@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { checkWebhookUrl, handleQueue, signBody, type DeliveryJob } from '../src/webhooks';
-import { addMember, call, defaultLocation, newOrg, product, stub, uid } from './helpers';
+import { addMember, call, defaultLocation, newOrg, product, stub, uid, withoutDrain } from './helpers';
 
 type Org = { cookie: string; base: string; orgId: string };
 const URL_OK = 'https://hooks.acme-shop.dev/shoplist';
@@ -85,50 +85,56 @@ describe('recording events', () => {
   });
 
   it('records product, stock and order events in order, with low and out transitions', async () => {
-    const org = await newOrg();
-    const loc = await defaultLocation(org);
-    await stub(org.orgId).setEventsEnabled(true); // events on, but no webhook rows, so the Worker does not drain them
-    const p = await product(org, { sku: 'EV-1', initialQuantity: 10, reorderPoint: 5 });
-    const mv = (delta: number, reason = 'sale') => call(org.cookie, 'POST', `${org.base}/stock/movements`, { productId: p.id, locationId: loc, delta, reason });
-    await mv(-3); // 7: still fine
-    await mv(-3); // 4: crosses into low
-    await mv(-1); // 3: already low, no second low event
-    await mv(-3); // 0: crosses into out
-    const o = (await call(org.cookie, 'POST', `${org.base}/orders`, { customerName: 'Ev Customer', paid: true, lines: [{ productId: p.id, quantity: 1 }] })).body.order;
-    await mv(5, 'receive');
-    const o2 = (await call(org.cookie, 'GET', `${org.base}/orders/${o.id}`)).body.order;
-    await call(org.cookie, 'POST', `${org.base}/orders/${o.id}/ship`, {}, { 'if-match': `"${o2.version}"` });
-    const types = (await events(org)).map((e) => e.type);
-    expect(types).toEqual([
-      'stock.changed', 'product.created', // creating with initial stock: the stock lands first
-      'stock.changed', // 7
-      'stock.changed', 'stock.low', // 4: crosses into low
-      'stock.changed', // 3: already low, so no second low event
-      'stock.changed', 'stock.out', // 0: crosses into out
-      'order.created',
-      'stock.changed', 'stock.low', // +5 restock: out of stock to in stock but still at the reorder point
-      'stock.changed', 'order.shipped', // the sale
-    ]);
+    await withoutDrain(async () => {
+      const org = await newOrg();
+      const loc = await defaultLocation(org);
+      await stub(org.orgId).setEventsEnabled(true); // events on, but no webhook rows, so the Worker does not drain them
+      const p = await product(org, { sku: 'EV-1', initialQuantity: 10, reorderPoint: 5 });
+      const mv = (delta: number, reason = 'sale') => call(org.cookie, 'POST', `${org.base}/stock/movements`, { productId: p.id, locationId: loc, delta, reason });
+      await mv(-3); // 7: still fine
+      await mv(-3); // 4: crosses into low
+      await mv(-1); // 3: already low, no second low event
+      await mv(-3); // 0: crosses into out
+      const o = (await call(org.cookie, 'POST', `${org.base}/orders`, { customerName: 'Ev Customer', paid: true, lines: [{ productId: p.id, quantity: 1 }] })).body.order;
+      await mv(5, 'receive');
+      const o2 = (await call(org.cookie, 'GET', `${org.base}/orders/${o.id}`)).body.order;
+      await call(org.cookie, 'POST', `${org.base}/orders/${o.id}/ship`, {}, { 'if-match': `"${o2.version}"` });
+      const types = (await events(org)).map((e) => e.type);
+      expect(types).toEqual([
+        'stock.changed', 'product.created', // creating with initial stock: the stock lands first
+        'stock.changed', // 7
+        'stock.changed', 'stock.low', // 4: crosses into low
+        'stock.changed', // 3: already low, so no second low event
+        'stock.changed', 'stock.out', // 0: crosses into out
+        'order.created',
+        'stock.changed', 'stock.low', // +5 restock: out of stock to in stock but still at the reorder point
+        'stock.changed', 'order.shipped', // the sale
+      ]);
+    });
   });
 
   it('a rolled-back change records no event', async () => {
-    const org = await newOrg();
-    const loc = await defaultLocation(org);
-    const p = await product(org, { initialQuantity: 2 });
-    await stub(org.orgId).setEventsEnabled(true);
-    const r = await call(org.cookie, 'POST', `${org.base}/stock/movements`, { productId: p.id, locationId: loc, delta: -5, reason: 'sale' });
-    expect(r.status).toBe(409);
-    expect(await events(org)).toEqual([]);
+    await withoutDrain(async () => {
+      const org = await newOrg();
+      const loc = await defaultLocation(org);
+      const p = await product(org, { initialQuantity: 2 });
+      await events(org); // setup recorded its own events; start from an empty outbox
+      const r = await call(org.cookie, 'POST', `${org.base}/stock/movements`, { productId: p.id, locationId: loc, delta: -5, reason: 'sale' });
+      expect(r.status).toBe(409);
+      expect(await events(org)).toEqual([]);
+    });
   });
 
   it('turning events off clears the backlog', async () => {
-    const org = await newOrg();
-    await stub(org.orgId).setEventsEnabled(true);
-    await product(org);
-    await stub(org.orgId).setEventsEnabled(false);
-    expect(await events(org)).toEqual([]);
-    await product(org);
-    expect(await events(org)).toEqual([]);
+    await withoutDrain(async () => {
+      const org = await newOrg();
+      await stub(org.orgId).setEventsEnabled(true);
+      await product(org);
+      await stub(org.orgId).setEventsEnabled(false);
+      expect(await events(org)).toEqual([]);
+      await product(org);
+      expect(await events(org)).toEqual([]);
+    });
   });
 });
 

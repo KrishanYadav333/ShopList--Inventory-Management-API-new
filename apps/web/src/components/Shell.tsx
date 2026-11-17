@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate, useOutletContext, useParams, useSearchPar
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { Icon } from '../icons';
+import { NotificationBell } from './NotificationBell';
 import { useDashboard, useLocations, useMe, canDo, type OrgSummary } from '../queries';
 import { AdjustDialog } from './AdjustDialog';
 import { OrderDialog } from './OrderDialog';
@@ -174,6 +175,7 @@ export function Shell() {
             <NavLink to={`/o/${orgId}/products`} className="nav-icon" title="Products" aria-label="Products"><Icon name="grid" size={18} /></NavLink>
             <NavLink to={`/o/${orgId}/history`} className="nav-icon" title="Stock history" aria-label="Stock history"><Icon name="clock" size={18} /></NavLink>
             <NavLink to={`/o/${orgId}/settings`} className="nav-icon" title="Settings" aria-label="Settings"><Icon name="cog" size={18} /></NavLink>
+            <NotificationBell />
             {me.data?.user.isSuperAdmin && <NavLink to="/admin" className="nav-icon" title="Platform admin" aria-label="Platform admin"><Icon name="shield" size={18} /></NavLink>}
             <button className="nav-icon" title="Sign out" aria-label="Sign out" onClick={async () => { await api('POST', '/auth/logout', { body: {} }).catch(() => {}); qc.clear(); nav('/login'); }}><Icon name="logout" size={18} /></button>
           </div>

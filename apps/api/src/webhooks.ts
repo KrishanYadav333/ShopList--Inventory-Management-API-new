@@ -1,3 +1,4 @@
+import { notifyForEvent } from './notify';
 import type { Bindings } from './env';
 import { newId, nowIso } from './util';
 
@@ -52,10 +53,12 @@ async function orgHasHooks(env: Bindings, orgId: string): Promise<boolean> {
 
 /** Moves pending events from the organization's outbox onto the delivery queue. Returns how many jobs were queued. */
 export async function flushEvents(env: Bindings, orgId: string): Promise<number> {
-  if (!env.WEBHOOKS || !(await orgHasHooks(env, orgId))) return 0;
   const stub = env.INVENTORY.get(env.INVENTORY.idFromName(orgId));
   const events = await stub.takeOutbox(50);
   if (!events.length) return 0;
+  // Notifications for people in the business; a failure here must never block webhook delivery.
+  for (const e of events) await notifyForEvent(env, orgId, e.type, JSON.parse(e.data) as Record<string, unknown>).catch(() => undefined);
+  if (!env.WEBHOOKS || !(await orgHasHooks(env, orgId))) return 0;
   const { results } = await env.DB.prepare(`SELECT id, events FROM webhooks WHERE org_id = ? AND active = 1`).bind(orgId).all<{ id: string; events: string }>();
   const jobs: { body: DeliveryJob }[] = [];
   for (const e of events) {

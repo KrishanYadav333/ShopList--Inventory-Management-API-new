@@ -56,6 +56,7 @@ import type { Bindings } from './env';
 import { buildOpenApi, renderDocsPage } from './docs';
 import { checkWebhookUrl, flushEvents, forgetHooks, handleQueue, sendTestEvent, type DeliveryJob } from './webhooks';
 import { verifyAssertion, verifyRegistration } from './webauthn';
+import { KIND_LABELS, NOTIFICATION_KINDS } from './notify';
 import { clerkConfigured, fetchClerkProfile, verifyClerkToken } from './clerk';
 import { AppError, problemResponse, unwrap } from './errors';
 import type { Caller, Idem } from './inventory-do';
@@ -275,7 +276,9 @@ function route(method: 'get' | 'post' | 'patch' | 'delete', path: string, access
     const org = c.get('org');
     // Roles without cost:read never receive cost or inventory value, in any response from any route.
     if (org && !can(org.role, 'cost:read') && res.headers.get('content-type')?.includes('json')) res = await withoutCost(res);
-    if (method !== 'get' && res.status < 400 && org) c.executionCtx.waitUntil(flushEvents(c.env, org.id).then(() => undefined, () => undefined));
+    // `x-no-drain` lets local tests inspect the raw outbox. It only works when DEV_AUTH is on, never in production.
+    const hold = c.env.DEV_AUTH === 'true' && c.req.header('x-no-drain') === '1';
+    if (method !== 'get' && res.status < 400 && org && !hold) c.executionCtx.waitUntil(flushEvents(c.env, org.id).then(() => undefined, () => undefined));
     return res;
   };
   const handlers = [...guards, wrapped] as MiddlewareHandler[];
@@ -456,6 +459,65 @@ route('delete', '/auth/sessions/:id', 'user', async (c) => {
   if (!/^[0-9a-f]{16}$/.test(id)) throw new AppError(404, 'not_found', 'There is nothing at this address.');
   const r = await c.env.DB.prepare(`DELETE FROM sessions WHERE user_id = ? AND substr(token_hash, 1, ?) = ?`).bind(c.get('user').id, SID, id).run();
   if (!r.meta.changes) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  return c.json({ ok: true });
+});
+
+// ------------------------------------------------------------------ notifications
+const NOTIFICATION_KEEP_MS = 60 * 86400_000;
+
+route('get', '/me/notifications', 'user', async (c) => {
+  const q = parse(pageQuery, c.req.query());
+  const uid = c.get('user').id;
+  const cur = decodeCursor<{ c: string; i: string }>(q.cursor);
+  // Old ones are deleted as people look, so no scheduled job is needed.
+  await c.env.DB.prepare(`DELETE FROM notifications WHERE user_id = ? AND created_at < ?`).bind(uid, new Date(Date.now() - NOTIFICATION_KEEP_MS).toISOString()).run();
+  const { results } = await c.env.DB.prepare(
+    `SELECT n.id, n.org_id AS orgId, n.kind, n.title, n.link, n.created_at AS createdAt, n.read_at AS readAt
+       FROM notifications n JOIN memberships m ON m.org_id = n.org_id AND m.user_id = n.user_id AND m.deactivated_at IS NULL
+      WHERE n.user_id = ? ${cur ? 'AND (n.created_at < ? OR (n.created_at = ? AND n.id < ?))' : ''}
+      ORDER BY n.created_at DESC, n.id DESC LIMIT ?`,
+  ).bind(uid, ...(cur ? [cur.c, cur.c, cur.i] : []), q.limit + 1).all<{ id: string; createdAt: string }>();
+  const hasMore = results.length > q.limit;
+  const data = results.slice(0, q.limit);
+  const last = data[data.length - 1];
+  return c.json({ data, nextCursor: hasMore && last ? encodeCursor({ c: last.createdAt, i: last.id }) : null, hasMore });
+});
+
+route('get', '/me/notifications/unread-count', 'user', async (c) => {
+  const r = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM notifications n JOIN memberships m ON m.org_id = n.org_id AND m.user_id = n.user_id AND m.deactivated_at IS NULL WHERE n.user_id = ? AND n.read_at IS NULL`,
+  ).bind(c.get('user').id).first<{ n: number }>();
+  return c.json({ count: r?.n ?? 0 });
+});
+
+route('post', '/me/notifications/read', 'user', async (c) => {
+  const { data } = await readJson(c, z.object({ ids: z.array(z.string().max(60)).max(200).optional() }).strict());
+  const uid = c.get('user').id;
+  const now = nowIso();
+  if (data.ids?.length) {
+    await c.env.DB.batch(data.ids.map((id) => c.env.DB.prepare(`UPDATE notifications SET read_at = ? WHERE id = ? AND user_id = ? AND read_at IS NULL`).bind(now, id, uid)));
+  } else {
+    await c.env.DB.prepare(`UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL`).bind(now, uid).run();
+  }
+  return c.json({ ok: true });
+});
+
+route('get', '/me/notification-preferences', 'user', async (c) => {
+  const orgId = c.req.query('org') ?? '';
+  const uid = c.get('user').id;
+  const member = await c.env.DB.prepare(`SELECT 1 AS x FROM memberships WHERE org_id = ? AND user_id = ?`).bind(orgId, uid).first();
+  if (!member) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
+  const { results } = await c.env.DB.prepare(`SELECT kind FROM notification_prefs WHERE user_id = ? AND org_id = ? AND in_app = 0`).bind(uid, orgId).all<{ kind: string }>();
+  const off = new Set(results.map((r) => r.kind));
+  return c.json({ data: NOTIFICATION_KINDS.map((kind) => ({ kind, label: KIND_LABELS[kind], inApp: !off.has(kind) })) });
+});
+
+route('patch', '/me/notification-preferences', 'user', async (c) => {
+  const { data } = await readJson(c, z.object({ orgId: z.string().max(60), kind: z.enum(NOTIFICATION_KINDS), inApp: z.boolean() }).strict());
+  const uid = c.get('user').id;
+  const member = await c.env.DB.prepare(`SELECT 1 AS x FROM memberships WHERE org_id = ? AND user_id = ?`).bind(data.orgId, uid).first();
+  if (!member) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
+  await c.env.DB.prepare(`INSERT INTO notification_prefs(user_id, org_id, kind, in_app) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, org_id, kind) DO UPDATE SET in_app = excluded.in_app`).bind(uid, data.orgId, data.kind, data.inApp ? 1 : 0).run();
   return c.json({ ok: true });
 });
 
@@ -750,7 +812,6 @@ route('delete', '/orgs/:orgId/webhooks/:id', 'settings:manage', async (c) => {
   if (!res.meta.changes) throw new AppError(404, 'webhook_not_found', 'That webhook does not exist.');
   forgetHooks(orgId);
   const left = await c.env.DB.prepare(`SELECT 1 AS x FROM webhooks WHERE org_id = ? LIMIT 1`).bind(orgId).first();
-  if (!left) await inventory(c).setEventsEnabled(false); // stop recording events nobody will read
   return c.json({ ok: true });
 });
 
