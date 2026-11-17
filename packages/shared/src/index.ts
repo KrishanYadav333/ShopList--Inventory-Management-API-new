@@ -348,3 +348,32 @@ export interface Dashboard {
   needsAttention: Product[];
   recentMovements: Movement[];
 }
+
+// ---------------------------------------------------------------- business settings
+const isTimezone = (v: string) => { try { new Intl.DateTimeFormat('en', { timeZone: v }); return true; } catch { return false; } };
+const optText = (max: number) => z.string().trim().max(max).nullish();
+/** Everything a business can configure about itself. All optional on update; defaults live in `SETTINGS_DEFAULTS`. */
+export const orgSettings = z
+  .object({
+    legalName: optText(120),
+    address: optText(300),
+    phone: optText(40),
+    email: z.string().trim().toLowerCase().email().max(254).nullish().or(z.literal('')),
+    taxId: optText(40),
+    currency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, 'Use a 3-letter currency code'),
+    taxMode: z.enum(['none', 'inclusive', 'exclusive']),
+    taxRateBp: z.number().int().min(0).max(10_000),
+    timezone: z.string().trim().max(60).refine(isTimezone, 'Unknown timezone'),
+    orderPrefix: z.string().trim().max(8).regex(/^[A-Za-z0-9#_-]*$/, 'Letters, numbers, # _ - only'),
+    poPrefix: z.string().trim().max(8).regex(/^[A-Za-z0-9#_-]*$/, 'Letters, numbers, # _ - only'),
+    invoicePrefix: z.string().trim().max(8).regex(/^[A-Za-z0-9#_-]*$/, 'Letters, numbers, # _ - only'),
+    defaultReorderPoint: z.number().int().min(0).max(LIMITS.maxOnHand).nullable(),
+  })
+  .strict();
+export type OrgSettings = z.infer<typeof orgSettings>;
+export const orgSettingsPatch = orgSettings.partial();
+export const SETTINGS_DEFAULTS: OrgSettings = {
+  legalName: null, address: null, phone: null, email: null, taxId: null,
+  currency: 'USD', taxMode: 'none', taxRateBp: 0, timezone: 'UTC',
+  orderPrefix: 'ORD-', poPrefix: 'PO-', invoicePrefix: 'INV-', defaultReorderPoint: null,
+};

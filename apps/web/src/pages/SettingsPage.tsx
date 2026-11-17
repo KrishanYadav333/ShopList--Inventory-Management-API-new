@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ROLES, ROLE_LABELS, ROLE_SUMMARY, WEBHOOK_EVENTS, type Role } from '@shoplist/shared';
+import { ROLES, ROLE_LABELS, ROLE_SUMMARY, SETTINGS_DEFAULTS, WEBHOOK_EVENTS, type OrgSettings, type Role } from '@shoplist/shared';
 import { api, ApiError } from '../api';
 import { useShell } from '../components/Shell';
 import { dateParts } from '../format';
@@ -41,6 +41,15 @@ export function SettingsPage() {
   const revokeOthers = useMutation({ mutationFn: () => api('POST', '/auth/sessions/revoke-others', { body: {} }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['sessions'] }); toast({ text: 'Signed out everywhere else' }); }, onError: fail });
   const device = (ua: string | null) => (ua ? `${/iPhone|iPad|Android/.test(ua) ? 'Phone or tablet' : /Mac|Windows|Linux/.test(ua) ? 'Computer' : 'Device'} · ${/Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Browser'}` : 'Unknown device');
 
+  const settingsQ = useQuery({ enabled: admin, queryKey: ['org', org.id, 'settings'], queryFn: () => api<{ settings: OrgSettings }>('GET', `/orgs/${org.id}/settings`).then((r) => r.settings) });
+  const [form, setForm] = useState<OrgSettings | null>(null);
+  const bs = form ?? settingsQ.data ?? SETTINGS_DEFAULTS;
+  const setBs = (patch: Partial<OrgSettings>) => setForm({ ...bs, ...patch });
+  const saveSettings = useMutation({
+    mutationFn: () => api<{ settings: OrgSettings }>('PATCH', `/orgs/${org.id}/settings`, { body: { ...bs, email: bs.email ?? '' } }),
+    onSuccess: (r) => { setForm(null); qc.setQueryData(['org', org.id, 'settings'], r.settings); qc.invalidateQueries({ queryKey: ['me'] }); toast({ kind: 'success', text: 'Business settings saved' }); },
+    onError: fail,
+  });
   const [backingUp, setBackingUp] = useState(false);
   /** Pages through every product and downloads one JSON file: a copy you control, and the input for a CSV re-import. */
   const backup = async () => {
@@ -303,6 +312,28 @@ export function SettingsPage() {
                 <button className="btn btn-outline" onClick={() => setNewSecret('')}>I have saved it</button>
               </div>
             )}
+          </section>
+        )}
+
+        {admin && (
+          <section className="card">
+            <h2>Business</h2>
+            <p className="hint">Used on invoices, orders and reports.</p>
+            <form className="settings-grid" onSubmit={submit(() => saveSettings.mutate())}>
+              <div className="field"><label htmlFor="b-legal">Legal name</label><input id="b-legal" maxLength={120} value={bs.legalName ?? ''} onChange={(e) => setBs({ legalName: e.target.value })} /></div>
+              <div className="field"><label htmlFor="b-tax-id">Tax id (GSTIN, VAT no.)</label><input id="b-tax-id" maxLength={40} value={bs.taxId ?? ''} onChange={(e) => setBs({ taxId: e.target.value })} /></div>
+              <div className="field"><label htmlFor="b-addr">Address</label><input id="b-addr" maxLength={300} value={bs.address ?? ''} onChange={(e) => setBs({ address: e.target.value })} /></div>
+              <div className="field"><label htmlFor="b-phone">Phone</label><input id="b-phone" maxLength={40} value={bs.phone ?? ''} onChange={(e) => setBs({ phone: e.target.value })} /></div>
+              <div className="field"><label htmlFor="b-email">Business email</label><input id="b-email" type="email" value={bs.email ?? ''} onChange={(e) => setBs({ email: e.target.value })} /></div>
+              <div className="field"><label htmlFor="b-cur">Currency</label><input id="b-cur" maxLength={3} value={bs.currency} onChange={(e) => setBs({ currency: e.target.value.toUpperCase() })} /></div>
+              <div className="field"><label htmlFor="b-taxmode">Tax</label>
+                <select id="b-taxmode" value={bs.taxMode} onChange={(e) => setBs({ taxMode: e.target.value as OrgSettings['taxMode'] })}><option value="none">No tax</option><option value="inclusive">Prices include tax</option><option value="exclusive">Tax added on top</option></select></div>
+              <div className="field"><label htmlFor="b-taxrate">Tax rate (%)</label><input id="b-taxrate" type="number" min={0} max={100} step="0.01" value={bs.taxRateBp / 100} onChange={(e) => setBs({ taxRateBp: Math.round(Number(e.target.value) * 100) })} /></div>
+              <div className="field"><label htmlFor="b-tz">Timezone</label><input id="b-tz" value={bs.timezone} onChange={(e) => setBs({ timezone: e.target.value })} placeholder="e.g. Asia/Kathmandu" /></div>
+              <div className="field"><label htmlFor="b-op">Order number prefix</label><input id="b-op" maxLength={8} value={bs.orderPrefix} onChange={(e) => setBs({ orderPrefix: e.target.value })} /></div>
+              <div className="field"><label htmlFor="b-rp">Default reorder point</label><input id="b-rp" type="number" min={0} value={bs.defaultReorderPoint ?? ''} onChange={(e) => setBs({ defaultReorderPoint: e.target.value === '' ? null : Number(e.target.value) })} /></div>
+              <button className="btn btn-primary" disabled={saveSettings.isPending || !form}>{saveSettings.isPending ? 'Saving…' : 'Save business settings'}</button>
+            </form>
           </section>
         )}
 

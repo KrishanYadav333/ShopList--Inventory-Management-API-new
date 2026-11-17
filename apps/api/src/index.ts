@@ -16,6 +16,9 @@ import {
   orderInput,
   orderListQuery,
   orgInput,
+  orgSettingsPatch,
+  SETTINGS_DEFAULTS,
+  type OrgSettings,
   pageQuery,
   paidInput,
   productInput,
@@ -489,6 +492,29 @@ route('patch', '/orgs/:orgId', 'settings:manage', async (c) => {
   const { data } = await readJson(c, orgInput);
   await c.env.DB.prepare(`UPDATE organizations SET name = ? WHERE id = ?`).bind(data.name, c.get('org').id).run();
   return c.json({ ok: true });
+});
+
+async function loadSettings(c: Ctx): Promise<OrgSettings> {
+  const row = await c.env.DB.prepare(`SELECT settings, currency FROM organizations WHERE id = ?`).bind(c.get('org').id).first<{ settings: string; currency: string }>();
+  let saved: Partial<OrgSettings> = {};
+  try { saved = JSON.parse(row?.settings ?? '{}'); } catch { /* fall back to defaults */ }
+  return { ...SETTINGS_DEFAULTS, ...saved, currency: row?.currency ?? 'USD' };
+}
+
+route('get', '/orgs/:orgId/settings', 'inventory:read', async (c) => c.json({ settings: await loadSettings(c) }));
+
+route('patch', '/orgs/:orgId/settings', 'settings:manage', async (c) => {
+  const { data } = await readJson(c, orgSettingsPatch);
+  const current = await loadSettings(c);
+  const next: OrgSettings = { ...current, ...data, email: data.email === '' ? null : (data.email ?? current.email) } as OrgSettings;
+  // Prices already entered would silently change meaning, so currency is locked once the business has orders.
+  if (data.currency && data.currency !== current.currency && (await inventory(c).stats()).orders > 0) {
+    throw new AppError(409, 'currency_locked', 'The currency cannot change after the business has orders.');
+  }
+  const { currency, ...rest } = next;
+  await c.env.DB.prepare(`UPDATE organizations SET settings = ?, currency = ? WHERE id = ?`).bind(JSON.stringify(rest), currency, c.get('org').id).run();
+  await inventory(c).setSettings({ orderPrefix: next.orderPrefix, defaultReorderPoint: next.defaultReorderPoint });
+  return c.json({ settings: next });
 });
 
 route('delete', '/orgs/:orgId', 'org:delete', async (c) => {

@@ -321,3 +321,5 @@ a.btn { text-decoration: none; }
 .products-table .item-desc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 28rem; }
 .products-table tr.spacer, .products-table tr.spacer:hover { background: none; }
 .role-help { list-style: none; padding: 0; margin: 12px 0 4px; display: grid; gap: 4px; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; align-items: end; }
+.settings-grid .btn { justify-self: start; }

@@ -43,6 +43,8 @@ export const DOCS: Record<string, Doc> = {
   'GET /orgs/:orgId/members': { tag: 'Members', summary: 'List members' },
   'PATCH /orgs/:orgId/members/:userId': { tag: 'Members', summary: "Change a member's role", body: memberPatch },
   'DELETE /orgs/:orgId/members/:userId': { tag: 'Members', summary: 'Remove a member. The last admin cannot be removed' },
+  'GET /orgs/:orgId/settings': { tag: 'Organizations', summary: "The business's settings (currency, tax, timezone, numbering)" },
+  'PATCH /orgs/:orgId/settings': { tag: 'Organizations', summary: 'Change business settings (admin only)' },
   'POST /orgs/:orgId/invitations': { tag: 'Members', summary: 'Create a one-time invitation link', body: inviteInput },
   'GET /orgs/:orgId/invitations': { tag: 'Members', summary: 'List pending invitations' },
   'POST /orgs/:orgId/invitations/:invId/resend': { tag: 'Members', summary: 'Replace a pending invitation with a fresh link' },

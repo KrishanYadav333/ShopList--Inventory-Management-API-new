@@ -601,7 +601,7 @@ export class InventoryDO extends DurableObject<Bindings> {
       this.run(
         `INSERT INTO products(id, sku, name, description, barcode, unit, price_minor, cost_minor, reorder_point, on_hand_total, attention, version, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 1, ?, ?)`,
-        id, input.sku, input.name, input.description ?? null, input.barcode ?? null, input.unit, input.priceMinor, input.costMinor ?? null, input.reorderPoint ?? null, now, now,
+        id, input.sku, input.name, input.description ?? null, input.barcode ?? null, input.unit, input.priceMinor, input.costMinor ?? null, input.reorderPoint ?? this.settings().defaultReorderPoint ?? null, now, now,
       );
       this.setTags(id, input.tags);
       this.reindex({ id, name: input.name, sku: input.sku, barcode: input.barcode ?? null, description: input.description ?? null });
@@ -778,13 +778,23 @@ export class InventoryDO extends DurableObject<Bindings> {
     };
   }
 
+  /** The Worker pushes a business's settings here whenever they change, so rules need no D1 read per request. */
+  setSettings(settings: Record<string, unknown>): void {
+    this.run(`INSERT INTO meta(key, value) VALUES ('settings', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, JSON.stringify(settings));
+  }
+
+  private settings(): { orderPrefix?: string; defaultReorderPoint?: number | null } {
+    try { return JSON.parse(this.one<{ value: string }>(`SELECT value FROM meta WHERE key = 'settings'`)?.value ?? '{}'); } catch { return {}; }
+  }
+
   /** Numbers only, for the platform console. Never returns product, customer or order details. */
-  stats(): { products: number; locations: number; openOrders: number; lastActivityAt: string | null } {
+  stats(): { products: number; locations: number; openOrders: number; orders: number; lastActivityAt: string | null } {
     const counters = Object.fromEntries(this.all<{ name: string; value: number }>(`SELECT name, value FROM counters`).map((r) => [r.name, r.value]));
     const loc = this.all<{ n: number }>(`SELECT COUNT(*) AS n FROM locations WHERE archived_at IS NULL`)[0]?.n ?? 0;
     const open = this.all<{ n: number }>(`SELECT COUNT(*) AS n FROM orders WHERE state IN ('payment_required', 'waiting_for_stock', 'ready_to_ship')`)[0]?.n ?? 0;
     const last = this.all<{ t: string | null }>(`SELECT MAX(created_at) AS t FROM audit_log`)[0]?.t ?? null;
-    return { products: counters.products ?? 0, locations: loc, openOrders: open, lastActivityAt: last };
+    const orders = this.all<{ n: number }>(`SELECT COUNT(*) AS n FROM orders`)[0]?.n ?? 0;
+    return { products: counters.products ?? 0, locations: loc, openOrders: open, orders, lastActivityAt: last };
   }
 
   // ---------------------------------------------------------- locations
@@ -1019,7 +1029,7 @@ export class InventoryDO extends DurableObject<Bindings> {
       const id = newId('ord');
       const now = nowIso();
       this.run(`UPDATE counters SET value = value + 1 WHERE name = 'order_seq'`);
-      const number = `ORD-${this.one<{ value: number }>(`SELECT value FROM counters WHERE name = 'order_seq'`)!.value}`;
+      const number = `${this.settings().orderPrefix ?? 'ORD-'}${this.one<{ value: number }>(`SELECT value FROM counters WHERE name = 'order_seq'`)!.value}`;
       this.run(
         `INSERT INTO orders(id, number, channel, customer_name, customer_email, country, note, location_id, paid, state, version, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'payment_required', 1, ?, ?)`,
