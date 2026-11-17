@@ -8,6 +8,7 @@ import { canDo, useLocations } from '../queries';
 import { useToast } from '../toast';
 
 const STATE: Record<string, string> = { draft: 'Draft', sent: 'Sent', partially_received: 'Partly received', received: 'Received', cancelled: 'Cancelled', closed: 'Closed' };
+interface Suggestion { productId: string; sku: string; name: string; available: number; onOrder: number; reorderPoint: number | null; daysOfCover: number | null; suggested: number; supplierName: string | null; leadTimeDays: number }
 interface DraftLine { productId: string; label: string; quantity: number; unitCostMinor: number }
 
 export function PurchasingPage() {
@@ -24,6 +25,15 @@ export function PurchasingPage() {
 
   const suppliers = useQuery({ queryKey: ['org', org.id, 'purchasing', 'suppliers'], queryFn: () => api<{ data: Supplier[] }>('GET', `/orgs/${org.id}/suppliers`).then((r) => r.data) });
   const orders = useQuery({ queryKey: ['org', org.id, 'purchasing', 'orders'], queryFn: () => api<{ data: PurchaseOrder[] }>('GET', `/orgs/${org.id}/purchase-orders?limit=100`).then((r) => r.data) });
+
+  // ---- reorder suggestions
+  const suggestions = useQuery({ enabled: buy, queryKey: ['org', org.id, 'purchasing', 'reorder'], queryFn: () => api<{ data: Suggestion[] }>('GET', `/orgs/${org.id}/purchasing/reorder`).then((r) => r.data) });
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const draftFromSuggestions = useMutation({
+    mutationFn: () => api<{ created: PurchaseOrder[]; skippedNoSupplier: string[] }>('POST', `/orgs/${org.id}/purchasing/reorder/draft`, { body: { productIds: [...picked] } }),
+    onSuccess: (r) => { setPicked(new Set()); refresh(); toast({ kind: 'success', text: `${r.created.length} draft order${r.created.length === 1 ? '' : 's'} created${r.skippedNoSupplier.length ? `. No usual supplier for: ${r.skippedNoSupplier.join(', ')}` : ''}` }); },
+    onError: fail,
+  });
 
   // ---- suppliers
   const [sup, setSup] = useState({ name: '', email: '', phone: '', leadTimeDays: '' });
@@ -98,6 +108,33 @@ export function PurchasingPage() {
             </form>
           )}
         </section>
+
+        {buy && (
+          <section className="card">
+            <h2>What to reorder</h2>
+            <p className="hint">Products that are low or selling fast. Quantities cover the supplier's lead time plus two weeks of sales, minus what is already on order. The usual supplier is whoever you last ordered the product from.</p>
+            {!suggestions.data?.length ? <p className="hint">{suggestions.isLoading ? 'Loading…' : 'Nothing needs ordering right now.'}</p> : (
+              <>
+                <div className="orders-table-container">
+                  <table className="orders-table">
+                    <thead><tr><th className="checkbox-col"><span className="sr-only">Pick</span></th><th>Product</th><th className="num">Available</th><th className="num">On order</th><th className="num">Days left</th><th>Usual supplier</th><th className="num">Suggested</th></tr></thead>
+                    <tbody>
+                      {suggestions.data.map((r) => (
+                        <tr key={r.productId}>
+                          <td className="checkbox-col"><input type="checkbox" aria-label={`Pick ${r.name}`} checked={picked.has(r.productId)} onChange={() => setPicked((p) => { const n = new Set(p); if (n.has(r.productId)) n.delete(r.productId); else n.add(r.productId); return n; })} /></td>
+                          <td><strong>{r.name}</strong><div className="time">{r.sku}</div></td>
+                          <td className="num">{r.available}</td><td className="num">{r.onOrder}</td><td className="num">{r.daysOfCover ?? '—'}</td>
+                          <td>{r.supplierName ?? <span className="time">none yet</span>}</td><td className="num"><strong>{r.suggested}</strong></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <button className="btn btn-primary" disabled={!picked.size || draftFromSuggestions.isPending} onClick={() => draftFromSuggestions.mutate()}>Create draft orders ({picked.size})</button>
+              </>
+            )}
+          </section>
+        )}
 
         {buy && (
           <section className="card">

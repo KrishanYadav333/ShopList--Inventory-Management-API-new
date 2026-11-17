@@ -1490,6 +1490,41 @@ export class InventoryDO extends DurableObject<Bindings> {
     });
   }
 
+  /**
+   * What to order. Available stock plus what is already on order is compared with the reorder point and with how fast
+   * the product sells. Suggested quantity covers the supplier's lead time plus `coverDays` of sales. The usual supplier
+   * is whoever the product was last ordered from.
+   */
+  reorderSuggestions(coverDays = 14): { productId: string; sku: string; name: string; available: number; onOrder: number; reorderPoint: number | null; avgDaily: number; daysOfCover: number | null; suggested: number; unitCostMinor: number; supplierId: string | null; supplierName: string | null; leadTimeDays: number }[] {
+    const onOrder = this.onOrder();
+    const since = new Date(Date.parse(this.today()) - 29 * 86400_000).toISOString().slice(0, 10);
+    const rows = this.all<Row>(
+      `SELECT p.id, p.sku, p.name, p.reorder_point, p.cost_minor,
+              p.on_hand_total - COALESCE((SELECT SUM(reserved) FROM stock_levels WHERE product_id = p.id), 0) AS available,
+              COALESCE((SELECT SUM(d.sold_qty) FROM daily_stats d WHERE d.product_id = p.id AND d.day >= ?), 0) AS sold30,
+              (SELECT po.supplier_id FROM po_lines l JOIN purchase_orders po ON po.id = l.po_id WHERE l.product_id = p.id AND po.state <> 'cancelled' ORDER BY po.created_at DESC LIMIT 1) AS supplier_id,
+              (SELECT l.unit_cost_minor FROM po_lines l JOIN purchase_orders po ON po.id = l.po_id WHERE l.product_id = p.id AND po.state <> 'cancelled' ORDER BY po.created_at DESC LIMIT 1) AS last_cost
+         FROM products p WHERE p.deleted_at IS NULL`, since);
+    const sup = new Map(this.all<Row>(`SELECT id, name, lead_time_days FROM suppliers WHERE archived_at IS NULL`).map((r) => [r.id as string, r]));
+    const out = [];
+    for (const r of rows) {
+      const avgDaily = Number(r.sold30) / 30;
+      const have = Number(r.available) + (onOrder[r.id as string] ?? 0);
+      const rp = (r.reorder_point as number | null) ?? null;
+      const s = r.supplier_id ? sup.get(r.supplier_id as string) : undefined;
+      const lead = Number(s?.lead_time_days ?? 7);
+      const cover = avgDaily > 0 ? Number(r.available) / avgDaily : null;
+      const low = rp !== null && have <= rp;
+      const soon = cover !== null && cover < lead && have <= avgDaily * (lead + coverDays);
+      if (!low && !soon) continue;
+      const wanted = avgDaily > 0 ? Math.ceil(avgDaily * (lead + coverDays) - have) : (rp ?? 0) - have;
+      if (!low && wanted <= 0) continue; // already covered by what is on the way
+      const suggested = Math.max(1, Math.ceil(wanted), low && rp !== null ? rp - have + 1 : 0);
+      out.push({ productId: r.id as string, sku: r.sku as string, name: r.name as string, available: Number(r.available), onOrder: onOrder[r.id as string] ?? 0, reorderPoint: rp, avgDaily: Math.round(avgDaily * 100) / 100, daysOfCover: cover === null ? null : Math.floor(cover), suggested, unitCostMinor: Number(r.last_cost ?? r.cost_minor ?? 0), supplierId: s ? (r.supplier_id as string) : null, supplierName: s ? (s.name as string) : null, leadTimeDays: lead });
+    }
+    return out.sort((a, b) => (a.daysOfCover ?? 9999) - (b.daysOfCover ?? 9999) || a.name.localeCompare(b.name)).slice(0, 500);
+  }
+
   // ---------------------------------------------------------- reports
   /** The business's calendar day for now, in its own timezone, so "today" means what the owner means. */
   private today(): string {

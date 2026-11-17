@@ -64,6 +64,8 @@ export const DOCS: Record<string, Doc> = {
   'POST /orgs/:orgId/purchase-orders/:id/cancel': { tag: 'Purchasing', summary: 'Cancel an order nothing has arrived for' },
   'POST /orgs/:orgId/purchase-orders/:id/close': { tag: 'Purchasing', summary: 'Close a partly received order (the rest will not come)' },
   'POST /orgs/:orgId/purchase-orders/:id/receive': { tag: 'Purchasing', summary: 'Receive goods against the order: writes receive movements and updates cost' },
+  'GET /orgs/:orgId/purchasing/reorder': { tag: 'Purchasing', summary: 'What to reorder: low or fast-selling products with a suggested quantity' },
+  'POST /orgs/:orgId/purchasing/reorder/draft': { tag: 'Purchasing', summary: 'Create one draft purchase order per usual supplier from chosen suggestions' },
   'GET /orgs/:orgId/settings': { tag: 'Organizations', summary: "The business's settings (currency, tax, timezone, numbering)" },
   'PATCH /orgs/:orgId/settings': { tag: 'Organizations', summary: 'Change business settings (admin only)' },
   'POST /orgs/:orgId/invitations': { tag: 'Members', summary: 'Create a one-time invitation link', body: inviteInput },

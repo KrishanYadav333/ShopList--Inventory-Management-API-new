@@ -1106,6 +1106,30 @@ route('post', '/orgs/:orgId/purchase-orders/:id/receive', 'stock:write', async (
   return c.json(out.body, out.status as 200);
 });
 
+// Reorder suggestions: what to buy, and one draft purchase order per usual supplier.
+route('get', '/orgs/:orgId/purchasing/reorder', 'purchasing:write', async (c) => c.json({ data: await inventory(c).reorderSuggestions() }));
+
+route('post', '/orgs/:orgId/purchasing/reorder/draft', 'purchasing:write', async (c) => {
+  const { data } = await readJson(c, z.object({ productIds: z.array(z.string().max(40)).min(1).max(100), locationId: z.string().max(40).optional() }).strict());
+  const wanted = new Set(data.productIds);
+  const picks = (await inventory(c).reorderSuggestions()).filter((r) => wanted.has(r.productId));
+  const locations = await inventory(c).listLocations();
+  const locationId = data.locationId ?? locations.find((l) => !l.archivedAt)?.id;
+  if (!locationId) throw new AppError(409, 'no_location', 'Add a location first.');
+  const bySupplier = new Map<string, typeof picks>();
+  const skipped: string[] = [];
+  for (const r of picks) {
+    if (!r.supplierId) { skipped.push(r.sku); continue; }
+    bySupplier.set(r.supplierId, [...(bySupplier.get(r.supplierId) ?? []), r]);
+  }
+  const created = [];
+  for (const [supplierId, items] of bySupplier) {
+    const out = unwrap(await inventory(c).createPurchaseOrder(caller(c), { supplierId, locationId, lines: items.map((i) => ({ productId: i.productId, quantity: i.suggested, unitCostMinor: i.unitCostMinor })) }));
+    created.push(out.body.order);
+  }
+  return c.json({ created, skippedNoSupplier: skipped }, 201);
+});
+
 route('get', '/orgs/:orgId/audit', 'audit:read', async (c) => c.json(await inventory(c).listAudit(parse(pageQuery, c.req.query()))));
 
 

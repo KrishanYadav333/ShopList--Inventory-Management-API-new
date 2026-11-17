@@ -112,3 +112,41 @@ describe('F13 purchasing', () => {
     expect((await call(admin.cookie, 'POST', `${admin.base}/purchase-orders`, { supplierId: sup.id, locationId: loc, lines: [{ productId: p1.id, quantity: 1, unitCostMinor: 1 }] })).status).toBe(404);
   });
 });
+
+describe('F14 reorder suggestions', () => {
+  it('suggests low and fast sellers with a quantity, groups drafts by usual supplier, and lists products with no supplier separately', async () => {
+    const admin = await newOrg();
+    const loc = await defaultLocation(admin);
+    const sup = (await call(admin.cookie, 'POST', `${admin.base}/suppliers`, { name: 'Usual Co', leadTimeDays: 5 })).body.supplier;
+    const a = await product(admin, { sku: 'R-A', name: 'Ay', costMinor: 200, reorderPoint: 20, initialQuantity: 100 });
+    const b = await product(admin, { sku: 'R-B', name: 'Bee', costMinor: 50, reorderPoint: 10, initialQuantity: 100 });
+    const c = await product(admin, { sku: 'R-C', name: 'Sea', costMinor: 50, reorderPoint: 100, initialQuantity: 100 });
+    await product(admin, { sku: 'R-D', name: 'Dee', reorderPoint: 5, initialQuantity: 100 }); // healthy
+    // Make A and B known to the supplier by ordering them once (a sent order for 1 unit); C stays unknown.
+    const first = (await call(admin.cookie, 'POST', `${admin.base}/purchase-orders`, { supplierId: sup.id, locationId: loc, lines: [{ productId: a.id, quantity: 1, unitCostMinor: 210 }, { productId: b.id, quantity: 1, unitCostMinor: 55 }] })).body.order;
+    await call(admin.cookie, 'POST', `${admin.base}/purchase-orders/${first.id}/send`, {});
+    // sell A down below its reorder point, B stays fine, C is under its reorder point from the start
+    await call(admin.cookie, 'POST', `${admin.base}/stock/movements`, { productId: a.id, locationId: loc, delta: -90, reason: 'sale' });
+    const sug = (await call(admin.cookie, 'GET', `${admin.base}/purchasing/reorder`)).body.data as { sku: string; suggested: number; supplierName: string | null; onOrder: number }[];
+    expect(sug.map((s) => s.sku).sort()).toEqual(['R-A', 'R-C']);
+    const sa = sug.find((s) => s.sku === 'R-A')!;
+    expect(sa.suggested).toBeGreaterThan(10);
+    expect(sa.supplierName).toBe('Usual Co');
+    expect(sug.find((s) => s.sku === 'R-C')!.supplierName).toBeNull();
+
+    const draft = await call(admin.cookie, 'POST', `${admin.base}/purchasing/reorder/draft`, { productIds: [a.id, c.id] });
+    expect(draft.status).toBe(201);
+    expect(draft.body.created).toHaveLength(1);
+    expect(draft.body.created[0].lines).toHaveLength(1);
+    expect(draft.body.skippedNoSupplier).toEqual(['R-C']);
+    // once a draft is sent, what is on order counts and the suggestion shrinks
+    await call(admin.cookie, 'POST', `${admin.base}/purchase-orders/${draft.body.created[0].id}/send`, {});
+    const after = (await call(admin.cookie, 'GET', `${admin.base}/purchasing/reorder`)).body.data as { sku: string }[];
+    expect(after.map((s) => s.sku)).not.toContain('R-A');
+  });
+
+  it('is for buyers only', async () => {
+    const admin = await newOrg();
+    for (const role of ['sales', 'stock', 'viewer', 'accountant'] as const) expect((await call((await addMember(admin, role)).cookie, 'GET', `${admin.base}/purchasing/reorder`)).status).toBe(403);
+  });
+});
