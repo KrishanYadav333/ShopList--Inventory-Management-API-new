@@ -104,7 +104,7 @@ app.use('*', async (c, next) => {
   const h = c.res.headers;
   h.set('X-Request-Id', requestId);
   h.set('X-Content-Type-Options', 'nosniff');
-  h.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  if (!h.has('Referrer-Policy')) h.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   h.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
   h.set('Permissions-Policy', 'camera=(self), geolocation=()');
   if (new URL(c.req.url).pathname.startsWith('/api/')) {
@@ -622,6 +622,76 @@ route('delete', '/auth/sessions/:id', 'user', async (c) => {
   await authEvent(c, 'session_revoked', { userId: c.get('user').id, reason: 'one' });
   return c.json({ ok: true });
 });
+
+// ------------------------------------------------------------------ links for people with no account (F24, F25)
+const SHARE_DAYS = 90;
+const publicHeaders = (c: Ctx) => { c.header('Cache-Control', 'no-store'); c.header('X-Robots-Tag', 'noindex, nofollow'); c.header('Referrer-Policy', 'no-referrer'); };
+
+async function makeLink(c: Ctx, kind: 'order' | 'po', entityId: string) {
+  const token = randomToken(32);
+  const expiresAt = new Date(Date.now() + SHARE_DAYS * 86400_000).toISOString();
+  await c.env.DB.prepare(`INSERT INTO share_links(token_hash, org_id, kind, entity_id, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(await sha256Hex(token), c.get('org').id, kind, entityId, c.get('user').id, nowIso(), expiresAt).run();
+  return { link: `${c.env.APP_ORIGIN}/s/${kind === 'order' ? 'o' : 'po'}/${token}`, expiresAt };
+}
+const revokeLinks = async (c: Ctx, kind: 'order' | 'po', entityId: string) =>
+  (await c.env.DB.prepare(`UPDATE share_links SET revoked_at = ? WHERE org_id = ? AND kind = ? AND entity_id = ? AND revoked_at IS NULL`).bind(nowIso(), c.get('org').id, kind, entityId).run()).meta.changes ?? 0;
+
+/** A link that is unknown, revoked, expired or for a business that is gone all look the same: nothing here. */
+async function openLink(c: Ctx, kind: 'order' | 'po'): Promise<{ orgId: string; entityId: string; orgName: string; address: string | null }> {
+  publicHeaders(c);
+  const token = c.req.param('token') ?? '';
+  const none = new AppError(404, 'not_found', 'This link is not valid any more. Ask the sender for a new one.');
+  if (!/^[A-Za-z0-9_-]{40,60}$/.test(token)) throw none;
+  const row = await c.env.DB.prepare(
+    `SELECT l.org_id AS orgId, l.entity_id AS entityId, o.name AS orgName, o.settings FROM share_links l JOIN organizations o ON o.id = l.org_id
+      WHERE l.token_hash = ? AND l.kind = ? AND l.revoked_at IS NULL AND l.expires_at > ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL`,
+  ).bind(await sha256Hex(token), kind, nowIso()).first<{ orgId: string; entityId: string; orgName: string; settings: string | null }>();
+  if (!row) throw none;
+  let s: { legalName?: string | null; address?: string | null } = {};
+  try { s = JSON.parse(row.settings ?? '{}'); } catch { /* none */ }
+  return { orgId: row.orgId, entityId: row.entityId, orgName: s.legalName || row.orgName, address: s.address ?? null };
+}
+const orgStub = (env: Bindings, orgId: string) => env.INVENTORY.get(env.INVENTORY.idFromName(orgId));
+
+route('post', '/orgs/:orgId/orders/:id/share', 'orders:write', async (c) => {
+  const id = c.req.param('id') ?? '';
+  unwrap(await inventory(c).orderDocument(id));
+  return c.json(await makeLink(c, 'order', id), 201);
+});
+route('delete', '/orgs/:orgId/orders/:id/share', 'orders:write', async (c) => c.json({ revoked: await revokeLinks(c, 'order', c.req.param('id') ?? '') }));
+
+route('post', '/orgs/:orgId/purchase-orders/:id/share', 'purchasing:write', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const { order } = unwrap(await inventory(c).getPurchaseOrder(id));
+  if (order.state !== 'sent' && order.state !== 'partially_received') throw new AppError(409, 'po_state', 'Send the purchase order first. A supplier link is for orders that are out.');
+  return c.json(await makeLink(c, 'po', id), 201);
+});
+route('delete', '/orgs/:orgId/purchase-orders/:id/share', 'purchasing:write', async (c) => c.json({ revoked: await revokeLinks(c, 'po', c.req.param('id') ?? '') }));
+
+route('get', '/s/o/:token', 'public', async (c) => {
+  const l = await openLink(c, 'order');
+  const { order } = unwrap(await orgStub(c.env, l.orgId).publicOrder(l.entityId));
+  const s = await c.env.DB.prepare(`SELECT currency FROM organizations WHERE id = ?`).bind(l.orgId).first<{ currency: string }>();
+  return c.json({ business: { name: l.orgName, address: l.address }, currency: s?.currency ?? 'USD', order });
+});
+
+route('get', '/s/po/:token', 'public', async (c) => {
+  const l = await openLink(c, 'po');
+  const { po } = unwrap(await orgStub(c.env, l.orgId).publicPo(l.entityId));
+  const s = await c.env.DB.prepare(`SELECT currency FROM organizations WHERE id = ?`).bind(l.orgId).first<{ currency: string }>();
+  return c.json({ business: { name: l.orgName, address: l.address }, currency: s?.currency ?? 'USD', po });
+});
+
+for (const [path, act] of [['confirm', 'confirm'], ['dispatched', 'dispatch']] as const) {
+  route('post', `/s/po/:token/${path}`, 'public', async (c) => {
+    const l = await openLink(c, 'po');
+    const { data } = await readJson(c, z.object({ note: z.string().trim().max(300).optional() }).strict());
+    unwrap(await orgStub(c.env, l.orgId).supplierAct(c.get('requestId'), l.entityId, act, data.note || null));
+    // Tell the buyers now, without waiting for the next write in the business.
+    c.executionCtx.waitUntil(flushEvents(c.env, l.orgId).then(() => undefined, () => undefined));
+    return c.json({ ok: true });
+  });
+}
 
 /** One click from an email. The link is signed, so it can only switch off the one kind it was made for. */
 route('get', '/email/unsubscribe', 'public', async (c) => {

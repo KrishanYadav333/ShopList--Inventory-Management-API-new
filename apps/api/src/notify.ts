@@ -3,7 +3,7 @@ import type { Bindings } from './env';
 import { sendMail, unsubscribeUrl, wantsEmail, type MailEnv } from './email';
 import { newId, nowIso } from './util';
 
-export const NOTIFICATION_KINDS = ['stock.low', 'stock.out', 'order.created', 'approval.requested', 'approval.decided', 'count.assigned', 'security.not_me', 'support.granted'] as const;
+export const NOTIFICATION_KINDS = ['stock.low', 'stock.out', 'order.created', 'approval.requested', 'approval.decided', 'count.assigned', 'security.not_me', 'support.granted', 'po.supplier'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 export const KIND_LABELS: Record<NotificationKind, string> = {
@@ -15,6 +15,7 @@ export const KIND_LABELS: Record<NotificationKind, string> = {
   'count.assigned': 'A stock count is assigned to me',
   'security.not_me': 'A team member reports a sign-in that was not theirs',
   'support.granted': 'A business opened a support window for me',
+  'po.supplier': 'A supplier answers a purchase order',
 };
 
 /** Which roles hear about which event by default. */
@@ -23,6 +24,7 @@ const AUDIENCE: Partial<Record<NotificationKind, Role[]>> = {
   'stock.out': ['admin', 'manager', 'stock'],
   'order.created': ['admin', 'manager', 'sales'],
   'approval.requested': ['admin', 'manager'],
+  'po.supplier': ['admin', 'manager'],
 };
 
 export interface Note { kind: NotificationKind; title: string; link?: string }
@@ -95,6 +97,7 @@ export async function notifyForEvent(env: MailEnv, orgId: string, type: string, 
     kind === 'stock.low' ? { kind, title: `Low stock: ${data.name} (${data.onHand} left)`, link: `${base}/products?q=${encodeURIComponent(String(data.sku))}` }
     : kind === 'stock.out' ? { kind, title: `Out of stock: ${data.name}`, link: `${base}/products?q=${encodeURIComponent(String(data.sku))}` }
     : kind === 'approval.requested' ? { kind, title: `Needs approval: ${data.summary}`, link: `${base}/approvals` }
+    : kind === 'po.supplier' ? { kind, title: `${data.supplier} ${data.action === 'confirm' ? 'confirmed' : 'dispatched'} ${data.number}${data.note ? `: ${data.note}` : ''}`, link: `${base}/purchasing` }
     : kind === 'order.created' ? { kind, title: `New order ${data.number} from ${data.customerName}`, link: `${base}/orders` }
     : null;
   if (!note) return;

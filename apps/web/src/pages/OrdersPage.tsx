@@ -46,6 +46,10 @@ export function OrdersPage() {
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.data) ?? [], [query.data]);
   const refresh = () => qc.invalidateQueries({ queryKey: ['org', org.id] });
   const fail = (e: ApiError) => toast({ kind: 'error', text: e.message });
+  /** Makes a private status link and copies it. The link shows items and totals only, never cost or contact details. */
+  const shareOrder = (o: Order) => api<{ link: string }>('POST', `/orgs/${org.id}/orders/${o.id}/share`, { body: {} })
+    .then((r) => navigator.clipboard.writeText(r.link).then(() => toast({ kind: 'success', text: `Link for ${o.number} copied. It works for 90 days.` })).catch(() => window.prompt('Copy this link', r.link)))
+    .catch((e) => fail(e as ApiError));
 
   const act = useMutation({
     mutationFn: (v: { o: Order; what: 'ship' | 'cancel' | 'paid'; paid?: boolean; done: string }) =>
@@ -135,6 +139,7 @@ export function OrdersPage() {
                       <td className="country-col">{o.country ?? ''}</td>
                       <td className="actions-col row-actions">
                         {canDo(org.role, 'customers:read') && <button className="icon-btn" title="Print invoice" aria-label={`Print invoice for ${o.number}`} onClick={() => nav(`/o/${org.id}/orders/${o.id}/print${o.paid ? '?type=receipt' : ''}`)}><Icon name="printer" /></button>}
+                        {write && o.state !== 'cancelled' && <button className="btn btn-ghost cell-btn" title="Make a link the customer can open to see this order" onClick={() => shareOrder(o)}>Share status</button>}
                         {write && o.state === 'payment_required' && <button className="btn btn-outline cell-btn" onClick={() => act.mutate({ o, what: 'paid', paid: true, done: `${o.number} marked paid` })}>Mark paid</button>}
                         {write && o.state === 'ready_to_ship' && <button className="btn btn-primary cell-btn" onClick={() => act.mutate({ o, what: 'ship', done: `${o.number} shipped` })}>Ship</button>}
                         {write && open && <button className="icon-btn" title="Cancel order" aria-label={`Cancel ${o.number}`} onClick={() => { if (confirm(`Cancel ${o.number}? Its held stock is released.`)) act.mutate({ o, what: 'cancel', done: `${o.number} cancelled` }); }}><Icon name="x" size={16} /></button>}

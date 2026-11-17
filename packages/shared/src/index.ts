@@ -506,6 +506,8 @@ export interface PurchaseOrder {
   id: string; number: string; supplierId: string; supplierName: string; locationId: string; state: PoState;
   expectedAt: string | null; note: string | null; createdBy: string; createdAt: string; updatedAt: string; version: number;
   lines: PurchaseOrderLine[]; totalCostMinor: number;
+  /** What the supplier did through their link (F25). */
+  supplierConfirmedAt?: string | null; supplierDispatchedAt?: string | null; supplierNote?: string | null;
 }
 
 // ---------------------------------------------------------------- count tasks

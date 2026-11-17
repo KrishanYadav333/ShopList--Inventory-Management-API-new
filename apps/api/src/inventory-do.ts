@@ -313,6 +313,12 @@ const MIGRATIONS: string[][] = [
     `UPDATE orders SET subtotal_minor = COALESCE((SELECT SUM(l.quantity * l.unit_price_minor) FROM order_lines l WHERE l.order_id = orders.id), 0)`,
     `UPDATE orders SET total_minor = subtotal_minor`,
   ],
+  // Step 10: what a supplier tells us through their purchase-order link.
+  [
+    `ALTER TABLE purchase_orders ADD COLUMN supplier_confirmed_at TEXT`,
+    `ALTER TABLE purchase_orders ADD COLUMN supplier_dispatched_at TEXT`,
+    `ALTER TABLE purchase_orders ADD COLUMN supplier_note TEXT`,
+  ],
 ];
 
 // ---------------------------------------------------------------------------
@@ -1514,6 +1520,7 @@ export class InventoryDO extends DurableObject<Bindings> {
         id: r.id as string, number: r.number as string, supplierId: r.supplier_id as string, supplierName: r.supplier_name as string, locationId: r.location_id as string, state: r.state as PoState,
         expectedAt: (r.expected_at as string) ?? null, note: (r.note as string) ?? null, createdBy: r.created_by as string, createdAt: r.created_at as string, updatedAt: r.updated_at as string, version: r.version as number,
         lines: ls, totalCostMinor: ls.reduce((a, l) => a + l.quantity * l.unitCostMinor, 0),
+        supplierConfirmedAt: (r.supplier_confirmed_at as string) ?? null, supplierDispatchedAt: (r.supplier_dispatched_at as string) ?? null, supplierNote: (r.supplier_note as string) ?? null,
       };
     });
   }
@@ -1525,6 +1532,36 @@ export class InventoryDO extends DurableObject<Bindings> {
 
   getPurchaseOrder(id: string): Result<{ order: PurchaseOrder }> {
     try { return ok({ order: this.poViews([this.poRow(id)])[0] }); } catch (e) { if (e instanceof Fail) return { ok: false, status: e.status, code: e.code, detail: e.detail }; throw e; }
+  }
+
+  /** Exactly what a supplier may see of a purchase order: no internal ids, no staff, no other orders. */
+  publicPo(id: string): Result<{ po: { number: string; state: PoState; expectedAt: string | null; note: string | null; supplierName: string; createdAt: string; confirmedAt: string | null; dispatchedAt: string | null; supplierNote: string | null; lines: { sku: string; name: string; quantity: number; received: number; unitCostMinor: number }[]; totalMinor: number } }> {
+    const r = this.getPurchaseOrder(id);
+    if (!r.ok) return r;
+    const o = r.value.order;
+    return ok({ po: { number: o.number, state: o.state, expectedAt: o.expectedAt, note: o.note, supplierName: o.supplierName, createdAt: o.createdAt, confirmedAt: o.supplierConfirmedAt ?? null, dispatchedAt: o.supplierDispatchedAt ?? null, supplierNote: o.supplierNote ?? null, lines: o.lines.map((l) => ({ sku: l.sku, name: l.name, quantity: l.quantity, received: l.received, unitCostMinor: l.unitCostMinor })), totalMinor: o.totalCostMinor } });
+  }
+
+  /** The supplier clicks Confirm or Mark dispatched. Only an open purchase order can be answered, and repeating a click changes nothing. */
+  supplierAct(requestId: string, id: string, act: 'confirm' | 'dispatch', note: string | null): Result<Out<{ ok: true }>> {
+    return this.tx(undefined, { actor: 'supplier', requestId }, () => {
+      const po = this.poRow(id);
+      if (po.state !== 'sent' && po.state !== 'partially_received') throw new Fail(409, 'po_closed', 'This purchase order is no longer open. Please contact the buyer.');
+      const col = act === 'confirm' ? 'supplier_confirmed_at' : 'supplier_dispatched_at';
+      if (po[col]) return { status: 200, body: { ok: true as const } };
+      this.run(`UPDATE purchase_orders SET ${col} = ?, supplier_note = COALESCE(?, supplier_note), version = version + 1, updated_at = ? WHERE id = ?`, nowIso(), note, nowIso(), id);
+      this.audit({ actor: 'supplier', requestId }, act === 'confirm' ? 'po.supplier_confirm' : 'po.supplier_dispatch', 'purchase_order', id, { number: po.number });
+      this.emit('po.supplier', { number: po.number, supplier: po.supplier_name, action: act, note });
+      return { status: 200, body: { ok: true as const } };
+    });
+  }
+
+  /** What a customer may see of an order: no cost, no staff, no internal note, no contact details. */
+  publicOrder(id: string): Result<{ order: { number: string; state: OrderState; paid: boolean; createdAt: string; shippedAt: string | null; taxMode: string; subtotalMinor: number; taxMinor: number; totalMinor: number; lines: { name: string; quantity: number; unitPriceMinor: number; lineMinor: number }[] } }> {
+    const d = this.orderDocument(id);
+    if (!d.ok) return d;
+    const { order, lines } = d.value;
+    return ok({ order: { number: order.number, state: order.state, paid: order.paid, createdAt: order.createdAt, shippedAt: order.shippedAt, taxMode: order.taxMode, subtotalMinor: order.subtotalMinor, taxMinor: order.taxMinor, totalMinor: order.totalMinor, lines: lines.map((l) => ({ name: l.name, quantity: l.quantity, unitPriceMinor: l.unitPriceMinor, lineMinor: l.lineMinor })) } });
   }
 
   /** Units ordered and not yet received, per product, across open purchase orders. */
