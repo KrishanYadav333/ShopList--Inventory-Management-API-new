@@ -220,12 +220,30 @@ export const webhookInput = z
   })
   .strict();
 
-export const API_KEY_SCOPES = ['inventory:read', 'inventory:write'] as const;
+export const API_KEY_SCOPES = ['inventory:read', 'inventory:write', 'products:write', 'stock:write', 'orders:write', 'reports:read', 'cost:read'] as const;
+export const API_KEY_SCOPE_LABELS: Record<(typeof API_KEY_SCOPES)[number], string> = {
+  'inventory:read': 'Read products, stock and orders',
+  'inventory:write': 'Write everything (products, stock and orders, with costs). The old all-in-one scope',
+  'products:write': 'Create and edit products',
+  'stock:write': 'Move stock',
+  'orders:write': 'Create and ship orders',
+  'reports:read': 'Read reports',
+  'cost:read': 'See cost prices',
+};
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
+/** What a key may do. Every key can read inventory; the old `inventory:write` means products, stock, orders and costs. Never team, settings or the log. */
+export function keyPermissions(scopes: readonly string[]): Permission[] {
+  const out = new Set<Permission>(['inventory:read']);
+  for (const sc of scopes) {
+    if (sc === 'inventory:write') ['products:write', 'stock:write', 'orders:write', 'cost:read'].forEach((p) => out.add(p as Permission));
+    else if (['products:write', 'stock:write', 'orders:write', 'reports:read', 'cost:read'].includes(sc)) out.add(sc as Permission);
+  }
+  return [...out];
+}
 export const apiKeyInput = z
   .object({
     name: text(60),
-    scopes: z.array(z.enum(API_KEY_SCOPES)).min(1, 'Choose at least one permission').max(2),
+    scopes: z.array(z.enum(API_KEY_SCOPES)).min(1, 'Choose at least one permission').max(API_KEY_SCOPES.length),
     expiresInDays: z.number().int().min(1).max(365).nullish(),
   })
   .strict();

@@ -4,6 +4,7 @@ import { z, type ZodType } from 'zod';
 import {
   SESSION_ONLY,
   can,
+  keyPermissions,
   countInput,
   apiKeyInput,
   importRequest,
@@ -73,7 +74,7 @@ import { base64url, decodeCursor, encodeCursor, newId, nowIso, randomToken, sha2
 
 export { InventoryDO } from './inventory-do';
 
-type Vars = { requestId: string; user: AuthUser; org: { id: string; role: Role; locationIds: string[] | null }; apiKey?: ApiKeyPrincipal };
+type Vars = { requestId: string; user: AuthUser; org: { id: string; role: Role; locationIds: string[] | null; perms?: readonly Permission[] }; apiKey?: ApiKeyPrincipal };
 type Ctx = Context<{ Bindings: Bindings; Variables: Vars }>;
 
 const MAX_BODY = 64 * 1024;
@@ -167,9 +168,12 @@ function ifMatch(c: Ctx): number {
 }
 
 const caller = (c: Ctx): Caller => ({ actor: c.get('user').id, requestId: c.get('requestId') });
+/** Sessions are judged by role; keys by their scopes. */
+const allowed = (org: { role: Role; perms?: readonly Permission[] }, permission: Permission) => (org.perms ? org.perms.includes(permission) : can(org.role, permission));
+
 /** People who cannot approve may hit a rule that needs a second pair of eyes: their action waits in the queue (202). */
 async function needsApproval(c: Ctx, kind: 'movement' | 'count' | 'cancel_order' | 'price_drop', payload: Record<string, unknown>) {
-  if (can(c.get('org').role, 'approvals:decide')) return null;
+  if (allowed(c.get('org'), 'approvals:decide')) return null;
   return inventory(c).checkApproval(caller(c), kind, payload);
 }
 
@@ -235,14 +239,14 @@ const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindin
     if (key.orgId !== orgId) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
     // Inventory only: never members, invitations, the activity log or organization settings.
     const area = new URL(c.req.url).pathname.split('/')[5] ?? '';
-    if (!['products', 'locations', 'stock', 'orders', 'dashboard'].includes(area)) throw new AppError(403, 'forbidden', 'API keys can only be used for inventory.');
+    if (!['products', 'locations', 'stock', 'orders', 'dashboard', 'reports'].includes(area)) throw new AppError(403, 'forbidden', 'API keys can only be used for inventory.');
     const live = await c.env.DB.prepare(`SELECT 1 AS x FROM organizations WHERE id = ? AND deleted_at IS NULL AND suspended_at IS NULL`).bind(orgId).first();
     if (!live) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
-    const granted: Role = key.scopes.includes('inventory:write') ? 'manager' : 'viewer';
-    if (SESSION_ONLY.includes(permission) || !can(granted, permission)) {
+    const perms = keyPermissions(key.scopes);
+    if (SESSION_ONLY.includes(permission) || !perms.includes(permission)) {
       throw new AppError(403, 'forbidden', 'This API key does not have permission to do that.');
     }
-    c.set('org', { id: orgId, role: granted, locationIds: null });
+    c.set('org', { id: orgId, role: 'viewer', locationIds: null, perms });
     return next();
   }
   const row = await c.env.DB.prepare(
@@ -290,7 +294,7 @@ function route(method: 'get' | 'post' | 'patch' | 'delete', path: string, access
     let res = await handler(c);
     const org = c.get('org');
     // Roles without cost:read never receive cost or inventory value, in any response from any route.
-    if (org && !can(org.role, 'cost:read') && res.headers.get('content-type')?.includes('json')) res = await withoutCost(res);
+    if (org && !allowed(org, 'cost:read') && res.headers.get('content-type')?.includes('json')) res = await withoutCost(res);
     // `x-no-drain` lets local tests inspect the raw outbox. It only works when DEV_AUTH is on, never in production.
     const hold = c.env.DEV_AUTH === 'true' && c.req.header('x-no-drain') === '1';
     if (method !== 'get' && res.status < 400 && org && !hold) c.executionCtx.waitUntil(flushEvents(c.env, org.id).then(() => undefined, () => undefined));

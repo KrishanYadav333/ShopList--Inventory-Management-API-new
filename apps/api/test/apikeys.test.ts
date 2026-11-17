@@ -169,3 +169,56 @@ describe('using a key', () => {
     expect((await call(org.cookie, 'GET', `${org.base}/products/${p.id}`)).body.product.onHand).toBe(7);
   });
 });
+
+describe('F18 narrow scopes', () => {
+  it('each scope opens exactly its routes, and read is always included', async () => {
+    const org = await newOrg();
+    const p = await product(org, { costMinor: 250 });
+    const loc = await defaultLocation(org);
+    const order = { customerName: 'Key Kim', lines: [{ productId: p.id, quantity: 1 }] };
+    const move = { productId: p.id, locationId: loc, delta: 5, reason: 'receive' };
+    const newProduct = { sku: 'KEY-1', name: 'Key', priceMinor: 100 };
+
+    const stockOnly = await makeKey(org, ['stock:write']);
+    expect((await viaKey(stockOnly.key, 'GET', `${org.base}/products`)).status).toBe(200);
+    expect((await viaKey(stockOnly.key, 'POST', `${org.base}/stock/movements`, move, idem())).status).toBe(201);
+    expect((await viaKey(stockOnly.key, 'POST', `${org.base}/orders`, order, idem())).status).toBe(403);
+    expect((await viaKey(stockOnly.key, 'POST', `${org.base}/products`, newProduct, idem())).status).toBe(403);
+
+    const ordersOnly = await makeKey(org, ['orders:write']);
+    expect((await viaKey(ordersOnly.key, 'POST', `${org.base}/orders`, order, idem())).status).toBe(201);
+    expect((await viaKey(ordersOnly.key, 'POST', `${org.base}/stock/movements`, move, idem())).status).toBe(403);
+
+    const productsOnly = await makeKey(org, ['products:write']);
+    expect((await viaKey(productsOnly.key, 'POST', `${org.base}/products`, newProduct, idem())).status).toBe(201);
+    expect((await viaKey(productsOnly.key, 'POST', `${org.base}/stock/movements`, move, idem())).status).toBe(403);
+  });
+
+  it('costs and reports are separate scopes; the old all-in-one scope keeps working', async () => {
+    const org = await newOrg();
+    await product(org, { costMinor: 250 });
+    const plain = await makeKey(org, ['inventory:read']);
+    expect(JSON.stringify((await viaKey(plain.key, 'GET', `${org.base}/products`)).body)).not.toContain('costMinor');
+    expect((await viaKey(plain.key, 'GET', `${org.base}/reports/valuation`)).status).toBe(403);
+
+    const costs = await makeKey(org, ['cost:read']);
+    expect(JSON.stringify((await viaKey(costs.key, 'GET', `${org.base}/products`)).body)).toContain('costMinor');
+
+    const reports = await makeKey(org, ['reports:read', 'cost:read']);
+    expect((await viaKey(reports.key, 'GET', `${org.base}/reports/valuation`)).status).toBe(200);
+    expect((await viaKey(reports.key, 'POST', `${org.base}/stock/movements`, { productId: 'x', locationId: 'y', delta: 1, reason: 'receive' }, idem())).status).toBe(403);
+
+    const legacy = await makeKey(org, ['inventory:read', 'inventory:write']);
+    expect((await viaKey(legacy.key, 'POST', `${org.base}/products`, { sku: 'LEG-1', name: 'Legacy', priceMinor: 1 }, idem())).status).toBe(201);
+    expect(JSON.stringify((await viaKey(legacy.key, 'GET', `${org.base}/products`)).body)).toContain('costMinor');
+  });
+
+  it('a key never reaches team, settings, approvals, the log or counts, whatever its scopes', async () => {
+    const org = await newOrg();
+    const all = await makeKey(org, ['inventory:write', 'reports:read', 'cost:read', 'orders:write', 'stock:write', 'products:write']);
+    for (const path of ['members', 'invitations', 'settings', 'audit', 'api-keys', 'webhooks', 'approvals', 'count-tasks', 'purchase-orders']) {
+      expect((await viaKey(all.key, 'GET', `${org.base}/${path}`)).status, path).toBe(403);
+    }
+    expect((await call(org.cookie, 'POST', `${org.base}/api-keys`, { name: 'bad', scopes: ['team:manage'] })).status).toBe(400);
+  });
+});

@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ROLES, ROLE_LABELS, ROLE_SUMMARY, SETTINGS_DEFAULTS, WEBHOOK_EVENTS, type OrgSettings, type Role } from '@shoplist/shared';
+import { API_KEY_SCOPE_LABELS, ROLES, ROLE_LABELS, ROLE_SUMMARY, SETTINGS_DEFAULTS, WEBHOOK_EVENTS, type OrgSettings, type Role } from '@shoplist/shared';
 import { api, ApiError } from '../api';
 import { useShell } from '../components/Shell';
 import { dateParts } from '../format';
@@ -117,11 +117,11 @@ export function SettingsPage() {
 
   interface ApiKeyRow { id: string; name: string; prefix: string; scopes: string[]; createdAt: string; lastUsedAt: string | null; expiresAt: string | null; revokedAt: string | null }
   const keys = useQuery({ enabled: admin, queryKey: ['org', org.id, 'api-keys'], queryFn: () => api<{ data: ApiKeyRow[] }>('GET', `/orgs/${org.id}/api-keys`).then((r) => r.data) });
-  const [keyForm, setKeyForm] = useState({ name: '', write: false, days: '' });
+  const [keyForm, setKeyForm] = useState<{ name: string; scopes: string[]; days: string }>({ name: '', scopes: [], days: '' });
   const [newKey, setNewKey] = useState('');
   const makeKey = useMutation({
-    mutationFn: () => api<{ key: string }>('POST', `/orgs/${org.id}/api-keys`, { body: { name: keyForm.name, scopes: keyForm.write ? ['inventory:read', 'inventory:write'] : ['inventory:read'], expiresInDays: keyForm.days ? Number(keyForm.days) : null } }),
-    onSuccess: (r) => { setNewKey(r.key); setKeyForm({ name: '', write: false, days: '' }); refresh(); },
+    mutationFn: () => api<{ key: string }>('POST', `/orgs/${org.id}/api-keys`, { body: { name: keyForm.name, scopes: ['inventory:read', ...keyForm.scopes], expiresInDays: keyForm.days ? Number(keyForm.days) : null } }),
+    onSuccess: (r) => { setNewKey(r.key); setKeyForm({ name: '', scopes: [], days: '' }); refresh(); },
     onError: fail,
   });
   const revokeKey = useMutation({ mutationFn: (id: string) => api('DELETE', `/orgs/${org.id}/api-keys/${id}`), onSuccess: () => { refresh(); toast({ text: 'API key revoked' }); }, onError: fail });
@@ -256,7 +256,7 @@ export function SettingsPage() {
               <ul className="list">
                 {keys.data.map((k) => (
                   <li key={k.id}>
-                    <span><strong>{k.name}</strong> <span className="tag">{k.prefix}…</span><span className="tag">{k.scopes.includes('inventory:write') ? 'read + write' : 'read only'}</span>{k.revokedAt && <span className="tag">revoked</span>}
+                    <span><strong>{k.name}</strong> <span className="tag">{k.prefix}…</span><span className="tag">{k.scopes.filter((x) => x !== 'inventory:read').length ? k.scopes.filter((x) => x !== 'inventory:read').map((x) => (x === 'inventory:write' ? 'write all' : x.replace(':write', '').replace(':read', ''))).join(', ') : 'read only'}</span>{k.revokedAt && <span className="tag">revoked</span>}
                       <div className="time">Last used: {k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString() : 'never'}{k.expiresAt ? ` · expires ${new Date(k.expiresAt).toLocaleDateString()}` : ''}</div></span>
                     {!k.revokedAt && <button className="btn btn-outline" onClick={() => { if (confirm(`Revoke ${k.name}? Anything using it stops working immediately.`)) revokeKey.mutate(k.id); }}>Revoke</button>}
                   </li>
@@ -266,7 +266,12 @@ export function SettingsPage() {
             <form className="inline-form" onSubmit={submit(() => makeKey.mutate())}>
               <div className="field"><label htmlFor="k-name">New key name</label><input id="k-name" placeholder="e.g. Shopify connector" value={keyForm.name} onChange={(e) => setKeyForm({ ...keyForm, name: e.target.value })} maxLength={60} /></div>
               <div className="field narrow"><label htmlFor="k-days">Expires in (days)</label><input id="k-days" inputMode="numeric" placeholder="never" value={keyForm.days} onChange={(e) => setKeyForm({ ...keyForm, days: e.target.value.replace(/\D/g, '') })} /></div>
-              <label className="check"><input type="checkbox" checked={keyForm.write} onChange={(e) => setKeyForm({ ...keyForm, write: e.target.checked })} /> Allow writing</label>
+              <fieldset className="modes" style={{ gridColumn: '1 / -1' }}>
+                <legend>What this key may do (it can always read products, stock and orders)</legend>
+                {(['products:write', 'stock:write', 'orders:write', 'reports:read', 'cost:read'] as const).map((sc) => (
+                  <label className="check" key={sc}><input type="checkbox" checked={keyForm.scopes.includes(sc)} onChange={(e) => setKeyForm({ ...keyForm, scopes: e.target.checked ? [...keyForm.scopes, sc] : keyForm.scopes.filter((x) => x !== sc) })} /> {API_KEY_SCOPE_LABELS[sc]}</label>
+                ))}
+              </fieldset>
               <button className="btn btn-primary" disabled={makeKey.isPending || !keyForm.name.trim()}>Create key</button>
             </form>
             {newKey && (
