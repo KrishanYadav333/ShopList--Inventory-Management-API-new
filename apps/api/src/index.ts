@@ -158,6 +158,12 @@ function ifMatch(c: Ctx): number {
 }
 
 const caller = (c: Ctx): Caller => ({ actor: c.get('user').id, requestId: c.get('requestId') });
+/** People who cannot approve may hit a rule that needs a second pair of eyes: their action waits in the queue (202). */
+async function needsApproval(c: Ctx, kind: 'movement' | 'count' | 'cancel_order' | 'price_drop', payload: Record<string, unknown>) {
+  if (can(c.get('org').role, 'approvals:decide')) return null;
+  return inventory(c).checkApproval(caller(c), kind, payload);
+}
+
 /** A member limited to some locations may only write at those. Reads are never limited. */
 function needLocation(c: Ctx, locationId: string | null | undefined): void {
   const allowed = c.get('org').locationIds;
@@ -583,7 +589,7 @@ route('patch', '/orgs/:orgId/settings', 'settings:manage', async (c) => {
   }
   const { currency, ...rest } = next;
   await c.env.DB.prepare(`UPDATE organizations SET settings = ?, currency = ? WHERE id = ?`).bind(JSON.stringify(rest), currency, c.get('org').id).run();
-  await inventory(c).setSettings({ orderPrefix: next.orderPrefix, defaultReorderPoint: next.defaultReorderPoint });
+  await inventory(c).setSettings({ orderPrefix: next.orderPrefix, defaultReorderPoint: next.defaultReorderPoint, approvals: next.approvals });
   return c.json({ settings: next });
 });
 
@@ -881,6 +887,8 @@ route('get', '/orgs/:orgId/products/:id', 'inventory:read', async (c) => {
 route('patch', '/orgs/:orgId/products/:id', 'products:write', async (c) => {
   const version = ifMatch(c);
   const { data } = await readJson(c, productPatch);
+  const waiting = await needsApproval(c, 'price_drop', { productId: c.req.param('id') ?? '', version, patch: data });
+  if (waiting) return c.json({ approval: waiting }, 202);
   const out = unwrap(await inventory(c).updateProduct(caller(c), undefined, c.req.param('id') ?? '', version, data));
   etag(c, out.body.product.version);
   return c.json(out.body, out.status as 200);
@@ -912,6 +920,8 @@ route('delete', '/orgs/:orgId/locations/:id', 'settings:manage', async (c) => {
 route('post', '/orgs/:orgId/stock/movements', 'stock:write', async (c) => {
   const { data, raw } = await readJson(c, movementInput);
   needLocation(c, data.locationId);
+  const waiting = await needsApproval(c, 'movement', data);
+  if (waiting) return c.json({ approval: waiting }, 202);
   const out = unwrap(await inventory(c).addMovement(caller(c), await idemFrom(c, raw), data));
   return c.json(out.body, out.status as 201);
 });
@@ -926,6 +936,8 @@ route('post', '/orgs/:orgId/stock/transfers', 'stock:write', async (c) => {
 route('post', '/orgs/:orgId/stock/counts', 'stock:write', async (c) => {
   const { data, raw } = await readJson(c, countInput);
   needLocation(c, data.locationId);
+  const waiting = await needsApproval(c, 'count', data);
+  if (waiting) return c.json({ approval: waiting }, 202);
   const out = unwrap(await inventory(c).count(caller(c), await idemFrom(c, raw), data));
   return c.json(out.body, out.status as 201);
 });
@@ -975,12 +987,37 @@ route('post', '/orgs/:orgId/orders/:id/ship', 'orders:write', async (c) => {
 
 route('post', '/orgs/:orgId/orders/:id/cancel', 'orders:write', async (c) => {
   await orderLocationGuard(c);
-  const out = unwrap(await inventory(c).cancelOrder(caller(c), c.req.param('id') ?? '', ifMatch(c)));
+  const version = ifMatch(c);
+  const waiting = await needsApproval(c, 'cancel_order', { orderId: c.req.param('id') ?? '', version });
+  if (waiting) return c.json({ approval: waiting }, 202);
+  const out = unwrap(await inventory(c).cancelOrder(caller(c), c.req.param('id') ?? '', version));
   etag(c, out.body.order.version);
   return c.json(out.body, out.status as 200);
 });
 
 route('get', '/orgs/:orgId/stock/movements', 'inventory:read', async (c) => c.json(await inventory(c).listMovements(parse(movementListQuery, c.req.query()))));
+
+// ----------------------------------------------------------------- approvals
+route('get', '/orgs/:orgId/approvals', 'inventory:read', async (c) => {
+  const q = z.object({ state: z.enum(['pending', 'approved', 'applied', 'rejected', 'withdrawn', 'expired', 'failed']).optional(), mine: z.enum(['1']).optional(), limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(c.req.query());
+  // Deciders see everything; everyone else sees only what they asked for.
+  const deciders = can(c.get('org').role, 'approvals:decide');
+  const data = await inventory(c).listApprovals({ state: q.state, requestedBy: !deciders || q.mine ? c.get('user').id : undefined, limit: q.limit });
+  const pending = deciders ? await inventory(c).pendingApprovalCount() : null;
+  return c.json({ data, pending });
+});
+
+route('post', '/orgs/:orgId/approvals/:aid/approve', 'approvals:decide', async (c) => {
+  const { data } = await readJson(c, z.object({ note: z.string().trim().max(500).optional() }).strict());
+  return c.json(unwrap(await inventory(c).decideApproval(caller(c), c.req.param('aid') ?? '', true, data.note ?? null)));
+});
+
+route('post', '/orgs/:orgId/approvals/:aid/reject', 'approvals:decide', async (c) => {
+  const { data } = await readJson(c, z.object({ note: z.string().trim().min(1).max(500) }).strict());
+  return c.json(unwrap(await inventory(c).decideApproval(caller(c), c.req.param('aid') ?? '', false, data.note)));
+});
+
+route('post', '/orgs/:orgId/approvals/:aid/withdraw', 'inventory:read', async (c) => c.json(unwrap(await inventory(c).withdrawApproval(caller(c), c.req.param('aid') ?? ''))));
 
 route('get', '/orgs/:orgId/audit', 'audit:read', async (c) => c.json(await inventory(c).listAudit(parse(pageQuery, c.req.query()))));
 

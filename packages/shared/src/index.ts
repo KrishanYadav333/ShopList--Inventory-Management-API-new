@@ -22,7 +22,7 @@ export const ROLE_SUMMARY: Record<Role, string> = {
   viewer: 'Read-only: products, stock, orders and history. No costs.',
 };
 
-export const PERMISSIONS = ['inventory:read', 'cost:read', 'products:write', 'stock:write', 'orders:write', 'team:manage', 'settings:manage', 'audit:read', 'org:delete'] as const;
+export const PERMISSIONS = ['inventory:read', 'cost:read', 'approvals:decide', 'products:write', 'stock:write', 'orders:write', 'team:manage', 'settings:manage', 'audit:read', 'org:delete'] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 /** Never available to an API key, whatever its scopes: these need a signed-in person. */
 export const SESSION_ONLY: readonly Permission[] = ['team:manage', 'settings:manage', 'audit:read', 'org:delete'];
@@ -32,7 +32,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   sales: ['inventory:read', 'orders:write'],
   stock: ['inventory:read', 'stock:write'],
   accountant: ['inventory:read', 'cost:read', 'audit:read'],
-  manager: ['inventory:read', 'cost:read', 'products:write', 'stock:write', 'orders:write'],
+  manager: ['inventory:read', 'cost:read', 'approvals:decide', 'products:write', 'stock:write', 'orders:write'],
   admin: PERMISSIONS,
 };
 export const can = (role: Role, permission: Permission): boolean => ROLE_PERMISSIONS[role].includes(permission);
@@ -356,6 +356,38 @@ export interface Dashboard {
 const isTimezone = (v: string) => { try { new Intl.DateTimeFormat('en', { timeZone: v }); return true; } catch { return false; } };
 const optText = (max: number) => z.string().trim().max(max).nullish();
 /** Everything a business can configure about itself. All optional on update; defaults live in `SETTINGS_DEFAULTS`. */
+export const approvalRules = z
+  .object({
+    largeAdjustment: z.object({ on: z.boolean(), units: z.number().int().min(1).max(LIMITS.maxOnHand), valueMinor: z.number().int().min(0).max(LIMITS.maxPriceMinor * 100) }).strict(),
+    damage: z.object({ on: z.boolean() }).strict(),
+    countVariance: z.object({ on: z.boolean(), units: z.number().int().min(1).max(LIMITS.maxOnHand) }).strict(),
+    cancelPaid: z.object({ on: z.boolean() }).strict(),
+    priceDrop: z.object({ on: z.boolean(), percent: z.number().int().min(1).max(100) }).strict(),
+  })
+  .strict();
+export type ApprovalRules = z.infer<typeof approvalRules>;
+export const APPROVAL_DEFAULTS: ApprovalRules = {
+  largeAdjustment: { on: false, units: 20, valueMinor: 50_000 },
+  damage: { on: false },
+  countVariance: { on: false, units: 20 },
+  cancelPaid: { on: false },
+  priceDrop: { on: false, percent: 30 },
+};
+export const APPROVAL_STATES = ['pending', 'approved', 'applied', 'rejected', 'withdrawn', 'expired', 'failed'] as const;
+export type ApprovalState = (typeof APPROVAL_STATES)[number];
+export interface ApprovalView {
+  id: string;
+  kind: 'movement' | 'count' | 'cancel_order' | 'price_drop';
+  summary: string;
+  requestedBy: string;
+  state: ApprovalState;
+  decidedBy: string | null;
+  note: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+  expiresAt: string;
+}
+
 export const orgSettings = z
   .object({
     legalName: optText(120),
@@ -371,6 +403,7 @@ export const orgSettings = z
     poPrefix: z.string().trim().max(8).regex(/^[A-Za-z0-9#_-]*$/, 'Letters, numbers, # _ - only'),
     invoicePrefix: z.string().trim().max(8).regex(/^[A-Za-z0-9#_-]*$/, 'Letters, numbers, # _ - only'),
     defaultReorderPoint: z.number().int().min(0).max(LIMITS.maxOnHand).nullable(),
+    approvals: approvalRules,
   })
   .strict();
 export type OrgSettings = z.infer<typeof orgSettings>;
@@ -378,5 +411,5 @@ export const orgSettingsPatch = orgSettings.partial();
 export const SETTINGS_DEFAULTS: OrgSettings = {
   legalName: null, address: null, phone: null, email: null, taxId: null,
   currency: 'USD', taxMode: 'none', taxRateBp: 0, timezone: 'UTC',
-  orderPrefix: 'ORD-', poPrefix: 'PO-', invoicePrefix: 'INV-', defaultReorderPoint: null,
+  orderPrefix: 'ORD-', poPrefix: 'PO-', invoicePrefix: 'INV-', defaultReorderPoint: null, approvals: APPROVAL_DEFAULTS,
 };

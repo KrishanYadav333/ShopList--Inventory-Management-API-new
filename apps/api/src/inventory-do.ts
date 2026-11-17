@@ -24,6 +24,7 @@ import {
   type StockLevel,
   type TransferInput,
 } from '@shoplist/shared';
+import { APPROVAL_DEFAULTS, type ApprovalRules, type ApprovalView } from '@shoplist/shared';
 import type { Bindings } from './env';
 import { ok, type Problem, type Result } from './errors';
 import { decodeCursor, encodeCursor, newId, nowIso } from './util';
@@ -176,6 +177,24 @@ const MIGRATIONS: string[][] = [
        data TEXT NOT NULL,
        created_at TEXT NOT NULL
      )`,
+  ],
+  // Step 5: approval requests. A risky action waits here, as the exact validated input, until someone with
+  // approvals:decide approves it (applied through the normal code path) or rejects it.
+  [
+    `CREATE TABLE approval_requests (
+       id TEXT PRIMARY KEY,
+       kind TEXT NOT NULL,
+       payload TEXT NOT NULL,
+       summary TEXT NOT NULL,
+       requested_by TEXT NOT NULL,
+       state TEXT NOT NULL CHECK (state IN ('pending','approved','applied','rejected','withdrawn','expired','failed')),
+       decided_by TEXT,
+       note TEXT,
+       created_at TEXT NOT NULL,
+       decided_at TEXT,
+       expires_at TEXT NOT NULL
+     )`,
+    `CREATE INDEX approvals_state ON approval_requests(state, created_at DESC)`,
   ],
 ];
 
@@ -784,7 +803,7 @@ export class InventoryDO extends DurableObject<Bindings> {
     this.run(`INSERT INTO meta(key, value) VALUES ('settings', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, JSON.stringify(settings));
   }
 
-  private settings(): { orderPrefix?: string; defaultReorderPoint?: number | null } {
+  private settings(): { orderPrefix?: string; defaultReorderPoint?: number | null; approvals?: ApprovalRules } {
     try { return JSON.parse(this.one<{ value: string }>(`SELECT value FROM meta WHERE key = 'settings'`)?.value ?? '{}'); } catch { return {}; }
   }
 
@@ -1127,6 +1146,128 @@ export class InventoryDO extends DurableObject<Bindings> {
       this.emit('order.cancelled', { orderId: id, number: row.number, customerName: row.customer_name });
       return { status: 200, body: { order: this.orderViews([this.orderRow(id)])[0] } };
     });
+  }
+
+  // ---------------------------------------------------------- approvals
+  private rules(): ApprovalRules {
+    const saved = this.settings().approvals;
+    return saved ? { ...APPROVAL_DEFAULTS, ...saved } : APPROVAL_DEFAULTS;
+  }
+
+  private approvalView(r: Row): ApprovalView {
+    return {
+      id: r.id as string, kind: r.kind as ApprovalView['kind'], summary: r.summary as string, requestedBy: r.requested_by as string,
+      state: r.state as ApprovalView['state'], decidedBy: (r.decided_by as string) ?? null, note: (r.note as string) ?? null,
+      createdAt: r.created_at as string, decidedAt: (r.decided_at as string) ?? null, expiresAt: r.expires_at as string,
+    };
+  }
+
+  private expireOld(): void {
+    this.run(`UPDATE approval_requests SET state = 'expired' WHERE state = 'pending' AND expires_at < ?`, nowIso());
+  }
+
+  /**
+   * Called for people who cannot approve. If a rule says this action needs a second pair of eyes, the exact input is
+   * stored and returned as a pending request; otherwise null and the caller goes ahead. Asking twice for the same
+   * thing returns the request that is already waiting.
+   */
+  checkApproval(c: Caller, kind: ApprovalView['kind'], payload: Record<string, unknown>): ApprovalView | null {
+    const rules = this.rules();
+    let summary: string | null = null;
+    if (kind === 'movement') {
+      const m = payload as unknown as MovementInput;
+      const p = this.liveProduct(m.productId);
+      const units = Math.abs(m.delta);
+      if (rules.damage.on && m.reason === 'damage') summary = `Write off ${units} × ${p.name} as damaged`;
+      else if (rules.largeAdjustment.on && m.delta < 0 && (m.reason === 'adjust' || m.reason === 'damage') &&
+        (units > rules.largeAdjustment.units || (p.cost_minor !== null && units * p.cost_minor > rules.largeAdjustment.valueMinor))) summary = `Reduce ${p.name} by ${units} (${m.reason})`;
+    } else if (kind === 'count') {
+      const m = payload as unknown as CountInput;
+      const p = this.liveProduct(m.productId);
+      const have = this.one<{ on_hand: number }>(`SELECT on_hand FROM stock_levels WHERE product_id = ? AND location_id = ?`, m.productId, m.locationId)?.on_hand ?? 0;
+      const diff = m.counted - have;
+      if (rules.countVariance.on && Math.abs(diff) > rules.countVariance.units) summary = `Count of ${p.name}: ${m.counted} on the shelf, system says ${have} (${diff > 0 ? '+' : ''}${diff})`;
+    } else if (kind === 'cancel_order') {
+      const o = this.orderRow(String(payload.orderId));
+      if (rules.cancelPaid.on && o.paid === 1) summary = `Cancel paid order ${o.number} for ${o.customer_name}`;
+    } else if (kind === 'price_drop') {
+      const p = this.liveProduct(String(payload.productId));
+      const next = (payload.patch as { priceMinor?: number }).priceMinor;
+      if (rules.priceDrop.on && typeof next === 'number' && p.price_minor > 0 && ((p.price_minor - next) * 100) / p.price_minor > rules.priceDrop.percent) {
+        summary = `Lower the price of ${p.name} from ${(p.price_minor / 100).toFixed(2)} to ${(next / 100).toFixed(2)}`;
+      }
+    }
+    if (!summary) return null;
+    const json = JSON.stringify(payload);
+    const same = this.one<Row>(`SELECT * FROM approval_requests WHERE state = 'pending' AND requested_by = ? AND kind = ? AND payload = ?`, c.actor, kind, json);
+    if (same) return this.approvalView(same);
+    const id = newId('apr');
+    const now = nowIso();
+    this.run(`INSERT INTO approval_requests(id, kind, payload, summary, requested_by, state, created_at, expires_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`, id, kind, json, summary, c.actor, now, new Date(Date.now() + 7 * 86400_000).toISOString());
+    this.audit(c, 'approval.request', 'approval', id, { kind, summary });
+    this.emit('approval.requested', { approvalId: id, summary, requestedBy: c.actor });
+    return this.approvalView(this.one<Row>(`SELECT * FROM approval_requests WHERE id = ?`, id)!);
+  }
+
+  listApprovals(q: { state?: string; requestedBy?: string; limit: number }): ApprovalView[] {
+    this.expireOld();
+    const where: string[] = [];
+    const args: SqlStorageValue[] = [];
+    if (q.state) { where.push('state = ?'); args.push(q.state); }
+    if (q.requestedBy) { where.push('requested_by = ?'); args.push(q.requestedBy); }
+    return this.all<Row>(`SELECT * FROM approval_requests ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC LIMIT ?`, ...args, q.limit).map((r) => this.approvalView(r));
+  }
+
+  pendingApprovalCount(): number {
+    this.expireOld();
+    return this.one<{ n: number }>(`SELECT COUNT(*) AS n FROM approval_requests WHERE state = 'pending'`)?.n ?? 0;
+  }
+
+  /** Approve applies the stored input through the normal code path, checked against today's data. Reject needs a note. */
+  decideApproval(c: Caller, id: string, approve: boolean, note: string | null): Result<{ approval: ApprovalView }> {
+    this.expireOld();
+    const r = this.one<Row>(`SELECT * FROM approval_requests WHERE id = ?`, id);
+    const fail = (status: number, code: string, detail: string): Result<{ approval: ApprovalView }> => ({ ok: false, status, code, detail });
+    if (!r) return fail(404, 'approval_not_found', 'That request does not exist.');
+    if (r.state !== 'pending') return fail(409, 'approval_closed', `That request is already ${r.state}.`);
+    if (r.requested_by === c.actor) return fail(403, 'self_approval', 'You cannot approve your own request.');
+    const now = nowIso();
+    if (!approve) {
+      if (!note) return fail(400, 'note_required', 'Say why you are rejecting it.');
+      this.run(`UPDATE approval_requests SET state = 'rejected', decided_by = ?, note = ?, decided_at = ? WHERE id = ?`, c.actor, note, now, id);
+      this.audit(c, 'approval.reject', 'approval', id, { summary: r.summary, requestedBy: r.requested_by, note });
+      this.emit('approval.decided', { approvalId: id, summary: r.summary, requestedBy: r.requested_by, approved: false, note });
+      return ok({ approval: this.approvalView(this.one<Row>(`SELECT * FROM approval_requests WHERE id = ?`, id)!) });
+    }
+    // The change is made as the person who asked, so the ledger shows them; the approval is recorded as the approver.
+    const asRequester: Caller = { actor: r.requested_by as string, requestId: c.requestId };
+    const idem: Idem = { key: `approval:${id}`, hash: id };
+    const payload = JSON.parse(r.payload as string) as Record<string, any>;
+    let result: Result<unknown>;
+    switch (r.kind) {
+      case 'movement': result = this.addMovement(asRequester, idem, payload as MovementInput); break;
+      case 'count': result = this.count(asRequester, idem, payload as CountInput); break;
+      case 'cancel_order': result = this.cancelOrder(asRequester, String(payload.orderId), Number(payload.version)); break;
+      case 'price_drop': result = this.updateProduct(asRequester, idem, String(payload.productId), Number(payload.version), payload.patch as ProductPatch); break;
+      default: result = { ok: false, status: 400, code: 'unknown_kind', detail: 'Unknown request type.' };
+    }
+    if (!result.ok) {
+      this.run(`UPDATE approval_requests SET state = 'failed', decided_by = ?, note = ?, decided_at = ? WHERE id = ?`, c.actor, result.detail, now, id);
+      this.emit('approval.decided', { approvalId: id, summary: r.summary, requestedBy: r.requested_by, approved: false, note: `Could not be applied: ${result.detail}` });
+      return ok({ approval: this.approvalView(this.one<Row>(`SELECT * FROM approval_requests WHERE id = ?`, id)!) });
+    }
+    this.run(`UPDATE approval_requests SET state = 'applied', decided_by = ?, note = ?, decided_at = ? WHERE id = ?`, c.actor, note, now, id);
+    this.audit(c, 'approval.approve', 'approval', id, { summary: r.summary, requestedBy: r.requested_by, note });
+    this.emit('approval.decided', { approvalId: id, summary: r.summary, requestedBy: r.requested_by, approved: true, note });
+    return ok({ approval: this.approvalView(this.one<Row>(`SELECT * FROM approval_requests WHERE id = ?`, id)!) });
+  }
+
+  withdrawApproval(c: Caller, id: string): Result<{ approval: ApprovalView }> {
+    const r = this.one<Row>(`SELECT * FROM approval_requests WHERE id = ?`, id);
+    if (!r || r.requested_by !== c.actor) return { ok: false, status: 404, code: 'approval_not_found', detail: 'That request does not exist.' };
+    if (r.state !== 'pending') return { ok: false, status: 409, code: 'approval_closed', detail: `That request is already ${r.state}.` };
+    this.run(`UPDATE approval_requests SET state = 'withdrawn', decided_at = ? WHERE id = ?`, nowIso(), id);
+    return ok({ approval: this.approvalView(this.one<Row>(`SELECT * FROM approval_requests WHERE id = ?`, id)!) });
   }
 
   // ---------------------------------------------------------- integrity
