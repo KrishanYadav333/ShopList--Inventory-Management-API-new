@@ -18,6 +18,10 @@ import {
   orgInput,
   orgSettingsPatch,
   reportQuery,
+  supplierInput,
+  purchaseOrderInput,
+  purchaseOrderPatch,
+  receiveInput,
   REPORTS,
   type ReportResult,
   SETTINGS_DEFAULTS,
@@ -259,7 +263,7 @@ export const ROUTES: { method: string; path: string; access: Access }[] = [];
 const api = new Hono<{ Bindings: Bindings; Variables: Vars }>();
 api.use('*', rateLimit, originCheck);
 
-const COST_FIELDS = new Set(['costMinor', 'inventoryValueMinor']);
+const COST_FIELDS = new Set(['costMinor', 'inventoryValueMinor', 'unitCostMinor', 'totalMinor']);
 const stripCost = (v: unknown): unknown => {
   if (Array.isArray(v)) return v.map(stripCost);
   if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).filter(([k]) => !COST_FIELDS.has(k)).map(([k, x]) => [k, stripCost(x)]));
@@ -592,7 +596,7 @@ route('patch', '/orgs/:orgId/settings', 'settings:manage', async (c) => {
   }
   const { currency, ...rest } = next;
   await c.env.DB.prepare(`UPDATE organizations SET settings = ?, currency = ? WHERE id = ?`).bind(JSON.stringify(rest), currency, c.get('org').id).run();
-  await inventory(c).setSettings({ orderPrefix: next.orderPrefix, defaultReorderPoint: next.defaultReorderPoint, approvals: next.approvals, timezone: next.timezone });
+  await inventory(c).setSettings({ orderPrefix: next.orderPrefix, defaultReorderPoint: next.defaultReorderPoint, approvals: next.approvals, timezone: next.timezone, poPrefix: next.poPrefix });
   return c.json({ settings: next });
 });
 
@@ -1041,6 +1045,65 @@ route('get', '/orgs/:orgId/reports/:name', 'reports:read', async (c) => {
     return new Response(toCsv(result), { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${name.data}-${result.from}-${result.to}.csv"` } });
   }
   return c.json(result);
+});
+
+// -------------------------------------------------------------- purchasing
+route('get', '/orgs/:orgId/suppliers', 'inventory:read', async (c) => c.json({ data: await inventory(c).listSuppliers() }));
+
+route('post', '/orgs/:orgId/suppliers', 'purchasing:write', async (c) => {
+  const { data } = await readJson(c, supplierInput);
+  const out = unwrap(await inventory(c).createSupplier(caller(c), data));
+  return c.json(out.body, out.status as 201);
+});
+
+route('patch', '/orgs/:orgId/suppliers/:id', 'purchasing:write', async (c) => {
+  const { data } = await readJson(c, supplierInput.partial().extend({ archived: z.boolean().optional() }).strict());
+  const out = unwrap(await inventory(c).updateSupplier(caller(c), c.req.param('id') ?? '', data));
+  return c.json(out.body, out.status as 200);
+});
+
+route('get', '/orgs/:orgId/purchase-orders', 'inventory:read', async (c) => {
+  const q = z.object({ state: z.enum(['draft', 'sent', 'partially_received', 'received', 'cancelled', 'closed']).optional(), limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(c.req.query());
+  return c.json({ data: await inventory(c).listPurchaseOrders(q), onOrder: await inventory(c).onOrder() });
+});
+
+route('post', '/orgs/:orgId/purchase-orders', 'purchasing:write', async (c) => {
+  const { data } = await readJson(c, purchaseOrderInput);
+  const out = unwrap(await inventory(c).createPurchaseOrder(caller(c), data));
+  etag(c, out.body.order.version);
+  return c.json(out.body, out.status as 201);
+});
+
+route('get', '/orgs/:orgId/purchase-orders/:id', 'inventory:read', async (c) => {
+  const r = unwrap(await inventory(c).getPurchaseOrder(c.req.param('id') ?? ''));
+  etag(c, r.order.version);
+  return c.json(r);
+});
+
+route('patch', '/orgs/:orgId/purchase-orders/:id', 'purchasing:write', async (c) => {
+  const version = ifMatch(c);
+  const { data } = await readJson(c, purchaseOrderPatch);
+  const out = unwrap(await inventory(c).updatePurchaseOrder(caller(c), c.req.param('id') ?? '', version, data));
+  etag(c, out.body.order.version);
+  return c.json(out.body, out.status as 200);
+});
+
+for (const [action, method] of [['send', 'sendPurchaseOrder'], ['cancel', 'cancelPurchaseOrder'], ['close', 'closePurchaseOrder']] as const) {
+  route('post', `/orgs/:orgId/purchase-orders/:id/${action}`, 'purchasing:write', async (c) => {
+    const out = unwrap(await inventory(c)[method](caller(c), c.req.param('id') ?? ''));
+    etag(c, out.body.order.version);
+    return c.json(out.body, out.status as 200);
+  });
+}
+
+/** Stock keepers receive what arrives. Staff limited to some locations can only receive into their own. */
+route('post', '/orgs/:orgId/purchase-orders/:id/receive', 'stock:write', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const { data, raw } = await readJson(c, receiveInput);
+  needLocation(c, unwrap(await inventory(c).getPurchaseOrder(id)).order.locationId);
+  const out = unwrap(await inventory(c).receivePurchaseOrder(caller(c), await idemFrom(c, raw), id, data));
+  etag(c, out.body.order.version);
+  return c.json(out.body, out.status as 200);
 });
 
 route('get', '/orgs/:orgId/audit', 'audit:read', async (c) => c.json(await inventory(c).listAudit(parse(pageQuery, c.req.query()))));

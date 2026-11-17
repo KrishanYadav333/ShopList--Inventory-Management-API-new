@@ -24,7 +24,7 @@ import {
   type StockLevel,
   type TransferInput,
 } from '@shoplist/shared';
-import { APPROVAL_DEFAULTS, type ApprovalRules, type ApprovalView, type ReportName, type ReportResult } from '@shoplist/shared';
+import { APPROVAL_DEFAULTS, type ApprovalRules, type ApprovalView, type PoState, type PurchaseOrder, type PurchaseOrderInput, type ReceiveInput, type ReportName, type ReportResult, type Supplier, type SupplierInput } from '@shoplist/shared';
 import type { Bindings } from './env';
 import { ok, type Problem, type Result } from './errors';
 import { decodeCursor, encodeCursor, newId, nowIso } from './util';
@@ -223,6 +223,44 @@ const MIGRATIONS: string[][] = [
        SELECT substr(o.shipped_at, 1, 10), l.product_id, o.location_id, SUM(l.quantity * l.unit_price_minor)
          FROM orders o JOIN order_lines l ON l.order_id = o.id WHERE o.state = 'shipped' AND o.shipped_at IS NOT NULL GROUP BY 1, 2, 3
        ON CONFLICT(day, product_id, location_id) DO UPDATE SET sold_minor = excluded.sold_minor`,
+  ],
+  // Step 7: suppliers and purchase orders. "On order" is computed from open lines, never stored, so it cannot drift.
+  [
+    `CREATE TABLE suppliers (
+       id TEXT PRIMARY KEY,
+       name TEXT NOT NULL,
+       email TEXT,
+       phone TEXT,
+       lead_time_days INTEGER,
+       note TEXT,
+       created_at TEXT NOT NULL,
+       archived_at TEXT
+     )`,
+    `CREATE TABLE purchase_orders (
+       id TEXT PRIMARY KEY,
+       number TEXT NOT NULL UNIQUE,
+       supplier_id TEXT NOT NULL REFERENCES suppliers(id),
+       location_id TEXT NOT NULL,
+       state TEXT NOT NULL CHECK (state IN ('draft','sent','partially_received','received','cancelled','closed')),
+       expected_at TEXT,
+       note TEXT,
+       created_by TEXT NOT NULL,
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL,
+       version INTEGER NOT NULL DEFAULT 1
+     )`,
+    `CREATE INDEX po_state ON purchase_orders(state, created_at DESC)`,
+    `CREATE TABLE po_lines (
+       id TEXT PRIMARY KEY,
+       po_id TEXT NOT NULL REFERENCES purchase_orders(id),
+       product_id TEXT NOT NULL,
+       quantity INTEGER NOT NULL CHECK (quantity > 0),
+       received INTEGER NOT NULL DEFAULT 0 CHECK (received >= 0 AND received <= quantity),
+       unit_cost_minor INTEGER NOT NULL
+     )`,
+    `CREATE INDEX po_lines_po ON po_lines(po_id)`,
+    `CREATE INDEX po_lines_product ON po_lines(product_id)`,
+    `INSERT INTO counters(name, value) VALUES ('po_seq', 1000)`,
   ],
 ];
 
@@ -832,7 +870,7 @@ export class InventoryDO extends DurableObject<Bindings> {
     this.run(`INSERT INTO meta(key, value) VALUES ('settings', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, JSON.stringify(settings));
   }
 
-  private settings(): { orderPrefix?: string; defaultReorderPoint?: number | null; approvals?: ApprovalRules; timezone?: string } {
+  private settings(): { poPrefix?: string; orderPrefix?: string; defaultReorderPoint?: number | null; approvals?: ApprovalRules; timezone?: string } {
     try { return JSON.parse(this.one<{ value: string }>(`SELECT value FROM meta WHERE key = 'settings'`)?.value ?? '{}'); } catch { return {}; }
   }
 
@@ -1298,6 +1336,158 @@ export class InventoryDO extends DurableObject<Bindings> {
     if (r.state !== 'pending') return { ok: false, status: 409, code: 'approval_closed', detail: `That request is already ${r.state}.` };
     this.run(`UPDATE approval_requests SET state = 'withdrawn', decided_at = ? WHERE id = ?`, nowIso(), id);
     return ok({ approval: this.approvalView(this.one<Row>(`SELECT * FROM approval_requests WHERE id = ?`, id)!) });
+  }
+
+  // ---------------------------------------------------------- purchasing
+  private supplierView(r: Row): Supplier {
+    return { id: r.id as string, name: r.name as string, email: (r.email as string) ?? null, phone: (r.phone as string) ?? null, leadTimeDays: (r.lead_time_days as number) ?? null, note: (r.note as string) ?? null, archivedAt: (r.archived_at as string) ?? null, createdAt: r.created_at as string };
+  }
+
+  listSuppliers(): Supplier[] {
+    return this.all<Row>(`SELECT * FROM suppliers ORDER BY archived_at IS NOT NULL, name COLLATE NOCASE`).map((r) => this.supplierView(r));
+  }
+
+  createSupplier(c: Caller, input: SupplierInput): Result<Out<{ supplier: Supplier }>> {
+    return this.tx(undefined, c, () => {
+      const id = newId('sup');
+      this.run(`INSERT INTO suppliers(id, name, email, phone, lead_time_days, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, id, input.name, input.email || null, input.phone ?? null, input.leadTimeDays ?? null, input.note ?? null, nowIso());
+      this.audit(c, 'supplier.create', 'supplier', id, { name: input.name });
+      return { status: 201, body: { supplier: this.supplierView(this.one<Row>(`SELECT * FROM suppliers WHERE id = ?`, id)!) } };
+    });
+  }
+
+  updateSupplier(c: Caller, id: string, patch: Partial<SupplierInput> & { archived?: boolean }): Result<Out<{ supplier: Supplier }>> {
+    return this.tx(undefined, c, () => {
+      const cur = this.one<Row>(`SELECT * FROM suppliers WHERE id = ?`, id);
+      if (!cur) throw new Fail(404, 'supplier_not_found', 'That supplier does not exist.');
+      this.run(
+        `UPDATE suppliers SET name = ?, email = ?, phone = ?, lead_time_days = ?, note = ?, archived_at = ? WHERE id = ?`,
+        patch.name ?? (cur.name as string), patch.email !== undefined ? patch.email || null : (cur.email as string | null), patch.phone !== undefined ? patch.phone : (cur.phone as string | null),
+        patch.leadTimeDays !== undefined ? patch.leadTimeDays : (cur.lead_time_days as number | null), patch.note !== undefined ? patch.note : (cur.note as string | null),
+        patch.archived === undefined ? (cur.archived_at as string | null) : patch.archived ? nowIso() : null, id,
+      );
+      this.audit(c, 'supplier.update', 'supplier', id, patch);
+      return { status: 200, body: { supplier: this.supplierView(this.one<Row>(`SELECT * FROM suppliers WHERE id = ?`, id)!) } };
+    });
+  }
+
+  private poRow(id: string): Row {
+    const r = this.one<Row>(`SELECT po.*, s.name AS supplier_name FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id = ?`, id);
+    if (!r) throw new Fail(404, 'po_not_found', 'That purchase order does not exist.');
+    return r;
+  }
+
+  private poViews(rows: Row[]): PurchaseOrder[] {
+    if (!rows.length) return [];
+    const marks = rows.map(() => '?').join(',');
+    const lines = this.all<Row>(`SELECT l.*, p.sku, p.name FROM po_lines l JOIN products p ON p.id = l.product_id WHERE l.po_id IN (${marks}) ORDER BY l.rowid`, ...rows.map((r) => r.id as string));
+    return rows.map((r) => {
+      const ls = lines.filter((l) => l.po_id === r.id).map((l) => ({ id: l.id as string, productId: l.product_id as string, sku: l.sku as string, name: l.name as string, quantity: l.quantity as number, received: l.received as number, unitCostMinor: l.unit_cost_minor as number }));
+      return {
+        id: r.id as string, number: r.number as string, supplierId: r.supplier_id as string, supplierName: r.supplier_name as string, locationId: r.location_id as string, state: r.state as PoState,
+        expectedAt: (r.expected_at as string) ?? null, note: (r.note as string) ?? null, createdBy: r.created_by as string, createdAt: r.created_at as string, updatedAt: r.updated_at as string, version: r.version as number,
+        lines: ls, totalMinor: ls.reduce((a, l) => a + l.quantity * l.unitCostMinor, 0),
+      };
+    });
+  }
+
+  listPurchaseOrders(q: { state?: string; limit: number }): PurchaseOrder[] {
+    const rows = this.all<Row>(`SELECT po.*, s.name AS supplier_name FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id ${q.state ? 'WHERE po.state = ?' : ''} ORDER BY po.created_at DESC LIMIT ?`, ...(q.state ? [q.state] : []), q.limit);
+    return this.poViews(rows);
+  }
+
+  getPurchaseOrder(id: string): Result<{ order: PurchaseOrder }> {
+    try { return ok({ order: this.poViews([this.poRow(id)])[0] }); } catch (e) { if (e instanceof Fail) return { ok: false, status: e.status, code: e.code, detail: e.detail }; throw e; }
+  }
+
+  /** Units ordered and not yet received, per product, across open purchase orders. */
+  onOrder(): Record<string, number> {
+    return Object.fromEntries(this.all<{ product_id: string; n: number }>(
+      `SELECT l.product_id, SUM(l.quantity - l.received) AS n FROM po_lines l JOIN purchase_orders po ON po.id = l.po_id WHERE po.state IN ('sent','partially_received') GROUP BY l.product_id`,
+    ).map((r) => [r.product_id, r.n]));
+  }
+
+  private writePoLines(poId: string, lines: PurchaseOrderInput['lines']): void {
+    this.run(`DELETE FROM po_lines WHERE po_id = ?`, poId);
+    for (const l of lines) {
+      this.liveProduct(l.productId);
+      this.run(`INSERT INTO po_lines(id, po_id, product_id, quantity, received, unit_cost_minor) VALUES (?, ?, ?, ?, 0, ?)`, newId('pol'), poId, l.productId, l.quantity, l.unitCostMinor);
+    }
+  }
+
+  createPurchaseOrder(c: Caller, input: PurchaseOrderInput): Result<Out<{ order: PurchaseOrder }>> {
+    return this.tx(undefined, c, () => {
+      const sup = this.one<Row>(`SELECT archived_at FROM suppliers WHERE id = ?`, input.supplierId);
+      if (!sup || sup.archived_at) throw new Fail(404, 'supplier_not_found', 'Choose an active supplier.');
+      this.activeLocation(input.locationId);
+      this.run(`UPDATE counters SET value = value + 1 WHERE name = 'po_seq'`);
+      const number = `${this.settings().poPrefix ?? 'PO-'}${this.one<{ value: number }>(`SELECT value FROM counters WHERE name = 'po_seq'`)!.value}`;
+      const id = newId('po');
+      const now = nowIso();
+      this.run(`INSERT INTO purchase_orders(id, number, supplier_id, location_id, state, expected_at, note, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)`, id, number, input.supplierId, input.locationId, input.expectedAt ?? null, input.note ?? null, c.actor, now, now);
+      this.writePoLines(id, input.lines);
+      this.audit(c, 'po.create', 'purchase_order', id, { number, lines: input.lines.length });
+      return { status: 201, body: { order: this.poViews([this.poRow(id)])[0] } };
+    });
+  }
+
+  updatePurchaseOrder(c: Caller, id: string, version: number, patch: Partial<PurchaseOrderInput>): Result<Out<{ order: PurchaseOrder }>> {
+    return this.tx(undefined, c, () => {
+      const po = this.poRow(id);
+      if (po.version !== version) throw new Fail(412, 'version_conflict', 'This purchase order changed. Reload and try again.');
+      if (po.state !== 'draft') throw new Fail(409, 'po_not_draft', 'Only a draft can be edited.');
+      if (patch.supplierId) { const sup = this.one<Row>(`SELECT archived_at FROM suppliers WHERE id = ?`, patch.supplierId); if (!sup || sup.archived_at) throw new Fail(404, 'supplier_not_found', 'Choose an active supplier.'); }
+      if (patch.locationId) this.activeLocation(patch.locationId);
+      this.run(`UPDATE purchase_orders SET supplier_id = ?, location_id = ?, expected_at = ?, note = ?, version = version + 1, updated_at = ? WHERE id = ?`,
+        patch.supplierId ?? (po.supplier_id as string), patch.locationId ?? (po.location_id as string), patch.expectedAt !== undefined ? patch.expectedAt : (po.expected_at as string | null), patch.note !== undefined ? patch.note : (po.note as string | null), nowIso(), id);
+      if (patch.lines) this.writePoLines(id, patch.lines);
+      this.audit(c, 'po.update', 'purchase_order', id, { number: po.number });
+      return { status: 200, body: { order: this.poViews([this.poRow(id)])[0] } };
+    });
+  }
+
+  private poMove(c: Caller, id: string, from: PoState[], to: PoState, action: string): Result<Out<{ order: PurchaseOrder }>> {
+    return this.tx(undefined, c, () => {
+      const po = this.poRow(id);
+      if (!from.includes(po.state as PoState)) throw new Fail(409, 'po_state', `A purchase order that is ${String(po.state).replace('_', ' ')} cannot do that.`);
+      const received = this.one<{ n: number }>(`SELECT COALESCE(SUM(received), 0) AS n FROM po_lines WHERE po_id = ?`, id)!.n;
+      if (to === 'cancelled' && received > 0) throw new Fail(409, 'po_has_receipts', 'Some of it has arrived. Close the rest instead of cancelling.');
+      this.run(`UPDATE purchase_orders SET state = ?, version = version + 1, updated_at = ? WHERE id = ?`, to, nowIso(), id);
+      this.audit(c, action, 'purchase_order', id, { number: po.number });
+      return { status: 200, body: { order: this.poViews([this.poRow(id)])[0] } };
+    });
+  }
+
+  sendPurchaseOrder(c: Caller, id: string) { return this.poMove(c, id, ['draft'], 'sent', 'po.send'); }
+  cancelPurchaseOrder(c: Caller, id: string) { return this.poMove(c, id, ['draft', 'sent'], 'cancelled', 'po.cancel'); }
+  closePurchaseOrder(c: Caller, id: string) { return this.poMove(c, id, ['partially_received'], 'closed', 'po.close'); }
+
+  /** Receiving writes real receive movements at the order's location, sets each product's cost to what was paid, and is all-or-nothing. */
+  receivePurchaseOrder(c: Caller, idem: Idem | undefined, id: string, input: ReceiveInput): Result<Out<{ order: PurchaseOrder }>> {
+    return this.tx(idem, c, () => {
+      const po = this.poRow(id);
+      if (po.state !== 'sent' && po.state !== 'partially_received') throw new Fail(409, 'po_state', 'Only a sent order can be received.');
+      const seen = new Set<string>();
+      for (const r of input.lines) {
+        if (seen.has(r.lineId)) throw new Fail(400, 'duplicate_line', 'Each line can appear once per receipt.');
+        seen.add(r.lineId);
+        const line = this.one<Row>(`SELECT * FROM po_lines WHERE id = ? AND po_id = ?`, r.lineId, id);
+        if (!line) throw new Fail(404, 'po_line_not_found', 'That line is not on this order.');
+        const left = (line.quantity as number) - (line.received as number);
+        if (r.quantity > left) throw new Fail(409, 'over_receipt', `Only ${left} more ${left === 1 ? 'is' : 'are'} expected on that line.`, { errors: [{ field: 'quantity', code: 'over_receipt' }] });
+        const before = this.liveProduct(line.product_id as string);
+        // Cost follows the latest purchase price; keep the value counters exact.
+        this.run(`UPDATE products SET cost_minor = ? WHERE id = ?`, line.unit_cost_minor as number, before.id);
+        this.applyCounters(before, { ...before, cost_minor: line.unit_cost_minor as number });
+        this.move(c, before.id, po.location_id as string, r.quantity, 'receive', po.number as string, null);
+        this.run(`UPDATE po_lines SET received = received + ? WHERE id = ?`, r.quantity, r.lineId);
+      }
+      const open = this.one<{ n: number }>(`SELECT COUNT(*) AS n FROM po_lines WHERE po_id = ? AND received < quantity`, id)!.n;
+      this.run(`UPDATE purchase_orders SET state = ?, version = version + 1, updated_at = ? WHERE id = ?`, open ? 'partially_received' : 'received', nowIso(), id);
+      this.audit(c, 'po.receive', 'purchase_order', id, { number: po.number, lines: input.lines.length });
+      this.emit('po.received', { poId: id, number: po.number, complete: !open });
+      return { status: 200, body: { order: this.poViews([this.poRow(id)])[0] } };
+    });
   }
 
   // ---------------------------------------------------------- reports

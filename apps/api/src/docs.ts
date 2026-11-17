@@ -1,7 +1,7 @@
 import { z, type ZodType } from 'zod';
 import {
   apiKeyInput, countInput, importRequest, inviteInput, locationInput, memberPatch, movementInput, movementListQuery, orderInput, orderListQuery,
-  orgInput, pageQuery, paidInput, productInput, productListQuery, productPatch, transferInput, webhookInput,
+  orgInput, pageQuery, paidInput, productInput, productListQuery, productPatch, purchaseOrderInput, supplierInput, transferInput, webhookInput,
 } from '@shoplist/shared';
 
 export interface RouteInfo { method: string; path: string; access: string }
@@ -53,6 +53,17 @@ export const DOCS: Record<string, Doc> = {
   'POST /orgs/:orgId/approvals/:aid/reject': { tag: 'Approvals', summary: 'Reject a request (a note is required)' },
   'POST /orgs/:orgId/approvals/:aid/withdraw': { tag: 'Approvals', summary: 'Withdraw my own pending request' },
   'GET /orgs/:orgId/reports/:name': { tag: 'Reports', summary: 'A report: sales, sales-by-product, valuation, movements, low-stock, dead-stock or shrinkage (?format=csv to download)' },
+  'GET /orgs/:orgId/suppliers': { tag: 'Purchasing', summary: 'Suppliers' },
+  'POST /orgs/:orgId/suppliers': { tag: 'Purchasing', summary: 'Add a supplier', body: supplierInput },
+  'PATCH /orgs/:orgId/suppliers/:id': { tag: 'Purchasing', summary: 'Edit or archive a supplier' },
+  'GET /orgs/:orgId/purchase-orders': { tag: 'Purchasing', summary: 'Purchase orders, plus units on order per product' },
+  'POST /orgs/:orgId/purchase-orders': { tag: 'Purchasing', summary: 'Create a draft purchase order', body: purchaseOrderInput },
+  'GET /orgs/:orgId/purchase-orders/:id': { tag: 'Purchasing', summary: 'One purchase order with its lines' },
+  'PATCH /orgs/:orgId/purchase-orders/:id': { tag: 'Purchasing', summary: 'Edit a draft purchase order (If-Match required)' },
+  'POST /orgs/:orgId/purchase-orders/:id/send': { tag: 'Purchasing', summary: 'Mark a draft as sent to the supplier' },
+  'POST /orgs/:orgId/purchase-orders/:id/cancel': { tag: 'Purchasing', summary: 'Cancel an order nothing has arrived for' },
+  'POST /orgs/:orgId/purchase-orders/:id/close': { tag: 'Purchasing', summary: 'Close a partly received order (the rest will not come)' },
+  'POST /orgs/:orgId/purchase-orders/:id/receive': { tag: 'Purchasing', summary: 'Receive goods against the order: writes receive movements and updates cost' },
   'GET /orgs/:orgId/settings': { tag: 'Organizations', summary: "The business's settings (currency, tax, timezone, numbering)" },
   'PATCH /orgs/:orgId/settings': { tag: 'Organizations', summary: 'Change business settings (admin only)' },
   'POST /orgs/:orgId/invitations': { tag: 'Members', summary: 'Create a one-time invitation link', body: inviteInput },
@@ -121,6 +132,7 @@ const ACCESS_TEXT: Record<string, string> = {
   'cost:read': 'Manager or admin (cost prices)',
   'approvals:decide': 'Manager or admin',
   'reports:read': 'Accountant, manager or admin',
+  'purchasing:write': 'Manager or admin',
   'team:manage': 'Admin session (not API keys)',
   'settings:manage': 'Admin session (not API keys)',
   'audit:read': 'Admin session (not API keys)',

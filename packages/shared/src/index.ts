@@ -22,7 +22,7 @@ export const ROLE_SUMMARY: Record<Role, string> = {
   viewer: 'Read-only: products, stock, orders and history. No costs.',
 };
 
-export const PERMISSIONS = ['inventory:read', 'cost:read', 'reports:read', 'approvals:decide', 'products:write', 'stock:write', 'orders:write', 'team:manage', 'settings:manage', 'audit:read', 'org:delete'] as const;
+export const PERMISSIONS = ['inventory:read', 'cost:read', 'reports:read', 'purchasing:write', 'approvals:decide', 'products:write', 'stock:write', 'orders:write', 'team:manage', 'settings:manage', 'audit:read', 'org:delete'] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 /** Never available to an API key, whatever its scopes: these need a signed-in person. */
 export const SESSION_ONLY: readonly Permission[] = ['team:manage', 'settings:manage', 'audit:read', 'org:delete'];
@@ -32,7 +32,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   sales: ['inventory:read', 'orders:write'],
   stock: ['inventory:read', 'stock:write'],
   accountant: ['inventory:read', 'cost:read', 'reports:read', 'audit:read'],
-  manager: ['inventory:read', 'cost:read', 'reports:read', 'approvals:decide', 'products:write', 'stock:write', 'orders:write'],
+  manager: ['inventory:read', 'cost:read', 'reports:read', 'purchasing:write', 'approvals:decide', 'products:write', 'stock:write', 'orders:write'],
   admin: PERMISSIONS,
 };
 export const can = (role: Role, permission: Permission): boolean => ROLE_PERMISSIONS[role].includes(permission);
@@ -443,4 +443,40 @@ export interface ReportResult {
   rows: Record<string, string | number | null>[];
   totals: Record<string, number> | null;
   note?: string;
+}
+
+// ---------------------------------------------------------------- purchasing
+export const supplierInput = z
+  .object({
+    name: text(120),
+    email: z.string().trim().toLowerCase().email().max(254).nullish().or(z.literal('')),
+    phone: z.string().trim().max(40).nullish(),
+    leadTimeDays: z.number().int().min(0).max(365).nullish(),
+    note: z.string().trim().max(500).nullish(),
+  })
+  .strict();
+export type SupplierInput = z.infer<typeof supplierInput>;
+export interface Supplier { id: string; name: string; email: string | null; phone: string | null; leadTimeDays: number | null; note: string | null; archivedAt: string | null; createdAt: string }
+
+export const PO_STATES = ['draft', 'sent', 'partially_received', 'received', 'cancelled', 'closed'] as const;
+export type PoState = (typeof PO_STATES)[number];
+const poLine = z.object({ productId: text(40), quantity: z.number().int().min(1).max(LIMITS.maxOnHand), unitCostMinor: money }).strict();
+export const purchaseOrderInput = z
+  .object({
+    supplierId: text(40),
+    locationId: text(40),
+    expectedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+    note: z.string().trim().max(500).nullish(),
+    lines: z.array(poLine).min(1, 'Add at least one item').max(100).refine((l) => new Set(l.map((x) => x.productId)).size === l.length, 'Each product can appear once'),
+  })
+  .strict();
+export type PurchaseOrderInput = z.infer<typeof purchaseOrderInput>;
+export const purchaseOrderPatch = purchaseOrderInput.partial().strict();
+export const receiveInput = z.object({ lines: z.array(z.object({ lineId: text(40), quantity: z.number().int().min(1).max(LIMITS.maxOnHand) }).strict()).min(1).max(100) }).strict();
+export type ReceiveInput = z.infer<typeof receiveInput>;
+export interface PurchaseOrderLine { id: string; productId: string; sku: string; name: string; quantity: number; received: number; unitCostMinor: number }
+export interface PurchaseOrder {
+  id: string; number: string; supplierId: string; supplierName: string; locationId: string; state: PoState;
+  expectedAt: string | null; note: string | null; createdBy: string; createdAt: string; updatedAt: string; version: number;
+  lines: PurchaseOrderLine[]; totalMinor: number;
 }
