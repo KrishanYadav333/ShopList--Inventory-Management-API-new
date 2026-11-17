@@ -1415,7 +1415,37 @@ route('get', '/orgs/:orgId/orders/:id/document', 'customers:read', async (c) => 
   });
 });
 
-route('get', '/orgs/:orgId/audit', 'audit:read', async (c) => c.json(await inventory(c).listAudit(parse(pageQuery, c.req.query()))));
+// CSV export of a date range. 5,000 rows at most per file; narrow the range for more.
+const EXPORT_CAP = 5000;
+const exportRange = z.object({ format: z.literal('csv'), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() });
+const dayStart = (d: string | undefined, fallback: Date) => (d ? `${d}T00:00:00.000Z` : fallback.toISOString());
+const dayAfter = (d: string | undefined) => (d ? new Date(Date.parse(`${d}T00:00:00.000Z`) + 86400_000).toISOString() : new Date(Date.now() + 86400_000).toISOString());
+const csvFile = (name: string, header: string[], rows: unknown[][], truncated: boolean) =>
+  new Response([header, ...rows].map((r) => r.map(csvCell).join(',')).join('\n') + '\n', { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${name}.csv"`, ...(truncated ? { 'x-truncated': 'true' } : {}) } });
+
+/** Shows people by name. Unknown ids (keys, support sessions) are shown as they are stored. */
+async function actorNames(c: Ctx, ids: string[]): Promise<Map<string, string>> {
+  const real = [...new Set(ids.filter((i) => i.startsWith('usr_')))];
+  const out = new Map<string, string>();
+  for (let i = 0; i < real.length; i += 50) {
+    const part = real.slice(i, i + 50);
+    const { results } = await c.env.DB.prepare(`SELECT id, name FROM users WHERE id IN (${part.map(() => '?').join(',')})`).bind(...part).all<{ id: string; name: string }>();
+    for (const r of results) out.set(r.id, r.name);
+  }
+  return out;
+}
+
+route('get', '/orgs/:orgId/audit', 'audit:read', async (c) => {
+  if (c.req.query('format')) {
+    const q = parse(exportRange, c.req.query());
+    // RPC types are too deep for `unknown` fields, so the shape is stated here.
+    const { rows, truncated } = (await inventory(c).exportAudit(dayStart(q.from, new Date(0)), dayAfter(q.to), EXPORT_CAP)) as unknown as { rows: { actor: string; action: string; entity: string; entityId: string; changes: unknown; createdAt: string }[]; truncated: boolean };
+    const names = await actorNames(c, rows.map((r) => r.actor));
+    return csvFile(`activity-${q.from ?? 'start'}-${q.to ?? 'today'}`, ['Time', 'Who', 'Action', 'What', 'Id', 'Details'],
+      rows.map((r) => [r.createdAt, names.get(r.actor) ?? r.actor, r.action, r.entity, r.entityId, r.changes == null ? '' : JSON.stringify(r.changes)]), truncated);
+  }
+  return c.json(await inventory(c).listAudit(parse(pageQuery, c.req.query())));
+});
 
 
 // ------------------------------------------------------- platform administration
@@ -1782,6 +1812,13 @@ route('get', '/admin/security', 'super', async (c) => {
 });
 
 route('get', '/admin/audit', 'super', async (c) => {
+  if (c.req.query('format')) {
+    const q = parse(exportRange, c.req.query());
+    const { results } = await c.env.DB.prepare(`SELECT created_at AS at, actor, action, target, detail FROM platform_audit WHERE created_at >= ? AND created_at < ? ORDER BY created_at, id LIMIT ?`).bind(dayStart(q.from, new Date(0)), dayAfter(q.to), EXPORT_CAP + 1).all<{ at: string; actor: string; action: string; target: string | null; detail: string | null }>();
+    const names = await actorNames(c, results.map((r) => r.actor));
+    return csvFile(`platform-activity-${q.from ?? 'start'}-${q.to ?? 'today'}`, ['Time', 'Who', 'Action', 'Target', 'Details'],
+      results.slice(0, EXPORT_CAP).map((r) => [r.at, names.get(r.actor) ?? r.actor, r.action, r.target ?? '', r.detail ?? '']), results.length > EXPORT_CAP);
+  }
   const q = parse(pageQuery, c.req.query());
   const cur = decodeCursor<{ c: string; i: string }>(q.cursor);
   const { results } = await c.env.DB.prepare(
@@ -1824,9 +1861,24 @@ export async function purgeDueOrgs(env: Bindings): Promise<number> {
   return results.length;
 }
 
+/** Retention (F30): activity log per business setting (default 2 years), platform audit 1 year, notifications 60 days. */
+export async function pruneRetention(env: Bindings): Promise<void> {
+  const now = Date.now();
+  await env.DB.prepare(`DELETE FROM platform_audit WHERE created_at < ?`).bind(new Date(now - 365 * 86400_000).toISOString()).run();
+  await env.DB.prepare(`DELETE FROM notifications WHERE created_at < ?`).bind(new Date(now - NOTIFICATION_KEEP_MS).toISOString()).run();
+  const { results } = await env.DB.prepare(`SELECT id, settings FROM organizations WHERE deleted_at IS NULL LIMIT 500`).all<{ id: string; settings: string | null }>();
+  for (const o of results) {
+    let years = SETTINGS_DEFAULTS.auditRetentionYears;
+    try { const y = (JSON.parse(o.settings ?? '{}') as { auditRetentionYears?: number }).auditRetentionYears; if (typeof y === 'number' && y >= 1 && y <= 7) years = y; } catch { /* default */ }
+    try { await env.INVENTORY.get(env.INVENTORY.idFromName(o.id)).pruneAudit(new Date(now - years * 365 * 86400_000).toISOString()); }
+    catch (e) { console.error(JSON.stringify({ level: 'error', message: 'audit prune failed', org: o.id, error: (e as Error).message })); }
+  }
+}
+
 /** Deletes rows past their retention. Each step is independent so one failure does not stop the rest. */
 export async function dailyJob(env: Bindings): Promise<void> {
   await purgeDueOrgs(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'purge failed', error: (e as Error).message })));
+  await pruneRetention(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'retention failed', error: (e as Error).message })));
   await pruneAuthEvents(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'prune auth events failed', error: (e as Error).message })));
 }
 

@@ -136,7 +136,7 @@ export const DOCS: Record<string, Doc> = {
   'POST /orgs/:orgId/orders/:id/paid': { tag: 'Orders', summary: 'Mark an order paid or unpaid', body: paidInput, ifMatch: true },
   'POST /orgs/:orgId/orders/:id/ship': { tag: 'Orders', summary: 'Ship a ready order: reservations become sales in the ledger', ifMatch: true },
   'POST /orgs/:orgId/orders/:id/cancel': { tag: 'Orders', summary: 'Cancel an order and release its reserved stock', ifMatch: true },
-  'GET /orgs/:orgId/audit': { tag: 'Activity', summary: 'The organization activity log', query: pageQuery },
+  'GET /orgs/:orgId/audit': { tag: 'Activity', summary: 'The organization activity log. Add ?format=csv&from=YYYY-MM-DD&to=YYYY-MM-DD for a CSV file (5,000 rows at most)', query: pageQuery },
   'GET /admin/overview': { tag: 'Platform admin', summary: 'Platform counts and sign-in mode' },
   'GET /admin/security': { tag: 'Platform admin', summary: 'Sign-in counts, refusals, rate limits and notable events' },
   'GET /admin/orgs': { tag: 'Platform admin', summary: 'All organizations with status', query: pageQuery },
@@ -151,7 +151,7 @@ export const DOCS: Record<string, Doc> = {
   'POST /admin/users/:id/enable': { tag: 'Platform admin', summary: 'Re-enable an account' },
   'POST /admin/orgs/:id/suspend': { tag: 'Platform admin', summary: 'Suspend an organization' },
   'POST /admin/orgs/:id/restore': { tag: 'Platform admin', summary: 'Restore a suspended organization' },
-  'GET /admin/audit': { tag: 'Platform admin', summary: 'The platform activity log', query: pageQuery },
+  'GET /admin/audit': { tag: 'Platform admin', summary: 'The platform activity log. Add ?format=csv&from=&to= for a CSV file', query: pageQuery },
 };
 
 const ACCESS_TEXT: Record<string, string> = {

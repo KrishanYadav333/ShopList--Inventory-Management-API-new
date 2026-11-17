@@ -1097,6 +1097,20 @@ export class InventoryDO extends DurableObject<Bindings> {
     };
   }
 
+  /** Rows for a CSV export of the activity log, oldest first. Capped, so one export cannot take the object's whole turn. */
+  exportAudit(from: string, to: string, cap: number): { rows: AuditEntry[]; truncated: boolean } {
+    const rows = this.all<Row>(`SELECT * FROM audit_log WHERE created_at >= ? AND created_at < ? ORDER BY created_at, id LIMIT ?`, from, to, cap + 1);
+    return {
+      rows: rows.slice(0, cap).map((r): AuditEntry => ({ id: r.id as string, actor: r.actor as string, action: r.action as string, entity: r.entity as string, entityId: r.entity_id as string, changes: r.changes ? JSON.parse(r.changes as string) : null, requestId: r.request_id as string, createdAt: r.created_at as string })),
+      truncated: rows.length > cap,
+    };
+  }
+
+  /** Deletes activity-log rows older than the cutoff, in a bounded batch. Returns how many went. */
+  pruneAudit(cutoff: string): number {
+    return this.ctx.storage.sql.exec(`DELETE FROM audit_log WHERE id IN (SELECT id FROM audit_log WHERE created_at < ? LIMIT 5000)`, cutoff).rowsWritten;
+  }
+
   // ------------------------------------------------------------------ import
   private defaultLocationId(): string {
     const def = this.one<{ id: string }>(`SELECT id FROM locations WHERE is_default = 1 AND archived_at IS NULL`);

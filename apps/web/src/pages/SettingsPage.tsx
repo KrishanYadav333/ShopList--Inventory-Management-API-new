@@ -6,7 +6,7 @@ import { api, ApiError } from '../api';
 import { useShell } from '../components/Shell';
 import { dateParts } from '../format';
 import { Icon } from '../icons';
-import { canAdmin, useLocations, useMe, usePlan } from '../queries';
+import { canAdmin, canDo, useLocations, useMe, usePlan } from '../queries';
 import { useToast } from '../toast';
 import { addPasskey, passkeysSupported, wasCancelled } from '../passkeys';
 
@@ -154,6 +154,7 @@ export function SettingsPage() {
 
   const audit = useQuery({ enabled: admin, queryKey: ['org', org.id, 'audit'], queryFn: () => api<{ data: { id: string; action: string; entity: string; changes: unknown; actor: string; createdAt: string }[] }>('GET', `/orgs/${org.id}/audit?limit=25`).then((r) => r.data) });
   const [confirmName, setConfirmName] = useState('');
+  const [exp, setExp] = useState({ from: '', to: '' });
   const del = useMutation({ mutationFn: () => api<{ deleteAfter: string }>('DELETE', `/orgs/${org.id}`, { body: { confirmName } }), onSuccess: () => { setConfirmName(''); qc.invalidateQueries({ queryKey: ['me'] }); toast({ text: 'Deletion scheduled. You have 14 days to change your mind.' }); }, onError: fail });
   const cancelDel = useMutation({ mutationFn: () => api('POST', `/orgs/${org.id}/cancel-deletion`, { body: {} }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['me'] }); toast({ text: 'Deletion cancelled' }); }, onError: fail });
 
@@ -419,6 +420,8 @@ export function SettingsPage() {
               <div className="field"><label htmlFor="b-tz">Timezone</label><input id="b-tz" value={bs.timezone} onChange={(e) => setBs({ timezone: e.target.value })} placeholder="e.g. Asia/Kathmandu" /></div>
               <div className="field"><label htmlFor="b-op">Order number prefix</label><input id="b-op" maxLength={8} value={bs.orderPrefix} onChange={(e) => setBs({ orderPrefix: e.target.value })} /></div>
               <div className="field"><label htmlFor="b-rp">Default reorder point</label><input id="b-rp" type="number" min={0} value={bs.defaultReorderPoint ?? ''} onChange={(e) => setBs({ defaultReorderPoint: e.target.value === '' ? null : Number(e.target.value) })} /></div>
+              <div className="field"><label htmlFor="b-ret">Keep the activity log for</label>
+                <select id="b-ret" value={bs.auditRetentionYears} onChange={(e) => setBs({ auditRetentionYears: Number(e.target.value) })}>{[1, 2, 3, 5, 7].map((y) => <option key={y} value={y}>{y} year{y === 1 ? '' : 's'}</option>)}</select></div>
               <fieldset className="modes approvals-rules" style={{ gridColumn: '1 / -1' }}>
                 <legend>Approvals (a manager must agree before these happen)</legend>
                 <p className="hint">Managers and the admin are never asked. Everyone else’s request waits in Approvals.</p>
@@ -498,6 +501,18 @@ export function SettingsPage() {
                 {audit.data.map((a) => { const { date, time } = dateParts(a.createdAt); return <li key={a.id}><span><strong>{a.action}</strong><div className="time">{JSON.stringify(a.changes ?? {}).slice(0, 120)}</div></span><span className="time">{date} {time}</span></li>; })}
               </ul>
             )}
+          </section>
+        )}
+
+        {(admin || canDo(org.role, 'audit:read')) && (
+          <section className="card" aria-labelledby="h-export">
+            <h2 id="h-export">Export the activity log</h2>
+            <p className="hint">Who did what and when, as a spreadsheet file. Up to 5,000 rows per file; choose a shorter range for more.</p>
+            <div className="settings-grid">
+              <div className="field"><label htmlFor="ex-from">From</label><input id="ex-from" type="date" value={exp.from} onChange={(e) => setExp({ ...exp, from: e.target.value })} /></div>
+              <div className="field"><label htmlFor="ex-to">To</label><input id="ex-to" type="date" value={exp.to} onChange={(e) => setExp({ ...exp, to: e.target.value })} /></div>
+            </div>
+            <a className="btn btn-outline" href={`/api/v1/orgs/${org.id}/audit?format=csv${exp.from ? `&from=${exp.from}` : ''}${exp.to ? `&to=${exp.to}` : ''}`} download>Download CSV</a>
           </section>
         )}
 

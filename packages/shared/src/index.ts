@@ -428,6 +428,8 @@ export const orgSettings = z
     poPrefix: z.string().trim().max(8).regex(/^[A-Za-z0-9#_-]*$/, 'Letters, numbers, # _ - only'),
     invoicePrefix: z.string().trim().max(8).regex(/^[A-Za-z0-9#_-]*$/, 'Letters, numbers, # _ - only'),
     defaultReorderPoint: z.number().int().min(0).max(LIMITS.maxOnHand).nullable(),
+    /** How long the activity log is kept (F30). */
+    auditRetentionYears: z.number().int().min(1).max(7),
     approvals: approvalRules,
   })
   .strict();
@@ -436,7 +438,7 @@ export const orgSettingsPatch = orgSettings.partial();
 export const SETTINGS_DEFAULTS: OrgSettings = {
   legalName: null, address: null, phone: null, email: null, taxId: null,
   currency: 'USD', taxMode: 'none', taxRateBp: 0, timezone: 'UTC',
-  orderPrefix: 'ORD-', poPrefix: 'PO-', invoicePrefix: 'INV-', defaultReorderPoint: null, approvals: APPROVAL_DEFAULTS,
+  orderPrefix: 'ORD-', poPrefix: 'PO-', invoicePrefix: 'INV-', defaultReorderPoint: null, auditRetentionYears: 2, approvals: APPROVAL_DEFAULTS,
 };
 
 // ---------------------------------------------------------------- reports

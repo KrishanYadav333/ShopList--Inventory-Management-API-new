@@ -321,6 +321,7 @@ export function AdminPage() {
 
         <section className="admin-section" aria-labelledby="h-audit">
           <h2 id="h-audit">Platform activity</h2>
+          <p><a className="btn btn-outline" href="/api/v1/admin/audit?format=csv" download>Download everything as CSV</a></p>
           {!audit.data?.length ? <p className="hint">No platform actions yet.</p> : (
             <ul className="list">{audit.data.map((a) => <li key={a.id}><span><strong>{a.action}</strong><div className="time">{a.target}</div></span><span className="time">{when(a.createdAt)}</span></li>)}</ul>
           )}
