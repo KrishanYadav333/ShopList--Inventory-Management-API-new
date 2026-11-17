@@ -1,5 +1,9 @@
 # Operations
 
+## Scheduled job
+
+One cron (`15 3 * * *`, 03:15 UTC) runs `dailyJob`: purge businesses whose 14 days are up, apply retention, prune sign-in events. Each step is independent and logs its own failure. Control-plane migrations 0011 to 0015 add sign-in events, plans, support grants, scheduled deletion, announcements and maintenance; apply them before deploying.
+
 ## Free-tier budget
 
 Everything in this design runs on the **Cloudflare Workers Free plan**. These are the allowances it must fit inside (checked November 2026; confirm against the [Workers](https://developers.cloudflare.com/workers/platform/limits/), [D1](https://developers.cloudflare.com/d1/platform/pricing/), [Durable Objects](https://developers.cloudflare.com/durable-objects/platform/limits/) and [Queues](https://developers.cloudflare.com/queues/platform/limits/) docs before relying on them):

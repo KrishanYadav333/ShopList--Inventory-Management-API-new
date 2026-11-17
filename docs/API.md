@@ -234,3 +234,17 @@ All under `/orgs/{orgId}` unless noted. The generated reference at `/api/docs` i
 | Team | `/invitations` (list, resend, revoke), `/members/{id}/deactivate`, `/reactivate`, `/admin-handover`; `PATCH /members/{id}` takes `locationIds` |
 | Me | `GET /me/notifications`, `/me/notifications/unread-count`, `POST /me/notifications/read`, `/me/notification-preferences` |
 | Platform (developer only) | `POST /admin/orgs` (onboard), `GET /admin/orgs/{id}`, `/admin/users/{id}`, `POST /admin/orgs/{id}/transfer-admin`, `/resend-invitation`, `POST /admin/users/{id}/sign-out` |
+
+## Added with the platform work (Phase 2b and 3)
+
+| Area | Endpoints |
+|---|---|
+| Sign-in history | `GET /auth/events` (your last 20 events), `POST /auth/not-me` (signs you out everywhere, tells your admins) |
+| Plan | `GET /orgs/{orgId}/plan` (limits, switched-on features; admins also get usage). A limit answers `403 plan_limit`; a switched-off feature answers `404` |
+| Support access | `POST/GET /orgs/{orgId}/support-grants`, `DELETE /orgs/{orgId}/support-grants/{id}`. The owner reads with the header `X-Support-Grant: <id>`; every non-GET answers `403 support_read_only` |
+| Deletion | `DELETE /orgs/{orgId}` with `{ "confirmName": "<business name>" }` schedules deletion in 14 days (read-only until then; writes answer `403 org_read_only`); `POST /orgs/{orgId}/cancel-deletion` |
+| Notices | `GET /announcements` (notices and maintenance that apply to you) |
+| Audit export | `GET /orgs/{orgId}/audit?format=csv&from=YYYY-MM-DD&to=YYYY-MM-DD` (5,000 rows at most, `X-Truncated: true` when cut) |
+| Platform (owner only) | `GET /admin/security`, `GET/PATCH /admin/plans`, `PATCH /admin/orgs/{id}/plan`, `GET /admin/support`, `POST /admin/orgs/{id}/cancel-deletion`, `GET/POST/DELETE /admin/announcements`, `GET/POST/DELETE /admin/maintenance`, `GET /admin/audit?format=csv` |
+
+While maintenance is on, every write outside `/admin` and `/auth` answers `503 maintenance` with `Retry-After`; reads keep working.

@@ -127,6 +127,15 @@ Rules:
 - API keys act as a manager for inventory (write scope) or a viewer (read scope), and can never manage members, keys or webhooks.
 - When someone signs in with a verified email that has a pending invitation, they join that organization with the invited role automatically.
 
+## Platform controls (Phase 2b and 3)
+
+- **Sign-in history.** Every success and refusal on every door writes one `auth_events` row: time, kind, door, country, browser family, reason. Never an IP address, token, or the email of someone we do not know (only a salted, truncated hash, so repeats can be counted). Rate-limit rows are one per client per minute. Rows are deleted after 90 days.
+- **Support access.** The owner sees a business only inside a window its admin opened (30 min, 1 h or 4 h, ended at any time, replaced by a new one). Enforced on the server: only the owner's GitHub-door session can use a grant; every non-GET is refused before routing; only inventory screens and reports are reachable (never team, settings, keys, webhooks or the activity log); cost is visible, customer contact details only if the admin ticked the box. Each page is written to the platform audit and to the business's own activity log; the admin sees a count. The business can switch the feature off (plan), and scheduling deletion or suspending the business ends it.
+- **Plans.** Limits and switches are resolved on the server for every request, for people and API keys alike. A switched-off feature is a `404`, so it cannot be probed.
+- **Scheduled deletion.** The business name must be typed; 14 days read-only; the admin or the owner can cancel; then a daily job empties the Durable Object and removes the rows (the organization row stays as a tombstone for the audit trail).
+- **Maintenance.** Writes return `503`; reads, sign-in and the owner console keep working so it can always be turned off.
+- **Retention.** Activity log 2 years (1 to 7, per business), platform audit 1 year, sign-in events 90 days, notifications 60 days. A daily cron at 03:15 UTC does the deleting.
+
 ## Web application security
 
 | Control | Setting |

@@ -1,6 +1,6 @@
 # ShopList: access levels and feature plan (complete document)
 
-**Status (2026-11-18): Phase 1 (F1–F7) and Phase 2a (F8–F18) are built and deployed. Phase 2b (F19–F22) and Phase 3 (F23–F30) are plan only.**
+**Status (2026-11-18): Phase 1 (F1–F7), Phase 2a (F8–F18), F19, F20, F22, F27, F28 and F30 are built and deployed. Still to build: F21 (needs a read-only Cloudflare API token), F23 (needs an email provider and domain), F24, F25, F26, F29 (needs an R2 bucket).**
 The plan was approved with the defaults listed in the "Decisions needed before building" section.
 Written 2026-11-16. Build starts after you approve it (see the "Decisions needed before building" section).
 
@@ -64,7 +64,7 @@ External (no account)      customer order link · supplier purchase-order link �
 | F29 | Nightly backups to R2 | Developer | 3 | M |
 | F30 | Audit export and retention | Developer, Admin | 3 | S |
 
-**Deviations from the plan as built:** per-product tax overrides and product-level supplier fields were not built (tax is one rate per business; a product's usual supplier is whoever it was last ordered from); over-receipt on a purchase order is refused rather than allowed up to 10%; staff-activity report was left to the activity log; overdue count reminders need a scheduler and are not built; count and approval items link from notifications but there is no email yet.
+**Deviations from the plan as built:** the usage dashboard (F21) is not built; plan defaults can be edited through the API (`PATCH /admin/plans/{id}`) but the console only edits per-business overrides; the support grant is opened by the owner from the console and the passkey re-check (D1) is off; a platform-wide notice for the owner uses the `_platform` notification scope; per-product tax overrides and product-level supplier fields were not built (tax is one rate per business; a product's usual supplier is whoever it was last ordered from); over-receipt on a purchase order is refused rather than allowed up to 10%; staff-activity report was left to the activity log; overdue count reminders need a scheduler and are not built; count and approval items link from notifications but there is no email yet.
 
 **Totals (rough):** Phase 1 ≈ 1.5 weeks. Phase 2a ≈ 5–6 weeks. Phase 2b ≈ 2 weeks.
 Phase 3 ≈ 2 weeks. Phases 2a and 2b can be interleaved; each feature ships on its own.
