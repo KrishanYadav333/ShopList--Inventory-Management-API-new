@@ -17,6 +17,9 @@ import {
   orderListQuery,
   orgInput,
   orgSettingsPatch,
+  reportQuery,
+  REPORTS,
+  type ReportResult,
   SETTINGS_DEFAULTS,
   type OrgSettings,
   pageQuery,
@@ -589,7 +592,7 @@ route('patch', '/orgs/:orgId/settings', 'settings:manage', async (c) => {
   }
   const { currency, ...rest } = next;
   await c.env.DB.prepare(`UPDATE organizations SET settings = ?, currency = ? WHERE id = ?`).bind(JSON.stringify(rest), currency, c.get('org').id).run();
-  await inventory(c).setSettings({ orderPrefix: next.orderPrefix, defaultReorderPoint: next.defaultReorderPoint, approvals: next.approvals });
+  await inventory(c).setSettings({ orderPrefix: next.orderPrefix, defaultReorderPoint: next.defaultReorderPoint, approvals: next.approvals, timezone: next.timezone });
   return c.json({ settings: next });
 });
 
@@ -1018,6 +1021,27 @@ route('post', '/orgs/:orgId/approvals/:aid/reject', 'approvals:decide', async (c
 });
 
 route('post', '/orgs/:orgId/approvals/:aid/withdraw', 'inventory:read', async (c) => c.json(unwrap(await inventory(c).withdrawApproval(caller(c), c.req.param('aid') ?? ''))));
+
+// ------------------------------------------------------------------- reports
+const csvCell = (v: unknown) => { const t = v == null ? '' : String(v); const safe = /^[=+\-@\t\r]/.test(t) ? `'${t}` : t; return /[",\n\r]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe; };
+const toCsv = (r: ReportResult) => {
+  const money = (v: unknown) => (v == null || v === '' ? '' : (Number(v) / 100).toFixed(2));
+  const lines = [r.columns.map((c) => csvCell(c.label)).join(',')];
+  for (const row of r.rows) lines.push(r.columns.map((c) => csvCell(c.kind === 'money' ? money(row[c.key]) : row[c.key])).join(','));
+  return lines.join('\r\n') + '\r\n';
+};
+
+route('get', '/orgs/:orgId/reports/:name', 'reports:read', async (c) => {
+  const name = z.enum(REPORTS).safeParse(c.req.param('name'));
+  if (!name.success) throw new AppError(404, 'report_not_found', 'There is no such report.');
+  const q = parse(reportQuery, c.req.query());
+  if (q.from && q.to && (Date.parse(q.to) < Date.parse(q.from) || Date.parse(q.to) - Date.parse(q.from) > 366 * 86400_000)) throw new AppError(400, 'bad_range', 'Choose a range of at most 366 days, with the start before the end.');
+  const result = await inventory(c).report(name.data, { from: q.from, to: q.to, location: q.location, days: q.days });
+  if (q.format === 'csv') {
+    return new Response(toCsv(result), { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${name.data}-${result.from}-${result.to}.csv"` } });
+  }
+  return c.json(result);
+});
 
 route('get', '/orgs/:orgId/audit', 'audit:read', async (c) => c.json(await inventory(c).listAudit(parse(pageQuery, c.req.query()))));
 

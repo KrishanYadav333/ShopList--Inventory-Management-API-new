@@ -9,6 +9,7 @@ import { SettingsPage } from './pages/SettingsPage';
 
 // Clerk's widget is only needed on the client sign-in page, so it is loaded on demand.
 const ApprovalsPage = lazy(() => import('./pages/ApprovalsPage').then((m) => ({ default: m.ApprovalsPage })));
+const ReportsPage = lazy(() => import('./pages/ReportsPage').then((m) => ({ default: m.ReportsPage })));
 const ClerkSignIn = lazy(() => import('./pages/ClerkSignIn'));
 // The platform console is only for the owner, so it loads on demand too.
 const AdminPage = lazy(() => import('./pages/AdminPage').then((m) => ({ default: m.AdminPage })));
@@ -28,6 +29,7 @@ export function App() {
         <Route path="orders" element={<OrdersPage />} />
         <Route path="products" element={<ProductsPage />} />
         <Route path="history" element={<HistoryPage />} />
+        <Route path="reports" element={<Suspense fallback={<div className="boot">Loading…</div>}><ReportsPage /></Suspense>} />
         <Route path="approvals" element={<Suspense fallback={<div className="boot">Loading…</div>}><ApprovalsPage /></Suspense>} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>

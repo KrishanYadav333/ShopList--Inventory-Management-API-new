@@ -24,7 +24,7 @@ import {
   type StockLevel,
   type TransferInput,
 } from '@shoplist/shared';
-import { APPROVAL_DEFAULTS, type ApprovalRules, type ApprovalView } from '@shoplist/shared';
+import { APPROVAL_DEFAULTS, type ApprovalRules, type ApprovalView, type ReportName, type ReportResult } from '@shoplist/shared';
 import type { Bindings } from './env';
 import { ok, type Problem, type Result } from './errors';
 import { decodeCursor, encodeCursor, newId, nowIso } from './util';
@@ -195,6 +195,34 @@ const MIGRATIONS: string[][] = [
        expires_at TEXT NOT NULL
      )`,
     `CREATE INDEX approvals_state ON approval_requests(state, created_at DESC)`,
+  ],
+  // Step 6: daily rollups for reports. Updated in the same transaction as every movement and shipment, so they are
+  // exact; invariant I8 checks them against the ledger. The days of history are filled in from the ledger here.
+  [
+    `CREATE TABLE daily_stats (
+       day TEXT NOT NULL,
+       product_id TEXT NOT NULL,
+       location_id TEXT NOT NULL,
+       sold_qty INTEGER NOT NULL DEFAULT 0,
+       sold_minor INTEGER NOT NULL DEFAULT 0,
+       received_qty INTEGER NOT NULL DEFAULT 0,
+       returned_qty INTEGER NOT NULL DEFAULT 0,
+       adjusted_qty INTEGER NOT NULL DEFAULT 0,
+       damaged_qty INTEGER NOT NULL DEFAULT 0,
+       count_delta INTEGER NOT NULL DEFAULT 0,
+       PRIMARY KEY (day, product_id, location_id)
+     )`,
+    `CREATE INDEX daily_stats_product ON daily_stats(product_id, day)`,
+    `INSERT INTO daily_stats(day, product_id, location_id, sold_qty, received_qty, returned_qty, adjusted_qty, damaged_qty, count_delta)
+       SELECT substr(created_at, 1, 10), product_id, location_id,
+              SUM(CASE WHEN reason = 'sale' THEN -delta ELSE 0 END), SUM(CASE WHEN reason = 'receive' THEN delta ELSE 0 END),
+              SUM(CASE WHEN reason = 'return' THEN delta ELSE 0 END), SUM(CASE WHEN reason = 'adjust' THEN delta ELSE 0 END),
+              SUM(CASE WHEN reason = 'damage' THEN -delta ELSE 0 END), SUM(CASE WHEN reason = 'count' THEN delta ELSE 0 END)
+         FROM stock_movements GROUP BY 1, 2, 3`,
+    `INSERT INTO daily_stats(day, product_id, location_id, sold_minor)
+       SELECT substr(o.shipped_at, 1, 10), l.product_id, o.location_id, SUM(l.quantity * l.unit_price_minor)
+         FROM orders o JOIN order_lines l ON l.order_id = o.id WHERE o.state = 'shipped' AND o.shipped_at IS NOT NULL GROUP BY 1, 2, 3
+       ON CONFLICT(day, product_id, location_id) DO UPDATE SET sold_minor = excluded.sold_minor`,
   ],
 ];
 
@@ -560,6 +588,7 @@ export class InventoryDO extends DurableObject<Bindings> {
     const after: ProductRow = { ...product, on_hand_total: product.on_hand_total + delta };
     this.run(`UPDATE products SET on_hand_total = ?, attention = ? WHERE id = ?`, after.on_hand_total, needsAttention(after), productId);
     this.applyCounters(product, after);
+    this.bumpStats(productId, locationId, reason, delta);
     this.emit('stock.changed', { productId, sku: product.sku, name: product.name, locationId, delta, reason, reference, balance: next });
     if (!isOut(product) && isOut(after)) this.emit('stock.out', { productId, sku: product.sku, name: product.name, onHand: after.on_hand_total });
     else if (!isLow(product) && isLow(after)) this.emit('stock.low', { productId, sku: product.sku, name: product.name, onHand: after.on_hand_total, reorderPoint: after.reorder_point });
@@ -803,7 +832,7 @@ export class InventoryDO extends DurableObject<Bindings> {
     this.run(`INSERT INTO meta(key, value) VALUES ('settings', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, JSON.stringify(settings));
   }
 
-  private settings(): { orderPrefix?: string; defaultReorderPoint?: number | null; approvals?: ApprovalRules } {
+  private settings(): { orderPrefix?: string; defaultReorderPoint?: number | null; approvals?: ApprovalRules; timezone?: string } {
     try { return JSON.parse(this.one<{ value: string }>(`SELECT value FROM meta WHERE key = 'settings'`)?.value ?? '{}'); } catch { return {}; }
   }
 
@@ -1122,6 +1151,7 @@ export class InventoryDO extends DurableObject<Bindings> {
         // Release the hold, then record the sale; both in this transaction.
         this.run(`UPDATE stock_levels SET reserved = reserved - ? WHERE product_id = ? AND location_id = ?`, l.reserved, l.product_id, row.location_id);
         this.move(c, l.product_id, row.location_id, -l.quantity, 'sale', row.number, null);
+        this.bumpStats(l.product_id, row.location_id, 'revenue', l.quantity * l.unit_price_minor);
         this.run(`UPDATE order_lines SET open = 0 WHERE id = ?`, l.id);
       }
       this.run(`UPDATE orders SET state = 'shipped', shipped_at = ?, version = version + 1, updated_at = ? WHERE id = ?`, nowIso(), nowIso(), id);
@@ -1270,6 +1300,80 @@ export class InventoryDO extends DurableObject<Bindings> {
     return ok({ approval: this.approvalView(this.one<Row>(`SELECT * FROM approval_requests WHERE id = ?`, id)!) });
   }
 
+  // ---------------------------------------------------------- reports
+  /** The business's calendar day for now, in its own timezone, so "today" means what the owner means. */
+  private today(): string {
+    try { return new Intl.DateTimeFormat('en-CA', { timeZone: this.settings().timezone || 'UTC' }).format(new Date()); } catch { return nowIso().slice(0, 10); }
+  }
+
+  private bumpStats(productId: string, locationId: string, reason: string, amount: number): void {
+    const col = { sale: 'sold_qty', revenue: 'sold_minor', receive: 'received_qty', return: 'returned_qty', adjust: 'adjusted_qty', damage: 'damaged_qty', count: 'count_delta' }[reason];
+    if (!col) return; // transfers and imports do not change what the business sold, received or lost
+    const value = reason === 'sale' || reason === 'damage' ? -amount : amount;
+    this.run(
+      `INSERT INTO daily_stats(day, product_id, location_id, ${col}) VALUES (?, ?, ?, ?) ON CONFLICT(day, product_id, location_id) DO UPDATE SET ${col} = ${col} + excluded.${col}`,
+      this.today(), productId, locationId, value,
+    );
+  }
+
+  report(name: ReportName, q: { from?: string; to?: string; location?: string; days: number }): ReportResult {
+    const to = q.to ?? this.today();
+    const from = q.from ?? new Date(Date.parse(to) - 29 * 86400_000).toISOString().slice(0, 10);
+    const loc = q.location ? ' AND d.location_id = ?' : '';
+    const range: SqlStorageValue[] = q.location ? [from, to, q.location] : [from, to];
+    const base = { name, from, to, totals: null as Record<string, number> | null };
+    const sum = (rows: Record<string, string | number | null>[], keys: string[]) => Object.fromEntries(keys.map((k) => [k, rows.reduce((a, r) => a + (Number(r[k]) || 0), 0)]));
+    const money = (key: string, label: string) => ({ key, label, kind: 'money' as const });
+    const int = (key: string, label: string) => ({ key, label, kind: 'int' as const });
+    const text = (key: string, label: string) => ({ key, label, kind: 'text' as const });
+
+    if (name === 'sales') {
+      const rows = this.all<Row>(`SELECT d.day, SUM(d.sold_qty) AS units, SUM(d.sold_minor) AS revenue FROM daily_stats d WHERE d.day BETWEEN ? AND ?${loc} GROUP BY d.day HAVING units <> 0 OR revenue <> 0 ORDER BY d.day`, ...range) as Record<string, string | number | null>[];
+      return { ...base, title: 'Sales by day', columns: [{ key: 'day', label: 'Day', kind: 'date' }, int('units', 'Units sold'), money('revenue', 'Revenue from shipped orders')], rows, totals: sum(rows, ['units', 'revenue']), note: 'Units count every sale in the stock ledger. Revenue counts shipped orders only.' };
+    }
+    if (name === 'sales-by-product') {
+      const rows = this.all<Row>(
+        `SELECT p.sku, p.name, SUM(d.sold_qty) AS units, SUM(d.sold_minor) AS revenue, SUM(d.sold_qty) * COALESCE(p.cost_minor, 0) AS cost,
+                CASE WHEN p.cost_minor IS NULL THEN NULL ELSE SUM(d.sold_minor) - SUM(d.sold_qty) * p.cost_minor END AS margin
+           FROM daily_stats d JOIN products p ON p.id = d.product_id WHERE d.day BETWEEN ? AND ?${loc} GROUP BY p.id HAVING units <> 0 OR revenue <> 0 ORDER BY revenue DESC, units DESC LIMIT 1000`, ...range) as Record<string, string | number | null>[];
+      return { ...base, title: 'Sales by product', columns: [text('sku', 'SKU'), text('name', 'Product'), int('units', 'Units'), money('revenue', 'Revenue'), money('cost', 'Cost of goods'), money('margin', 'Margin')], rows, totals: sum(rows, ['units', 'revenue']) };
+    }
+    if (name === 'valuation') {
+      const rows = this.all<Row>(
+        `SELECT p.sku, p.name, SUM(s.on_hand) AS on_hand, p.cost_minor AS unit_cost, SUM(s.on_hand) * COALESCE(p.cost_minor, 0) AS value
+           FROM stock_levels s JOIN products p ON p.id = s.product_id WHERE p.deleted_at IS NULL AND s.on_hand > 0${q.location ? ' AND s.location_id = ?' : ''} GROUP BY p.id ORDER BY value DESC LIMIT 2000`, ...(q.location ? [q.location] : [])) as Record<string, string | number | null>[];
+      return { ...base, title: 'Stock valuation', columns: [text('sku', 'SKU'), text('name', 'Product'), int('on_hand', 'On hand'), money('unit_cost', 'Unit cost'), money('value', 'Value')], rows, totals: sum(rows, ['on_hand', 'value']), note: 'As of now, at cost. Products with no cost count as zero.' };
+    }
+    if (name === 'movements') {
+      const r = this.one<Row>(`SELECT COALESCE(SUM(received_qty),0) AS received, COALESCE(SUM(returned_qty),0) AS returned, COALESCE(SUM(sold_qty),0) AS sold, COALESCE(SUM(adjusted_qty),0) AS adjusted, COALESCE(SUM(damaged_qty),0) AS damaged, COALESCE(SUM(count_delta),0) AS counted FROM daily_stats d WHERE d.day BETWEEN ? AND ?${loc}`, ...range)!;
+      const rows = [['Received', Number(r.received)], ['Returned by customers', Number(r.returned)], ['Sold', -Number(r.sold)], ['Adjusted', Number(r.adjusted)], ['Damaged', -Number(r.damaged)], ['Corrected by counts', Number(r.counted)]].map(([reason, units]) => ({ reason: reason as string, units: units as number }));
+      return { ...base, title: 'Stock movements by reason', columns: [text('reason', 'Reason'), int('units', 'Units (+ in, − out)')], rows, totals: sum(rows, ['units']) };
+    }
+    if (name === 'low-stock') {
+      const rows = this.all<Row>(
+        `SELECT p.sku, p.name, p.on_hand_total AS on_hand, p.reorder_point,
+                COALESCE((SELECT SUM(d.sold_qty) FROM daily_stats d WHERE d.product_id = p.id AND d.day >= ?), 0) AS sold_recent
+           FROM products p WHERE p.deleted_at IS NULL AND p.reorder_point IS NOT NULL AND p.on_hand_total <= p.reorder_point ORDER BY p.on_hand_total ASC, p.name LIMIT 1000`, new Date(Date.parse(this.today()) - 29 * 86400_000).toISOString().slice(0, 10))
+        .map((r) => ({ sku: r.sku, name: r.name, on_hand: r.on_hand, reorder_point: r.reorder_point, days_of_cover: Number(r.sold_recent) > 0 ? Math.floor(Number(r.on_hand) / (Number(r.sold_recent) / 30)) : null })) as Record<string, string | number | null>[];
+      return { ...base, title: 'Low and out of stock', columns: [text('sku', 'SKU'), text('name', 'Product'), int('on_hand', 'On hand'), int('reorder_point', 'Reorder point'), int('days_of_cover', 'Days of cover')], rows, totals: null, note: 'Days of cover uses the last 30 days of sales. Blank means nothing sold.' };
+    }
+    if (name === 'dead-stock') {
+      const since = new Date(Date.parse(this.today()) - q.days * 86400_000).toISOString().slice(0, 10);
+      const rows = this.all<Row>(
+        `SELECT p.sku, p.name, p.on_hand_total AS on_hand, p.on_hand_total * COALESCE(p.cost_minor, 0) AS value,
+                (SELECT MAX(d.day) FROM daily_stats d WHERE d.product_id = p.id AND d.sold_qty > 0) AS last_sold
+           FROM products p WHERE p.deleted_at IS NULL AND p.on_hand_total > 0
+            AND NOT EXISTS (SELECT 1 FROM daily_stats d WHERE d.product_id = p.id AND d.sold_qty > 0 AND d.day >= ?) ORDER BY value DESC, p.name LIMIT 1000`, since) as Record<string, string | number | null>[];
+      return { ...base, from: since, title: `Dead stock: nothing sold in ${q.days} days`, columns: [text('sku', 'SKU'), text('name', 'Product'), int('on_hand', 'On hand'), money('value', 'Value tied up'), { key: 'last_sold', label: 'Last sold', kind: 'date' }], rows, totals: sum(rows, ['on_hand', 'value']) };
+    }
+    const rows = this.all<Row>(
+      `SELECT p.sku, p.name, SUM(d.damaged_qty) AS damaged, SUM(CASE WHEN d.adjusted_qty < 0 THEN -d.adjusted_qty ELSE 0 END) AS adjusted_down, SUM(CASE WHEN d.count_delta < 0 THEN -d.count_delta ELSE 0 END) AS count_loss,
+              (SUM(d.damaged_qty) + SUM(CASE WHEN d.adjusted_qty < 0 THEN -d.adjusted_qty ELSE 0 END) + SUM(CASE WHEN d.count_delta < 0 THEN -d.count_delta ELSE 0 END)) AS units,
+              (SUM(d.damaged_qty) + SUM(CASE WHEN d.adjusted_qty < 0 THEN -d.adjusted_qty ELSE 0 END) + SUM(CASE WHEN d.count_delta < 0 THEN -d.count_delta ELSE 0 END)) * COALESCE(p.cost_minor, 0) AS value
+         FROM daily_stats d JOIN products p ON p.id = d.product_id WHERE d.day BETWEEN ? AND ?${loc} GROUP BY p.id HAVING units > 0 ORDER BY value DESC, units DESC LIMIT 1000`, ...range) as Record<string, string | number | null>[];
+    return { ...base, title: 'Shrinkage and write-offs', columns: [text('sku', 'SKU'), text('name', 'Product'), int('damaged', 'Damaged'), int('adjusted_down', 'Adjusted down'), int('count_loss', 'Lost in counts'), int('units', 'Total units'), money('value', 'Value at cost')], rows, totals: sum(rows, ['units', 'value']) };
+  }
+
   // ---------------------------------------------------------- integrity
   /** Verifies invariants I1 and I6. Run nightly; any drift is a sev-1 incident. */
   verifyIntegrity(): { ok: boolean; drift: string[] } {
@@ -1291,6 +1395,12 @@ export class InventoryDO extends DurableObject<Bindings> {
        ) r ON r.product_id = s.product_id AND r.location_id = s.location_id
        WHERE s.reserved <> COALESCE(r.total, 0)`,
     )) drift.push(JSON.stringify({ invariant: 'I3', ...r }));
+    for (const r of this.all(
+      `SELECT m.product_id, m.total AS ledger, COALESCE(d.total, 0) AS rollup
+         FROM (SELECT product_id, SUM(-delta) AS total FROM stock_movements WHERE reason = 'sale' GROUP BY product_id) m
+         LEFT JOIN (SELECT product_id, SUM(sold_qty) AS total FROM daily_stats GROUP BY product_id) d ON d.product_id = m.product_id
+        WHERE m.total <> COALESCE(d.total, 0)`,
+    )) drift.push(JSON.stringify({ invariant: 'I8', ...r }));
     const live = this.all<ProductRow>(`SELECT * FROM products WHERE deleted_at IS NULL`);
     const want = live.reduce((acc, p) => {
       const k = contribution(p);

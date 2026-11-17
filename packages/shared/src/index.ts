@@ -22,7 +22,7 @@ export const ROLE_SUMMARY: Record<Role, string> = {
   viewer: 'Read-only: products, stock, orders and history. No costs.',
 };
 
-export const PERMISSIONS = ['inventory:read', 'cost:read', 'approvals:decide', 'products:write', 'stock:write', 'orders:write', 'team:manage', 'settings:manage', 'audit:read', 'org:delete'] as const;
+export const PERMISSIONS = ['inventory:read', 'cost:read', 'reports:read', 'approvals:decide', 'products:write', 'stock:write', 'orders:write', 'team:manage', 'settings:manage', 'audit:read', 'org:delete'] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 /** Never available to an API key, whatever its scopes: these need a signed-in person. */
 export const SESSION_ONLY: readonly Permission[] = ['team:manage', 'settings:manage', 'audit:read', 'org:delete'];
@@ -31,8 +31,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   viewer: ['inventory:read'],
   sales: ['inventory:read', 'orders:write'],
   stock: ['inventory:read', 'stock:write'],
-  accountant: ['inventory:read', 'cost:read', 'audit:read'],
-  manager: ['inventory:read', 'cost:read', 'approvals:decide', 'products:write', 'stock:write', 'orders:write'],
+  accountant: ['inventory:read', 'cost:read', 'reports:read', 'audit:read'],
+  manager: ['inventory:read', 'cost:read', 'reports:read', 'approvals:decide', 'products:write', 'stock:write', 'orders:write'],
   admin: PERMISSIONS,
 };
 export const can = (role: Role, permission: Permission): boolean => ROLE_PERMISSIONS[role].includes(permission);
@@ -413,3 +413,34 @@ export const SETTINGS_DEFAULTS: OrgSettings = {
   currency: 'USD', taxMode: 'none', taxRateBp: 0, timezone: 'UTC',
   orderPrefix: 'ORD-', poPrefix: 'PO-', invoicePrefix: 'INV-', defaultReorderPoint: null, approvals: APPROVAL_DEFAULTS,
 };
+
+// ---------------------------------------------------------------- reports
+export const REPORTS = ['sales', 'sales-by-product', 'valuation', 'movements', 'low-stock', 'dead-stock', 'shrinkage'] as const;
+export type ReportName = (typeof REPORTS)[number];
+export const REPORT_TITLES: Record<ReportName, string> = {
+  sales: 'Sales by day',
+  'sales-by-product': 'Sales by product',
+  valuation: 'Stock valuation',
+  movements: 'Stock movements by reason',
+  'low-stock': 'Low and out of stock',
+  'dead-stock': 'Dead stock (not selling)',
+  shrinkage: 'Shrinkage and write-offs',
+};
+const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
+export const reportQuery = z.object({
+  from: day.optional(),
+  to: day.optional(),
+  location: z.string().max(40).optional(),
+  days: z.coerce.number().int().min(1).max(365).default(60),
+  format: z.enum(['json', 'csv']).default('json'),
+});
+export interface ReportResult {
+  name: ReportName;
+  title: string;
+  from: string;
+  to: string;
+  columns: { key: string; label: string; kind: 'text' | 'int' | 'money' | 'date' }[];
+  rows: Record<string, string | number | null>[];
+  totals: Record<string, number> | null;
+  note?: string;
+}

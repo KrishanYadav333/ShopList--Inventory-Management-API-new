@@ -336,3 +336,4 @@ a.btn { text-decoration: none; }
 .bell-list li.unread button { background: #eef6fc; font-weight: 600; }
 .mini { width: 72px; padding: 4px 6px; }
 .approvals-rules .check { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; }
+.bar { height: 6px; margin-top: 4px; border-radius: 3px; background: #3498db; min-width: 2px; }
