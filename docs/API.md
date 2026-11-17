@@ -250,3 +250,5 @@ All under `/orgs/{orgId}` unless noted. The generated reference at `/api/docs` i
 While maintenance is on, every write outside `/admin` and `/auth` answers `503 maintenance` with `Retry-After`; reads keep working.
 
 `PATCH /me/notification-preferences` takes `{ orgId, kind, inApp?, email? }`; `kind` may be `digest` (the 08:00 summary, email only). `GET /email/unsubscribe?t=` is public and signed.
+
+| Links | `POST/DELETE /orgs/{orgId}/orders/{id}/share`, `POST/DELETE /orgs/{orgId}/purchase-orders/{id}/share`; public: `GET /s/o/{token}`, `GET /s/po/{token}`, `POST /s/po/{token}/confirm`, `POST /s/po/{token}/dispatched` |

@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { API_KEY_SCOPE_LABELS, PLAN_LIMIT_KEYS, PLAN_LIMIT_LABELS, ROLES, ROLE_LABELS, ROLE_SUMMARY, SETTINGS_DEFAULTS, WEBHOOK_EVENTS, type OrgSettings, type Role } from '@shoplist/shared';
+import { RestoreCard } from '../components/RestoreCard';
+import { API_KEY_SCOPE_LABELS, BACKUP_FORMAT, BACKUP_VERSION, PLAN_LIMIT_KEYS, PLAN_LIMIT_LABELS, ROLES, ROLE_LABELS, ROLE_SUMMARY, SETTINGS_DEFAULTS, WEBHOOK_EVENTS, type OrgSettings, type Role } from '@shoplist/shared';
 import { api, ApiError } from '../api';
 import { useShell } from '../components/Shell';
 import { dateParts } from '../format';
@@ -76,7 +77,7 @@ export function SettingsPage() {
         cursor = page.nextCursor ?? undefined;
       } while (cursor);
       const locs = await api<{ data: unknown[] }>('GET', `/orgs/${org.id}/locations`);
-      const file = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), organization: { id: org.id, name: org.name, currency: org.currency }, locations: locs.data, products }, null, 2)], { type: 'application/json' });
+      const file = new Blob([JSON.stringify({ format: BACKUP_FORMAT, version: BACKUP_VERSION, exportedAt: new Date().toISOString(), organization: { id: org.id, name: org.name, currency: org.currency }, locations: locs.data, products }, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(file);
       a.download = `shoplist-backup-${org.name.replace(/[^\w-]+/g, '-')}-${new Date().toISOString().slice(0, 10)}.json`;
@@ -526,8 +527,9 @@ export function SettingsPage() {
         {admin && (
           <section className="card">
             <h2>Backup</h2>
-            <p className="hint">Download every product and location as one JSON file. Keep it somewhere safe before big changes. To restore, export products to CSV from the Products page and use Import.</p>
+            <p className="hint">Download every product and location as one JSON file. Keep it somewhere safe before big changes. </p>
             <button className="btn btn-outline" onClick={backup} disabled={backingUp}>{backingUp ? 'Preparing…' : 'Download backup (JSON)'}</button>
+            <RestoreCard orgId={org.id} orgName={org.name} />
           </section>
         )}
 

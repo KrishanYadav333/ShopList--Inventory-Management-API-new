@@ -564,7 +564,7 @@ export function lineTax(mode: TaxMode, rateBp: number, lineMinor: number): numbe
 export const PLAN_LIMIT_KEYS = ['products', 'members', 'locations', 'apiKeys', 'webhooks', 'ordersPerMonth', 'importsPerDay'] as const;
 export type PlanLimitKey = (typeof PLAN_LIMIT_KEYS)[number];
 export const PLAN_LIMIT_LABELS: Record<PlanLimitKey, string> = {
-  products: 'Products', members: 'Team members (including pending invitations)', locations: 'Locations', apiKeys: 'Active API keys', webhooks: 'Webhooks', ordersPerMonth: 'Orders per month', importsPerDay: 'Imports per day',
+  products: 'Products', members: 'Team members (including pending invitations)', locations: 'Locations', apiKeys: 'Active API keys', webhooks: 'Webhooks', ordersPerMonth: 'Orders per month', importsPerDay: 'Imported products per day',
 };
 export const PLAN_FEATURE_KEYS = ['orders', 'purchasing', 'approvals', 'reports', 'apiKeys', 'webhooks', 'import', 'supportAccess'] as const;
 export type PlanFeatureKey = (typeof PLAN_FEATURE_KEYS)[number];
@@ -590,4 +590,54 @@ export function resolvePlan(limitsJson: string, featuresJson: string, overridesJ
   for (const [k, v] of Object.entries(o.limits ?? {})) if (v !== undefined) limits[k as PlanLimitKey] = v;
   for (const [k, v] of Object.entries(o.features ?? {})) if (typeof v === 'boolean') features[k as PlanFeatureKey] = v;
   return { limits, features };
+}
+
+// ------------------------------------------------------------------ restore from a backup file (F26)
+export const BACKUP_FORMAT = 'shoplist-backup';
+export const BACKUP_VERSION = 1;
+export const RESTORE_MAX_PRODUCTS = 20_000;
+export interface ParsedBackup {
+  fromOrgId: string | null;
+  fromName: string | null;
+  locations: LocationInput[];
+  rows: ImportRow[];
+  skipped: { sku: string; reason: string }[];
+}
+
+/**
+ * Reads a ShopList backup file (the JSON the Backup button downloads) into locations and import rows.
+ * Nothing is trusted: every product goes through the same rules as a CSV import. Files made before the
+ * format marker existed (no `format`, no `version`) are accepted.
+ */
+export function parseBackup(raw: unknown): { ok: true; backup: ParsedBackup } | { ok: false; error: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'This is not a ShopList backup file.' };
+  const f = raw as Record<string, unknown>;
+  if (f.format !== undefined && f.format !== BACKUP_FORMAT) return { ok: false, error: 'This is not a ShopList backup file.' };
+  if (f.version !== undefined && f.version !== BACKUP_VERSION) return { ok: false, error: 'This backup was made by a newer version of ShopList. Update ShopList, then try again.' };
+  if (!Array.isArray(f.products)) return { ok: false, error: 'This file has no products in it.' };
+  if (f.products.length > RESTORE_MAX_PRODUCTS) return { ok: false, error: `A backup can hold up to ${RESTORE_MAX_PRODUCTS.toLocaleString()} products.` };
+  const org = f.organization && typeof f.organization === 'object' ? (f.organization as Record<string, unknown>) : {};
+  const rows: ImportRow[] = [];
+  const skipped: { sku: string; reason: string }[] = [];
+  const seen = new Set<string>();
+  for (const p of f.products) {
+    const o = (p && typeof p === 'object' ? p : {}) as Record<string, unknown>;
+    const sku = typeof o.sku === 'string' ? o.sku : '(no code)';
+    if (o.deletedAt) continue; // deleted products stay deleted
+    if (seen.has(sku)) { skipped.push({ sku, reason: 'The code appears twice in the file.' }); continue; }
+    const parsed = importRow.safeParse({
+      sku: o.sku, name: o.name, priceMinor: o.priceMinor, costMinor: o.costMinor ?? null, barcode: o.barcode ?? null, unit: o.unit ?? undefined,
+      reorderPoint: o.reorderPoint ?? null, tags: o.tags ?? undefined, description: o.description ?? null,
+      quantity: typeof o.onHand === 'number' ? Math.max(0, o.onHand) : undefined,
+    });
+    if (!parsed.success) { skipped.push({ sku, reason: parsed.error.issues[0]?.message ?? 'Not valid.' }); continue; }
+    seen.add(sku);
+    rows.push(parsed.data);
+  }
+  const locations: LocationInput[] = [];
+  for (const l of Array.isArray(f.locations) ? f.locations : []) {
+    const parsed = locationInput.safeParse({ name: (l as Record<string, unknown>)?.name, code: (l as Record<string, unknown>)?.code });
+    if (parsed.success && !locations.some((x) => x.code === parsed.data.code)) locations.push(parsed.data);
+  }
+  return { ok: true, backup: { fromOrgId: typeof org.id === 'string' ? org.id : null, fromName: typeof org.name === 'string' ? org.name : null, locations, rows, skipped } };
 }

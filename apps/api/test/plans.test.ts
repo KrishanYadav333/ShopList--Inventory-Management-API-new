@@ -71,6 +71,10 @@ describe('plans and limits (F20)', () => {
     refused(await order());
     expect((await imp(org, [{ sku: `A-${uid()}`, name: 'A', priceMinor: 1 }])).status).toBe(200);
     refused(await imp(org, [{ sku: `B-${uid()}`, name: 'B', priceMinor: 1 }]));
+    // Counted in rows: two rows do not fit in a day that has room for one.
+    await setPlan(org, 'free', { limits: { importsPerDay: 5 } });
+    expect((await imp(org, [1, 2, 3, 4].map((n) => ({ sku: `C${n}-${uid()}`, name: 'C', priceMinor: 1 })))).status).toBe(200);
+    refused(await imp(org, [1, 2].map((n) => ({ sku: `D${n}-${uid()}`, name: 'D', priceMinor: 1 }))));
   });
 
   it('a switched-off feature 404s its routes and the others keep working', async () => {

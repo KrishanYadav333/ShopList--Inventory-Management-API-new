@@ -1179,12 +1179,12 @@ export class InventoryDO extends DurableObject<Bindings> {
         return ok({ status: hit.status, body: JSON.parse(hit.response) as { results: ImportResult[] } });
       }
     }
-    // One import call is one use of the day's allowance, whatever it contains.
+    // The daily allowance is counted in rows, so one large file costs the same however it is split into calls.
     const day = `imports_${nowIso().slice(0, 10)}`;
     const used = this.one<{ value: number }>(`SELECT value FROM counters WHERE name = ?`, day)?.value ?? 0;
     const max = c.limits?.importsPerDay;
-    if (max !== undefined && max !== null && used >= max) return { ok: false, status: 403, code: 'plan_limit', detail: `Your plan allows ${max} imports per day. Ask the ShopList owner to raise it.` };
-    this.run(`INSERT INTO counters(name, value) VALUES (?, 1) ON CONFLICT(name) DO UPDATE SET value = value + 1`, day);
+    if (max !== undefined && max !== null && used + rows.length > max) return { ok: false, status: 403, code: 'plan_limit', detail: `Your plan allows ${max.toLocaleString()} imported products per day (${used.toLocaleString()} used today). Ask the ShopList owner to raise it.` };
+    this.run(`INSERT INTO counters(name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = value + excluded.value`, day, rows.length);
     const results: ImportResult[] = rows.map(({ index, row }) => {
       try {
         return this.ctx.storage.transactionSync(() => this.importRow(c, mode, index, row));
