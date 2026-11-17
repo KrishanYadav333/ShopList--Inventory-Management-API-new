@@ -233,13 +233,13 @@ export async function keyFromBearer(env: Bindings, bearer: string): Promise<ApiK
  */
 export async function acceptPendingInvitations(env: Pick<Bindings, 'DB'>, user: { id: string; email: string }): Promise<number> {
   const now = new Date().toISOString();
-  const { results } = await env.DB.prepare(`SELECT token_hash, org_id, role FROM invitations WHERE lower(email) = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
+  const { results } = await env.DB.prepare(`SELECT token_hash, org_id, role, location_ids AS locationIds FROM invitations WHERE lower(email) = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
     .bind(user.email.toLowerCase(), now)
-    .all<{ token_hash: string; org_id: string; role: string }>();
+    .all<{ token_hash: string; org_id: string; role: string; locationIds: string | null }>();
   if (!results.length) return 0;
   await env.DB.batch(
     results.flatMap((i) => [
-      env.DB.prepare(`INSERT OR IGNORE INTO memberships(org_id, user_id, role, created_at) VALUES (?, ?, ?, ?)`).bind(i.org_id, user.id, i.role, now),
+      env.DB.prepare(`INSERT OR IGNORE INTO memberships(org_id, user_id, role, created_at, location_ids) VALUES (?, ?, ?, ?, ?)`).bind(i.org_id, user.id, i.role, now, i.locationIds),
       env.DB.prepare(`UPDATE invitations SET accepted_at = ? WHERE token_hash = ?`).bind(now, i.token_hash),
     ]),
   );

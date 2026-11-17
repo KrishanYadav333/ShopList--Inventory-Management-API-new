@@ -233,10 +233,13 @@ export const apiKeyInput = z
 export const orgInput = z.object({ name: text(100) }).strict();
 
 export const inviteInput = z
-  .object({ email: z.string().trim().toLowerCase().email().max(254), role: z.enum(ROLES), confirmSecondAdmin: z.boolean().optional() })
+  .object({ email: z.string().trim().toLowerCase().email().max(254), role: z.enum(ROLES), confirmSecondAdmin: z.boolean().optional(), locationIds: z.array(z.string().max(40)).max(50).nullable().optional() })
   .strict();
 
-export const memberPatch = z.object({ role: z.enum(ROLES), confirmSecondAdmin: z.boolean().optional() }).strict();
+export const memberPatch = z
+  .object({ role: z.enum(ROLES).optional(), confirmSecondAdmin: z.boolean().optional(), locationIds: z.array(z.string().max(40)).max(50).nullable().optional() })
+  .strict()
+  .refine((v) => v.role !== undefined || v.locationIds !== undefined, 'Change a role or the locations');
 
 // ---------------------------------------------------------------- queries
 const limit = z.coerce.number().int().min(1).max(LIMITS.maxPageSize).default(LIMITS.defaultPageSize);

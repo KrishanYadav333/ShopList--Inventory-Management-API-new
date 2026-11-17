@@ -63,7 +63,7 @@ import { base64url, decodeCursor, encodeCursor, newId, nowIso, randomToken, sha2
 
 export { InventoryDO } from './inventory-do';
 
-type Vars = { requestId: string; user: AuthUser; org: { id: string; role: Role }; apiKey?: ApiKeyPrincipal };
+type Vars = { requestId: string; user: AuthUser; org: { id: string; role: Role; locationIds: string[] | null }; apiKey?: ApiKeyPrincipal };
 type Ctx = Context<{ Bindings: Bindings; Variables: Vars }>;
 
 const MAX_BODY = 64 * 1024;
@@ -157,6 +157,12 @@ function ifMatch(c: Ctx): number {
 }
 
 const caller = (c: Ctx): Caller => ({ actor: c.get('user').id, requestId: c.get('requestId') });
+/** A member limited to some locations may only write at those. Reads are never limited. */
+function needLocation(c: Ctx, locationId: string | null | undefined): void {
+  const allowed = c.get('org').locationIds;
+  if (allowed && (!locationId || !allowed.includes(locationId))) throw new AppError(403, 'location_not_allowed', 'You are not set up to work at that location. Ask your admin.');
+}
+
 const inventory = (c: Ctx) => c.env.INVENTORY.get(c.env.INVENTORY.idFromName(c.get('org').id));
 const etag = (c: Ctx, version: number) => c.header('ETag', `"${version}"`);
 
@@ -220,18 +226,20 @@ const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindin
     if (SESSION_ONLY.includes(permission) || !can(granted, permission)) {
       throw new AppError(403, 'forbidden', 'This API key does not have permission to do that.');
     }
-    c.set('org', { id: orgId, role: granted });
+    c.set('org', { id: orgId, role: granted, locationIds: null });
     return next();
   }
   const row = await c.env.DB.prepare(
-    `SELECT m.role FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.org_id = ? AND m.user_id = ? AND m.deactivated_at IS NULL AND o.deleted_at IS NULL AND o.suspended_at IS NULL`,
+    `SELECT m.role, m.location_ids AS locationIds FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.org_id = ? AND m.user_id = ? AND m.deactivated_at IS NULL AND o.deleted_at IS NULL AND o.suspended_at IS NULL`,
   )
     .bind(orgId, c.get('user').id)
-    .first<{ role: Role }>();
+    .first<{ role: Role; locationIds: string | null }>();
   // Not a member: 404, so organization ids cannot be probed.
   if (!row) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
   if (!can(row.role, permission)) throw new AppError(403, 'forbidden', `Your role (${row.role}) cannot do this. Ask your admin for access.`);
-  c.set('org', { id: orgId, role: row.role });
+  let locationIds: string[] | null = null;
+  try { locationIds = row.locationIds ? (JSON.parse(row.locationIds) as string[]) : null; } catch { locationIds = []; }
+  c.set('org', { id: orgId, role: row.role, locationIds });
   return next();
 };
 
@@ -525,13 +533,17 @@ route('delete', '/orgs/:orgId', 'org:delete', async (c) => {
 // ------------------------------------------------------------------- members
 route('get', '/orgs/:orgId/members', 'inventory:read', async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT u.id, u.name, u.email, u.avatar_url, m.role, m.created_at, m.deactivated_at AS deactivatedAt,
+    `SELECT u.id, u.name, u.email, u.avatar_url, m.role, m.created_at, m.deactivated_at AS deactivatedAt, m.location_ids AS locationIds,
             (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id) AS lastSeenAt
        FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = ? ORDER BY m.created_at`,
-  ).bind(c.get('org').id).all<{ email: string; lastSeenAt: string | null }>();
+  ).bind(c.get('org').id).all();
   // Staff see who their colleagues are, not how to reach them or when they were last on.
   const manage = can(c.get('org').role, 'team:manage');
-  return c.json({ data: manage ? results : results.map(({ email: _e, lastSeenAt: _l, ...rest }) => rest) });
+  const shaped: Record<string, unknown>[] = (results as Record<string, unknown>[]).map((r) => {
+    const { locationIds, ...rest } = r;
+    return { ...rest, locationIds: typeof locationIds === 'string' ? (JSON.parse(locationIds) as string[]) : null };
+  });
+  return c.json({ data: manage ? shaped : shaped.map((r) => { const { email: _e, lastSeenAt: _l, locationIds: _s, ...rest } = r; return rest; }) });
 });
 
 async function adminCount(c: Ctx): Promise<number> {
@@ -545,14 +557,28 @@ async function guardSecondAdmin(c: Ctx, role: Role, confirmed: boolean | undefin
   if (n > 0) throw new AppError(409, 'second_admin', 'This organization already has an admin. An organization normally has one. Confirm to add another.');
 }
 
+/** Checks that every id is a real, active location of this business. */
+async function checkLocations(c: Ctx, ids: string[] | null | undefined): Promise<string[] | null> {
+  if (!ids) return null;
+  const known = new Set((await inventory(c).listLocations()).map((l) => l.id));
+  if (ids.some((id) => !known.has(id))) throw new AppError(400, 'unknown_location', 'One of those locations does not exist.');
+  return [...new Set(ids)];
+}
+
 route('patch', '/orgs/:orgId/members/:userId', 'team:manage', async (c) => {
   const { data } = await readJson(c, memberPatch);
   const userId = c.req.param('userId') ?? '';
   const target = await c.env.DB.prepare(`SELECT role FROM memberships WHERE org_id = ? AND user_id = ?`).bind(c.get('org').id, userId).first<{ role: Role }>();
   if (!target) throw new AppError(404, 'member_not_found', 'That person is not a member.');
-  if (target.role === 'admin' && data.role !== 'admin' && (await adminCount(c)) <= 1) throw new AppError(409, 'last_admin', 'An organization needs at least one admin. Make someone else admin first.');
-  await guardSecondAdmin(c, data.role, data.confirmSecondAdmin, userId);
-  await c.env.DB.prepare(`UPDATE memberships SET role = ? WHERE org_id = ? AND user_id = ?`).bind(data.role, c.get('org').id, userId).run();
+  const role = data.role ?? target.role;
+  if (target.role === 'admin' && role !== 'admin' && (await adminCount(c)) <= 1) throw new AppError(409, 'last_admin', 'An organization needs at least one admin. Make someone else admin first.');
+  await guardSecondAdmin(c, role, data.confirmSecondAdmin, userId);
+  const scope = data.locationIds !== undefined ? await checkLocations(c, data.locationIds) : undefined;
+  // Admins are never limited to locations.
+  const clearScope = role === 'admin';
+  await c.env.DB.prepare(`UPDATE memberships SET role = ?${scope !== undefined || clearScope ? ', location_ids = ?' : ''} WHERE org_id = ? AND user_id = ?`)
+    .bind(role, ...(clearScope ? [null] : scope !== undefined ? [scope ? JSON.stringify(scope) : null] : []), c.get('org').id, userId)
+    .run();
   return c.json({ ok: true });
 });
 
@@ -595,14 +621,14 @@ route('post', '/orgs/:orgId/admin-handover', 'team:manage', async (c) => {
 });
 
 /** Creates an invitation, replacing any pending one for the same email in the same organization. The token is shown once. */
-async function createInvitation(c: Ctx, o: { orgId: string; email: string; role: Role; invitedBy: string }) {
+async function createInvitation(c: Ctx, o: { orgId: string; email: string; role: Role; invitedBy: string; locationIds?: string[] | null }) {
   const token = randomToken(32);
   const id = newId('inv');
   const now = nowIso();
   const expiresAt = new Date(Date.now() + 7 * 86400_000).toISOString();
   await c.env.DB.batch([
     c.env.DB.prepare(`UPDATE invitations SET revoked_at = ? WHERE org_id = ? AND lower(email) = ? AND accepted_at IS NULL AND revoked_at IS NULL`).bind(now, o.orgId, o.email.toLowerCase()),
-    c.env.DB.prepare(`INSERT INTO invitations(id, token_hash, org_id, email, role, invited_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, await sha256Hex(token), o.orgId, o.email, o.role, o.invitedBy, now, expiresAt),
+    c.env.DB.prepare(`INSERT INTO invitations(id, token_hash, org_id, email, role, invited_by, created_at, expires_at, location_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, await sha256Hex(token), o.orgId, o.email, o.role, o.invitedBy, now, expiresAt, o.locationIds && o.role !== 'admin' ? JSON.stringify(o.locationIds) : null),
   ]);
   return { id, token, link: `${c.env.APP_ORIGIN}/invite/${token}`, expiresAt };
 }
@@ -612,7 +638,8 @@ route('post', '/orgs/:orgId/invitations', 'team:manage', async (c) => {
   await guardSecondAdmin(c, data.role, data.confirmSecondAdmin);
   const existing = await c.env.DB.prepare(`SELECT 1 AS x FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = ? AND lower(u.email) = ?`).bind(c.get('org').id, data.email.toLowerCase()).first();
   if (existing) throw new AppError(409, 'already_member', 'That person is already a member of this organization.');
-  const inv = await createInvitation(c, { orgId: c.get('org').id, email: data.email, role: data.role, invitedBy: c.get('user').id });
+  const locationIds = await checkLocations(c, data.locationIds);
+  const inv = await createInvitation(c, { orgId: c.get('org').id, email: data.email, role: data.role, invitedBy: c.get('user').id, locationIds });
   // The token is shown once; share the link with the invitee.
   return c.json({ id: inv.id, token: inv.token, link: inv.link, expiresAt: inv.expiresAt, email: data.email, role: data.role }, 201);
 });
@@ -627,14 +654,14 @@ route('get', '/orgs/:orgId/invitations', 'team:manage', async (c) => {
 });
 
 async function pendingInvitation(c: Ctx, id: string) {
-  const inv = await c.env.DB.prepare(`SELECT id, email, role FROM invitations WHERE id = ? AND org_id = ? AND accepted_at IS NULL AND revoked_at IS NULL`).bind(id, c.get('org').id).first<{ id: string; email: string; role: Role }>();
+  const inv = await c.env.DB.prepare(`SELECT id, email, role, location_ids AS locationIds FROM invitations WHERE id = ? AND org_id = ? AND accepted_at IS NULL AND revoked_at IS NULL`).bind(id, c.get('org').id).first<{ id: string; email: string; role: Role; locationIds: string | null }>();
   if (!inv) throw new AppError(404, 'invitation_invalid', 'This invitation is invalid or has already been used.');
   return inv;
 }
 
 route('post', '/orgs/:orgId/invitations/:invId/resend', 'team:manage', async (c) => {
   const old = await pendingInvitation(c, c.req.param('invId') ?? '');
-  const inv = await createInvitation(c, { orgId: c.get('org').id, email: old.email, role: old.role, invitedBy: c.get('user').id });
+  const inv = await createInvitation(c, { orgId: c.get('org').id, email: old.email, role: old.role, invitedBy: c.get('user').id, locationIds: old.locationIds ? JSON.parse(old.locationIds) : null });
   return c.json({ id: inv.id, link: inv.link, expiresAt: inv.expiresAt });
 });
 
@@ -646,13 +673,13 @@ route('delete', '/orgs/:orgId/invitations/:invId', 'team:manage', async (c) => {
 
 route('post', '/invitations/:token/accept', 'user', async (c) => {
   const hash = await sha256Hex(c.req.param('token') ?? '');
-  const inv = await c.env.DB.prepare(`SELECT org_id, email, role, expires_at, accepted_at, revoked_at FROM invitations WHERE token_hash = ?`).bind(hash).first<{ org_id: string; email: string; role: Role; expires_at: string; accepted_at: string | null; revoked_at: string | null }>();
+  const inv = await c.env.DB.prepare(`SELECT org_id, email, role, expires_at, accepted_at, revoked_at, location_ids AS locationIds FROM invitations WHERE token_hash = ?`).bind(hash).first<{ org_id: string; email: string; role: Role; expires_at: string; accepted_at: string | null; revoked_at: string | null; locationIds: string | null }>();
   if (!inv || inv.accepted_at || inv.revoked_at || Date.parse(inv.expires_at) < Date.now()) throw new AppError(404, 'invitation_invalid', 'This invitation is invalid or has expired.');
   const user = c.get('user');
   // A stolen link is useless to anyone signed in with a different email.
   if (inv.email.toLowerCase() !== user.email.toLowerCase()) throw new AppError(403, 'invitation_wrong_account', `This invitation was sent to ${inv.email}. Sign in with that account.`);
   await c.env.DB.batch([
-    c.env.DB.prepare(`INSERT OR IGNORE INTO memberships(org_id, user_id, role, created_at) VALUES (?, ?, ?, ?)`).bind(inv.org_id, user.id, inv.role, nowIso()),
+    c.env.DB.prepare(`INSERT OR IGNORE INTO memberships(org_id, user_id, role, created_at, location_ids) VALUES (?, ?, ?, ?, ?)`).bind(inv.org_id, user.id, inv.role, nowIso(), inv.locationIds),
     c.env.DB.prepare(`UPDATE invitations SET accepted_at = ? WHERE token_hash = ?`).bind(nowIso(), hash),
   ]);
   return c.json({ organizationId: inv.org_id, role: inv.role });
@@ -823,18 +850,21 @@ route('delete', '/orgs/:orgId/locations/:id', 'settings:manage', async (c) => {
 
 route('post', '/orgs/:orgId/stock/movements', 'stock:write', async (c) => {
   const { data, raw } = await readJson(c, movementInput);
+  needLocation(c, data.locationId);
   const out = unwrap(await inventory(c).addMovement(caller(c), await idemFrom(c, raw), data));
   return c.json(out.body, out.status as 201);
 });
 
 route('post', '/orgs/:orgId/stock/transfers', 'stock:write', async (c) => {
   const { data, raw } = await readJson(c, transferInput);
+  needLocation(c, data.fromLocationId); // may send to anywhere, but only from their own location
   const out = unwrap(await inventory(c).transfer(caller(c), await idemFrom(c, raw), data));
   return c.json(out.body, out.status as 201);
 });
 
 route('post', '/orgs/:orgId/stock/counts', 'stock:write', async (c) => {
   const { data, raw } = await readJson(c, countInput);
+  needLocation(c, data.locationId);
   const out = unwrap(await inventory(c).count(caller(c), await idemFrom(c, raw), data));
   return c.json(out.body, out.status as 201);
 });
@@ -843,8 +873,18 @@ route('post', '/orgs/:orgId/stock/counts', 'stock:write', async (c) => {
 // -------------------------------------------------------------------- orders
 route('get', '/orgs/:orgId/orders', 'inventory:read', async (c) => c.json(await inventory(c).listOrders(parse(orderListQuery, c.req.query()))));
 
+/** Scoped staff can only act on orders fulfilled from their locations. */
+async function orderLocationGuard(c: Ctx): Promise<void> {
+  if (!c.get('org').locationIds) return;
+  const r = unwrap(await inventory(c).getOrder(c.req.param('id') ?? ''));
+  needLocation(c, r.order.locationId);
+}
+
 route('post', '/orgs/:orgId/orders', 'orders:write', async (c) => {
-  const { data, raw } = await readJson(c, orderInput);
+  const { data: parsed, raw } = await readJson(c, orderInput);
+  const scoped = c.get('org').locationIds;
+  const data = scoped && !parsed.locationId ? { ...parsed, locationId: scoped[0] } : parsed; // scoped staff default to their own location
+  needLocation(c, data.locationId);
   const out = unwrap(await inventory(c).createOrder(caller(c), await idemFrom(c, raw), data));
   etag(c, out.body.order.version);
   return c.json(out.body, out.status as 201);
@@ -857,6 +897,7 @@ route('get', '/orgs/:orgId/orders/:id', 'inventory:read', async (c) => {
 });
 
 route('post', '/orgs/:orgId/orders/:id/paid', 'orders:write', async (c) => {
+  await orderLocationGuard(c);
   const version = ifMatch(c);
   const { data } = await readJson(c, paidInput);
   const out = unwrap(await inventory(c).setOrderPaid(caller(c), c.req.param('id') ?? '', version, data.paid));
@@ -865,12 +906,14 @@ route('post', '/orgs/:orgId/orders/:id/paid', 'orders:write', async (c) => {
 });
 
 route('post', '/orgs/:orgId/orders/:id/ship', 'orders:write', async (c) => {
+  await orderLocationGuard(c);
   const out = unwrap(await inventory(c).shipOrder(caller(c), c.req.param('id') ?? '', ifMatch(c)));
   etag(c, out.body.order.version);
   return c.json(out.body, out.status as 200);
 });
 
 route('post', '/orgs/:orgId/orders/:id/cancel', 'orders:write', async (c) => {
+  await orderLocationGuard(c);
   const out = unwrap(await inventory(c).cancelOrder(caller(c), c.req.param('id') ?? '', ifMatch(c)));
   etag(c, out.body.order.version);
   return c.json(out.body, out.status as 200);

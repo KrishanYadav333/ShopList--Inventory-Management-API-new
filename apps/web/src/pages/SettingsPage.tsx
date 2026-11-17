@@ -10,7 +10,7 @@ import { canAdmin, useLocations, useMe } from '../queries';
 import { useToast } from '../toast';
 import { addPasskey, passkeysSupported, wasCancelled } from '../passkeys';
 
-interface Member { id: string; name: string; email?: string; role: Role; deactivatedAt?: string | null; lastSeenAt?: string | null }
+interface Member { id: string; name: string; email?: string; role: Role; deactivatedAt?: string | null; lastSeenAt?: string | null; locationIds?: string[] | null }
 interface Pending { id: string; email: string; role: Role; createdAt: string; expiresAt: string; invitedBy: string | null }
 
 export function SettingsPage() {
@@ -98,6 +98,7 @@ export function SettingsPage() {
   const revokeInv = useMutation({ mutationFn: (id: string) => api('DELETE', `/orgs/${org.id}/invitations/${id}`), onSuccess: () => { refreshTeam(); toast({ text: 'Invitation revoked' }); }, onError: fail });
   const setActive = useMutation({ mutationFn: (v: { id: string; on: boolean }) => api('POST', `/orgs/${org.id}/members/${v.id}/${v.on ? 'reactivate' : 'deactivate'}`, { body: {} }), onSuccess: (_r, v) => { refreshTeam(); toast({ text: v.on ? 'Member reactivated' : 'Member deactivated' }); }, onError: fail });
   const handover = useMutation({ mutationFn: (v: { userId: string; confirmName: string }) => api('POST', `/orgs/${org.id}/admin-handover`, { body: v }), onSuccess: () => { qc.invalidateQueries(); toast({ kind: 'success', text: 'Admin role handed over' }); }, onError: fail });
+  const setScope = useMutation({ mutationFn: (v: { id: string; locationIds: string[] | null }) => api('PATCH', `/orgs/${org.id}/members/${v.id}`, { body: { locationIds: v.locationIds } }), onSuccess: () => { refreshTeam(); toast({ text: 'Locations updated' }); }, onError: fail });
   const removeMember = useMutation({ mutationFn: (id: string) => api('DELETE', `/orgs/${org.id}/members/${id}`), onSuccess: () => { refresh(); toast({ text: 'Member removed' }); }, onError: fail });
   const [invite, setInvite] = useState({ email: '', role: 'manager' });
   const [link, setLink] = useState('');
@@ -185,6 +186,18 @@ export function SettingsPage() {
                       {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
                     </select>
                   ) : <span className="tag">{ROLE_LABELS[m.role] ?? m.role}</span>}
+                  {admin && m.id !== me.data?.user.id && m.role !== 'admin' && (locations.data?.length ?? 0) > 1 && (
+                    <details className="scope">
+                      <summary>{m.locationIds ? `${m.locationIds.length} location${m.locationIds.length === 1 ? '' : 's'}` : 'All locations'}</summary>
+                      <div className="scope-menu">
+                        <label className="check"><input type="checkbox" checked={!m.locationIds} onChange={() => setScope.mutate({ id: m.id, locationIds: m.locationIds ? null : [] })} /> All locations</label>
+                        {m.locationIds && locations.data?.map((l) => (
+                          <label className="check" key={l.id}><input type="checkbox" checked={m.locationIds!.includes(l.id)} onChange={(e) => setScope.mutate({ id: m.id, locationIds: e.target.checked ? [...m.locationIds!, l.id] : m.locationIds!.filter((x) => x !== l.id) })} /> {l.name}</label>
+                        ))}
+                        {m.locationIds && <p className="hint">Can see every location; can change stock and orders only at the ticked ones.</p>}
+                      </div>
+                    </details>
+                  )}
                   {admin && m.id !== me.data?.user.id && (m.deactivatedAt
                     ? <button className="btn btn-outline" onClick={() => setActive.mutate({ id: m.id, on: true })}>Reactivate</button>
                     : <button className="btn btn-outline" onClick={() => { if (confirm(`Deactivate ${m.name}? They lose access now. Their history stays.`)) setActive.mutate({ id: m.id, on: false }); }}>Deactivate</button>)}
