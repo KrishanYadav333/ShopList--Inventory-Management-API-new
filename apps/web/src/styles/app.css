@@ -358,3 +358,7 @@ a.btn { text-decoration: none; }
 
 .check-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 4px 0; }
 .check-row > span { flex: 1 1 220px; }
+
+.invoice h2 { margin: 20px 0 6px; }
+.invoice h3 { margin: 20px 0 8px; }
+.invoice table, .invoice section { margin-top: 12px; }
