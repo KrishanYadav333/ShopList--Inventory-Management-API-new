@@ -197,6 +197,11 @@ export function Shell() {
 
       <main className="main-content" id="main" tabIndex={-1}>
         {!online && <div className="banner banner-warn" role="status">You are offline. Showing saved data; changes are disabled until you reconnect.</div>}
+        {org.deleteAfter && (
+          <div className="banner banner-warn" role="status">
+            <strong>{org.name} is scheduled for deletion on {new Date(org.deleteAfter).toLocaleDateString()}.</strong> It is read-only until then.{org.role === 'admin' && <> <NavLink to={`/o/${orgId}/settings`}>Cancel deletion in Settings</NavLink></>}
+          </div>
+        )}
         {supportOrg && (
           <div className="banner banner-support" role="status">
             <strong>Support view of {supportOrg.orgName}.</strong> Read-only. Ends at {new Date(supportOrg.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Every page you open is logged.

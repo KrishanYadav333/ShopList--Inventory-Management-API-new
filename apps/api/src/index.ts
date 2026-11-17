@@ -263,8 +263,14 @@ const requireSuper: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> =
 };
 
 /** The org id in the URL is checked against the caller's memberships before any Durable Object is touched. */
-type PlanRow = { limits: string; features: string; planId: string; overrides: string | null };
+type PlanRow = { limits: string; features: string; planId: string; overrides: string | null; deleteAfter?: string | null };
 const planOf = (r: PlanRow): OrgPlan => ({ id: r.planId, ...resolvePlan(r.limits, r.features, r.overrides) });
+/** A business waiting to be deleted can be read and exported, but nothing can be changed except cancelling the deletion. */
+function readOnlyWhenDeleting(c: Ctx, deleteAfter: string | null | undefined): void {
+  if (!deleteAfter || c.req.method === 'GET' || c.req.method === 'HEAD') return;
+  if (c.req.method === 'POST' && new URL(c.req.url).pathname.endsWith('/cancel-deletion')) return;
+  throw new AppError(403, 'org_read_only', `This business is scheduled for deletion on ${deleteAfter.slice(0, 10)} and is read-only. Cancel the deletion to make changes.`);
+}
 /** A switched-off feature answers 404, so it is indistinguishable from a route that does not exist. */
 function gate(c: Ctx, plan: OrgPlan): void {
   const parts = new URL(c.req.url).pathname.split('/');
@@ -315,8 +321,9 @@ const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindin
     // Inventory only: never members, invitations, the activity log or organization settings.
     const area = new URL(c.req.url).pathname.split('/')[5] ?? '';
     if (!['products', 'locations', 'stock', 'orders', 'dashboard', 'reports'].includes(area)) throw new AppError(403, 'forbidden', 'API keys can only be used for inventory.');
-    const live = await c.env.DB.prepare(`SELECT p.limits, p.features, o.plan_id AS planId, o.plan_overrides AS overrides FROM organizations o JOIN plans p ON p.id = o.plan_id WHERE o.id = ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL`).bind(orgId).first<PlanRow>();
+    const live = await c.env.DB.prepare(`SELECT p.limits, p.features, o.plan_id AS planId, o.plan_overrides AS overrides, o.delete_after AS deleteAfter FROM organizations o JOIN plans p ON p.id = o.plan_id WHERE o.id = ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL`).bind(orgId).first<PlanRow>();
     if (!live) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
+    readOnlyWhenDeleting(c, live.deleteAfter);
     const plan = planOf(live);
     gate(c, plan);
     const perms = keyPermissions(key.scopes);
@@ -327,7 +334,7 @@ const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindin
     return next();
   }
   const row = await c.env.DB.prepare(
-    `SELECT m.role, m.location_ids AS locationIds, p.limits, p.features, o.plan_id AS planId, o.plan_overrides AS overrides FROM memberships m JOIN organizations o ON o.id = m.org_id JOIN plans p ON p.id = o.plan_id WHERE m.org_id = ? AND m.user_id = ? AND m.deactivated_at IS NULL AND o.deleted_at IS NULL AND o.suspended_at IS NULL`,
+    `SELECT m.role, m.location_ids AS locationIds, p.limits, p.features, o.plan_id AS planId, o.plan_overrides AS overrides, o.delete_after AS deleteAfter FROM memberships m JOIN organizations o ON o.id = m.org_id JOIN plans p ON p.id = o.plan_id WHERE m.org_id = ? AND m.user_id = ? AND m.deactivated_at IS NULL AND o.deleted_at IS NULL AND o.suspended_at IS NULL`,
   )
     .bind(orgId, c.get('user').id)
     .first<{ role: Role; locationIds: string | null } & PlanRow>();
@@ -340,6 +347,7 @@ const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindin
   if (!can(row.role, permission)) throw new AppError(403, 'forbidden', `Your role (${row.role}) cannot do this. Ask your admin for access.`);
   let locationIds: string[] | null = null;
   try { locationIds = row.locationIds ? (JSON.parse(row.locationIds) as string[]) : null; } catch { locationIds = []; }
+  readOnlyWhenDeleting(c, row.deleteAfter);
   const plan = planOf(row);
   gate(c, plan);
   c.set('org', { id: orgId, role: row.role, locationIds, plan });
@@ -681,7 +689,7 @@ route('post', '/auth/logout', 'user', async (c) => {
 route('get', '/me', 'user', async (c) => {
   const user = c.get('user');
   const { results } = await c.env.DB.prepare(
-    `SELECT o.id, o.name, o.slug, o.currency, m.role FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.user_id = ? AND m.deactivated_at IS NULL AND o.deleted_at IS NULL AND o.suspended_at IS NULL ORDER BY o.name`,
+    `SELECT o.id, o.name, o.slug, o.currency, m.role, o.delete_after AS deleteAfter FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.user_id = ? AND m.deactivated_at IS NULL AND o.deleted_at IS NULL AND o.suspended_at IS NULL ORDER BY o.name`,
   ).bind(user.id).all();
   return c.json({ user, organizations: results });
 });
@@ -738,8 +746,33 @@ route('patch', '/orgs/:orgId/settings', 'settings:manage', async (c) => {
   return c.json({ settings: next });
 });
 
+export const DELETE_GRACE_DAYS = 14;
+
+/** Asks for the business name, then schedules deletion 14 days out. Nothing is removed yet. */
 route('delete', '/orgs/:orgId', 'org:delete', async (c) => {
-  await c.env.DB.prepare(`UPDATE organizations SET deleted_at = ? WHERE id = ?`).bind(nowIso(), c.get('org').id).run();
+  const { data } = await readJson(c, z.object({ confirmName: z.string().max(200) }).strict());
+  const row = await c.env.DB.prepare(`SELECT name, delete_after AS deleteAfter FROM organizations WHERE id = ?`).bind(c.get('org').id).first<{ name: string; deleteAfter: string | null }>();
+  if (!row) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
+  if (row.deleteAfter) throw new AppError(409, 'already_scheduled', `Deletion is already scheduled for ${row.deleteAfter.slice(0, 10)}.`);
+  if (data.confirmName.trim() !== row.name) throw new AppError(400, 'name_mismatch', 'Type the business name exactly to confirm.', { errors: [{ field: 'confirmName', code: 'mismatch' }] });
+  const deleteAfter = new Date(Date.now() + DELETE_GRACE_DAYS * 86400_000).toISOString();
+  await c.env.DB.prepare(`UPDATE organizations SET delete_after = ?, delete_requested_by = ? WHERE id = ?`).bind(deleteAfter, c.get('user').id, c.get('org').id).run();
+  // Any open support window ends with it.
+  await c.env.DB.prepare(`UPDATE support_grants SET ended_at = ? WHERE org_id = ? AND ended_at IS NULL`).bind(nowIso(), c.get('org').id).run();
+  return c.json({ deleteAfter });
+});
+
+route('post', '/orgs/:orgId/cancel-deletion', 'org:delete', async (c) => {
+  const r = await c.env.DB.prepare(`UPDATE organizations SET delete_after = NULL, delete_requested_by = NULL WHERE id = ? AND delete_after IS NOT NULL`).bind(c.get('org').id).run();
+  if (!r.meta.changes) throw new AppError(409, 'not_scheduled', 'This business is not scheduled for deletion.');
+  return c.json({ ok: true });
+});
+
+route('post', '/admin/orgs/:id/cancel-deletion', 'super', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const r = await c.env.DB.prepare(`UPDATE organizations SET delete_after = NULL, delete_requested_by = NULL WHERE id = ? AND delete_after IS NOT NULL AND deleted_at IS NULL`).bind(id).run();
+  if (!r.meta.changes) throw new AppError(409, 'not_scheduled', 'This business is not scheduled for deletion.');
+  await platformAudit(c, 'org.cancel_deletion', id);
   return c.json({ ok: true });
 });
 
@@ -1562,7 +1595,7 @@ route('get', '/orgs/:orgId/plan', 'inventory:read', async (c) => {
 route('get', '/admin/orgs/:id', 'super', async (c) => {
   const id = c.req.param('id') ?? '';
   const org = await c.env.DB.prepare(
-    `SELECT id, name, slug, currency, created_at AS createdAt, suspended_at AS suspendedAt, deleted_at AS deletedAt, plan_id AS planId, plan_overrides AS planOverrides FROM organizations WHERE id = ?`,
+    `SELECT id, name, slug, currency, created_at AS createdAt, suspended_at AS suspendedAt, deleted_at AS deletedAt, delete_after AS deleteAfter, plan_id AS planId, plan_overrides AS planOverrides FROM organizations WHERE id = ?`,
   ).bind(id).first<{ id: string; suspendedAt: string | null; deletedAt: string | null; planId: string; planOverrides: string | null }>();
   if (!org) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
   const { results: members } = await c.env.DB.prepare(
@@ -1572,7 +1605,8 @@ route('get', '/admin/orgs/:id', 'super', async (c) => {
   const { results: pending } = await c.env.DB.prepare(`SELECT id, email, role, expires_at AS expiresAt FROM invitations WHERE org_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`).bind(id, nowIso()).all();
   const keys = await c.env.DB.prepare(`SELECT (SELECT COUNT(*) FROM api_keys WHERE org_id = ? AND revoked_at IS NULL) AS apiKeys, (SELECT COUNT(*) FROM webhooks WHERE org_id = ?) AS webhooks`).bind(id, id).first();
   const stub = c.env.INVENTORY.get(c.env.INVENTORY.idFromName(id));
-  const stats = await stub.stats();
+  // A deleted business has nothing left to count, and its emptied storage must not be woken.
+  const stats = org.deletedAt ? { products: 0, locations: 0, openOrders: 0, orders: 0, lastActivityAt: null } : await stub.stats();
   const status = org.deletedAt ? 'deleted' : org.suspendedAt ? 'suspended' : members.length === 0 ? 'pending' : 'active';
   const { planOverrides: ov, ...orgOut } = org;
   return c.json({ organization: { ...orgOut, status }, plan: { id: org.planId, overrides: ov ? (JSON.parse(ov) as unknown) : null }, members, pendingInvitations: pending, counts: { ...keys, ...stats } });
@@ -1675,8 +1709,30 @@ app.get('/api/docs', (c) => {
 
 app.route('/api/v1', api);
 
+/** Removes businesses whose 14 days are up: their Durable Object storage, then their rows. The organization row stays as a tombstone for the audit trail. */
+export async function purgeDueOrgs(env: Bindings): Promise<number> {
+  const { results } = await env.DB.prepare(`SELECT id FROM organizations WHERE delete_after IS NOT NULL AND delete_after <= ? AND deleted_at IS NULL LIMIT 20`).bind(nowIso()).all<{ id: string }>();
+  for (const o of results) {
+    await env.INVENTORY.get(env.INVENTORY.idFromName(o.id)).wipe();
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM webhook_deliveries WHERE webhook_id IN (SELECT id FROM webhooks WHERE org_id = ?)`).bind(o.id),
+      env.DB.prepare(`DELETE FROM webhooks WHERE org_id = ?`).bind(o.id),
+      env.DB.prepare(`DELETE FROM api_keys WHERE org_id = ?`).bind(o.id),
+      env.DB.prepare(`DELETE FROM invitations WHERE org_id = ?`).bind(o.id),
+      env.DB.prepare(`DELETE FROM support_grants WHERE org_id = ?`).bind(o.id),
+      env.DB.prepare(`DELETE FROM notifications WHERE org_id = ?`).bind(o.id),
+      env.DB.prepare(`DELETE FROM notification_prefs WHERE org_id = ?`).bind(o.id),
+      env.DB.prepare(`DELETE FROM memberships WHERE org_id = ?`).bind(o.id),
+      env.DB.prepare(`UPDATE organizations SET deleted_at = ?, settings = '{}', plan_overrides = NULL WHERE id = ?`).bind(nowIso(), o.id),
+      env.DB.prepare(`INSERT INTO platform_audit(id, actor, action, target, detail, request_id, created_at) VALUES (?, 'system', 'org.purged', ?, NULL, 'daily-job', ?)`).bind(newId('pau'), o.id, nowIso()),
+    ]);
+  }
+  return results.length;
+}
+
 /** Deletes rows past their retention. Each step is independent so one failure does not stop the rest. */
 export async function dailyJob(env: Bindings): Promise<void> {
+  await purgeDueOrgs(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'purge failed', error: (e as Error).message })));
   await pruneAuthEvents(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'prune auth events failed', error: (e as Error).message })));
 }
 

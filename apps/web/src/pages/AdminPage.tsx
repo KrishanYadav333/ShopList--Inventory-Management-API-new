@@ -13,7 +13,7 @@ interface Overview { users: number; disabledUsers: number; organizations: number
 interface AdminOrg { id: string; name: string; slug: string; createdAt: string; deletedAt: string | null; suspendedAt: string | null; members: number; status: 'pending' | 'active' | 'suspended' | 'deleted' }
 interface AdminUser { id: string; email: string; name: string; createdAt: string; disabledAt: string | null; organizations: number; lastSeenAt: string | null }
 interface OrgDetail {
-  organization: { id: string; name: string; currency: string; createdAt: string; status: string };
+  organization: { id: string; name: string; currency: string; createdAt: string; status: string; deleteAfter?: string | null };
   members: { id: string; name: string; email: string; role: string; deactivatedAt: string | null; lastSeenAt: string | null }[];
   pendingInvitations: { id: string; email: string; role: string; expiresAt: string }[];
   counts: { products: number; locations: number; openOrders: number; apiKeys: number; webhooks: number; lastActivityAt: string | null };
@@ -221,6 +221,9 @@ export function AdminPage() {
                 {[['Products', orgDetail.data.counts.products], ['Locations', orgDetail.data.counts.locations], ['Open orders', orgDetail.data.counts.openOrders], ['API keys', orgDetail.data.counts.apiKeys], ['Webhooks', orgDetail.data.counts.webhooks]].map(([l, n]) => <div className="tile" key={l as string}><div className="num">{n}</div><div className="lbl">{l}</div></div>)}
               </div>
               <p className="time">Last activity: {when(orgDetail.data.counts.lastActivityAt)}</p>
+              {orgDetail.data.organization.deleteAfter && (
+                <p className="banner banner-warn" role="status">Scheduled for deletion on {when(orgDetail.data.organization.deleteAfter)}. <button className="btn btn-outline cell-btn" onClick={() => api('POST', `/admin/orgs/${orgDetail.data!.organization.id}/cancel-deletion`, { body: {} }).then(() => { qc.invalidateQueries({ queryKey: ['admin'] }); toast({ text: 'Deletion cancelled' }); }).catch((e) => toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Could not cancel.' }))}>Cancel deletion</button></p>
+              )}
               <PlanEditor key={orgDetail.data.organization.id + JSON.stringify(orgDetail.data.plan)} orgId={orgDetail.data.organization.id} current={orgDetail.data.plan} />
               <ul className="list">
                 {orgDetail.data.members.map((m) => (

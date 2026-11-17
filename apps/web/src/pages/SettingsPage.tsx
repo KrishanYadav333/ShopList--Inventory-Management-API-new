@@ -153,7 +153,9 @@ export function SettingsPage() {
   const testHook = useMutation({ mutationFn: (id: string) => api('POST', `/orgs/${org.id}/webhooks/${id}/test`, { body: {} }), onSuccess: () => { toast({ kind: 'success', text: 'Test event sent. Check the history in a few seconds.' }); setTimeout(() => qc.invalidateQueries({ queryKey: ['org', org.id, 'webhooks'] }), 4000); }, onError: fail });
 
   const audit = useQuery({ enabled: admin, queryKey: ['org', org.id, 'audit'], queryFn: () => api<{ data: { id: string; action: string; entity: string; changes: unknown; actor: string; createdAt: string }[] }>('GET', `/orgs/${org.id}/audit?limit=25`).then((r) => r.data) });
-  const del = useMutation({ mutationFn: () => api('DELETE', `/orgs/${org.id}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['me'] }); nav('/'); }, onError: fail });
+  const [confirmName, setConfirmName] = useState('');
+  const del = useMutation({ mutationFn: () => api<{ deleteAfter: string }>('DELETE', `/orgs/${org.id}`, { body: { confirmName } }), onSuccess: () => { setConfirmName(''); qc.invalidateQueries({ queryKey: ['me'] }); toast({ text: 'Deletion scheduled. You have 14 days to change your mind.' }); }, onError: fail });
+  const cancelDel = useMutation({ mutationFn: () => api('POST', `/orgs/${org.id}/cancel-deletion`, { body: {} }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['me'] }); toast({ text: 'Deletion cancelled' }); }, onError: fail });
 
   const submit = (fn: () => void) => (e: FormEvent) => { e.preventDefault(); fn(); };
 
@@ -510,8 +512,18 @@ export function SettingsPage() {
         {org.role === 'admin' && (
           <section className="card danger">
             <h2>Danger zone</h2>
-            <p>Deleting the organization hides it and all its data from everyone.</p>
-            <button className="btn btn-danger" onClick={() => { if (confirm(`Delete ${org.name}? This hides all its data.`)) del.mutate(); }}>Delete organization</button>
+            {org.deleteAfter ? (
+              <>
+                <p><strong>{org.name} will be deleted on {dateParts(org.deleteAfter).date}.</strong> Until then it is read-only. Everything is removed for good after that.</p>
+                <button className="btn btn-outline" disabled={cancelDel.isPending} onClick={() => cancelDel.mutate()}>Cancel deletion</button>
+              </>
+            ) : (
+              <form onSubmit={submit(() => del.mutate())}>
+                <p>Deleting the organization removes all its products, stock, orders and team after <strong>14 days</strong>. Until then it is read-only and you can cancel. Download a backup first (above).</p>
+                <div className="field"><label htmlFor="del-name">Type <strong>{org.name}</strong> to confirm</label><input id="del-name" autoComplete="off" value={confirmName} onChange={(e) => setConfirmName(e.target.value)} /></div>
+                <button className="btn btn-danger" disabled={confirmName.trim() !== org.name || del.isPending}>Delete organization in 14 days</button>
+              </form>
+            )}
           </section>
         )}
       </div>

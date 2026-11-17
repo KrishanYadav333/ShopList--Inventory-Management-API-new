@@ -10,6 +10,8 @@ export interface OrgSummary {
   slug: string;
   currency: string;
   role: Role;
+  /** Set when deletion is scheduled; the business is read-only until then. */
+  deleteAfter?: string | null;
 }
 export interface Me {
   user: { id: string; email: string; name: string; avatarUrl: string | null; isSuperAdmin: boolean };

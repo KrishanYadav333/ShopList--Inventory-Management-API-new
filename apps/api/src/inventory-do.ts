@@ -947,6 +947,11 @@ export class InventoryDO extends DurableObject<Bindings> {
     this.audit({ actor, requestId }, action, 'support', actor, detail);
   }
 
+  /** Final step of a scheduled deletion: every row this business ever stored, gone. */
+  async wipe(): Promise<void> {
+    await this.ctx.storage.deleteAll();
+  }
+
   /** What counts against the plan's limits. Numbers only. */
   planUsage(): { products: number; locations: number; ordersThisMonth: number; importsToday: number } {
     const n = (sql: string, ...b: SqlStorageValue[]) => this.one<{ n: number }>(sql, ...b)?.n ?? 0;
