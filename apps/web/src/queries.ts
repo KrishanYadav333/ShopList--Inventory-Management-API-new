@@ -1,3 +1,4 @@
+import type { PlanFeatureKey, PlanLimitKey } from '@shoplist/shared';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { can, type Permission } from '@shoplist/shared';
 import type { Dashboard, Location, Movement, Order, OrderState, Page, Product, Role, StockLevel } from '@shoplist/shared';
@@ -43,6 +44,15 @@ export function productQuery(f: ProductFilters, cursor?: string, limit = 50): st
 
 export const useDashboard = (orgId: string) =>
   useQuery({ queryKey: ['org', orgId, 'dashboard'], queryFn: () => api<Dashboard>('GET', `/orgs/${orgId}/dashboard`) });
+
+export interface PlanInfo {
+  plan: { id: string; name: string };
+  limits: Partial<Record<PlanLimitKey, number | null>>;
+  features: Record<PlanFeatureKey, boolean>;
+  usage?: Record<PlanLimitKey, number>;
+}
+export const usePlan = (orgId: string) =>
+  useQuery({ queryKey: ['org', orgId, 'plan'], queryFn: () => api<PlanInfo>('GET', `/orgs/${orgId}/plan`), staleTime: 60_000 });
 
 export const useLocations = (orgId: string) =>
   useQuery({ queryKey: ['org', orgId, 'locations'], queryFn: () => api<{ data: Location[] }>('GET', `/orgs/${orgId}/locations`).then((r) => r.data) });

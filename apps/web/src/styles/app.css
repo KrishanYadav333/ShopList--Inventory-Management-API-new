@@ -345,3 +345,6 @@ a.btn { text-decoration: none; }
 .invoice-from { text-align: right; }
 .invoice-to { margin-bottom: 20px; }
 @media print { .no-print { display: none !important; } body { background: #fff; } .invoice { margin: 0; padding: 0; max-width: none; } }
+
+.plan-editor { margin: 12px 0; }
+.plan-editor summary { cursor: pointer; font-weight: 600; padding: 6px 0; }

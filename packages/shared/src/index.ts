@@ -555,3 +555,35 @@ export function lineTax(mode: TaxMode, rateBp: number, lineMinor: number): numbe
   if (mode === 'none' || rateBp <= 0) return 0;
   return mode === 'exclusive' ? Math.round((lineMinor * rateBp) / 10_000) : Math.round((lineMinor * rateBp) / (10_000 + rateBp));
 }
+
+// ------------------------------------------------------------------ plans (F20)
+export const PLAN_LIMIT_KEYS = ['products', 'members', 'locations', 'apiKeys', 'webhooks', 'ordersPerMonth', 'importsPerDay'] as const;
+export type PlanLimitKey = (typeof PLAN_LIMIT_KEYS)[number];
+export const PLAN_LIMIT_LABELS: Record<PlanLimitKey, string> = {
+  products: 'Products', members: 'Team members (including pending invitations)', locations: 'Locations', apiKeys: 'Active API keys', webhooks: 'Webhooks', ordersPerMonth: 'Orders per month', importsPerDay: 'Imports per day',
+};
+export const PLAN_FEATURE_KEYS = ['orders', 'purchasing', 'approvals', 'reports', 'apiKeys', 'webhooks', 'import', 'supportAccess'] as const;
+export type PlanFeatureKey = (typeof PLAN_FEATURE_KEYS)[number];
+export const PLAN_FEATURE_LABELS: Record<PlanFeatureKey, string> = {
+  orders: 'Orders', purchasing: 'Suppliers and purchase orders', approvals: 'Approvals', reports: 'Reports', apiKeys: 'API keys', webhooks: 'Webhooks', import: 'Product import', supportAccess: 'Support access',
+};
+/** A missing or null limit means unlimited. */
+export type PlanLimits = Partial<Record<PlanLimitKey, number | null>>;
+export type PlanFeatures = Record<PlanFeatureKey, boolean>;
+
+export const planLimitsInput = z.object(Object.fromEntries(PLAN_LIMIT_KEYS.map((k) => [k, z.number().int().min(0).max(100_000_000).nullable().optional()])) as Record<PlanLimitKey, z.ZodOptional<z.ZodNullable<z.ZodNumber>>>).strict();
+export const planFeaturesInput = z.object(Object.fromEntries(PLAN_FEATURE_KEYS.map((k) => [k, z.boolean().optional()])) as Record<PlanFeatureKey, z.ZodOptional<z.ZodBoolean>>).strict();
+export const planOverrides = z.object({ limits: planLimitsInput.optional(), features: planFeaturesInput.optional() }).strict();
+export type PlanOverrides = z.infer<typeof planOverrides>;
+
+/** Plan values with the business's own overrides on top. Unknown or damaged JSON falls back to the plan. */
+export function resolvePlan(limitsJson: string, featuresJson: string, overridesJson: string | null): { limits: PlanLimits; features: PlanFeatures } {
+  const parse = <T>(s: string | null, d: T): T => { try { return s ? (JSON.parse(s) as T) : d; } catch { return d; } };
+  const limits: PlanLimits = { ...parse<PlanLimits>(limitsJson, {}) };
+  const features = Object.fromEntries(PLAN_FEATURE_KEYS.map((k) => [k, true])) as PlanFeatures;
+  Object.assign(features, parse<Partial<PlanFeatures>>(featuresJson, {}));
+  const o = parse<PlanOverrides>(overridesJson, {});
+  for (const [k, v] of Object.entries(o.limits ?? {})) if (v !== undefined) limits[k as PlanLimitKey] = v;
+  for (const [k, v] of Object.entries(o.features ?? {})) if (typeof v === 'boolean') features[k as PlanFeatureKey] = v;
+  return { limits, features };
+}

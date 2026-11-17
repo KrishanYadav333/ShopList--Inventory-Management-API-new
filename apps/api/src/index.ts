@@ -3,6 +3,16 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { z, type ZodType } from 'zod';
 import {
   SESSION_ONLY,
+  PLAN_FEATURE_KEYS,
+  PLAN_LIMIT_KEYS,
+  planFeaturesInput,
+  planLimitsInput,
+  planOverrides,
+  resolvePlan,
+  type PlanFeatureKey,
+  type PlanFeatures,
+  type PlanLimitKey,
+  type PlanLimits,
   can,
   keyPermissions,
   countInput,
@@ -77,7 +87,8 @@ import { base64url, decodeCursor, encodeCursor, newId, nowIso, randomToken, sha2
 
 export { InventoryDO } from './inventory-do';
 
-type Vars = { requestId: string; user: AuthUser; org: { id: string; role: Role; locationIds: string[] | null; perms?: readonly Permission[] }; apiKey?: ApiKeyPrincipal };
+type OrgPlan = { id: string; limits: PlanLimits; features: PlanFeatures };
+type Vars = { requestId: string; user: AuthUser; org: { id: string; role: Role; locationIds: string[] | null; perms?: readonly Permission[]; plan: OrgPlan }; apiKey?: ApiKeyPrincipal };
 type Ctx = Context<{ Bindings: Bindings; Variables: Vars }>;
 
 const MAX_BODY = 64 * 1024;
@@ -171,7 +182,21 @@ function ifMatch(c: Ctx): number {
   return n;
 }
 
-const caller = (c: Ctx): Caller => ({ actor: c.get('user').id, requestId: c.get('requestId') });
+const caller = (c: Ctx): Caller => {
+  const l = c.get('org')?.plan.limits;
+  return { actor: c.get('user').id, requestId: c.get('requestId'), ...(l ? { limits: { products: l.products, locations: l.locations, ordersPerMonth: l.ordersPerMonth, importsPerDay: l.importsPerDay } } : {}) };
+};
+
+/** Which plan feature an organization route belongs to. A switched-off feature does not exist for that business. */
+const featureOf = (area: string, rest: string): PlanFeatureKey | null =>
+  area === 'orders' ? 'orders' : area === 'purchase-orders' || area === 'suppliers' || area === 'purchasing' ? 'purchasing' : area === 'approvals' ? 'approvals'
+  : area === 'reports' ? 'reports' : area === 'api-keys' ? 'apiKeys' : area === 'webhooks' ? 'webhooks' : area === 'products' && rest === 'import' ? 'import' : null;
+
+/** Refuses with a plain message when adding one more would pass the plan's limit. */
+function planLimit(c: Ctx, key: PlanLimitKey, current: number, noun: string): void {
+  const max = c.get('org').plan.limits[key];
+  if (max !== undefined && max !== null && current >= max) throw new AppError(403, 'plan_limit', `Your plan allows ${max} ${noun}. Ask the ShopList owner to raise it.`);
+}
 /** Sessions are judged by role; keys by their scopes. */
 const allowed = (org: { role: Role; perms?: readonly Permission[] }, permission: Permission) => (org.perms ? org.perms.includes(permission) : can(org.role, permission));
 
@@ -237,6 +262,14 @@ const requireSuper: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> =
 };
 
 /** The org id in the URL is checked against the caller's memberships before any Durable Object is touched. */
+type PlanRow = { limits: string; features: string; planId: string; overrides: string | null };
+const planOf = (r: PlanRow): OrgPlan => ({ id: r.planId, ...resolvePlan(r.limits, r.features, r.overrides) });
+/** A switched-off feature answers 404, so it is indistinguishable from a route that does not exist. */
+function gate(c: Ctx, plan: OrgPlan): void {
+  const parts = new URL(c.req.url).pathname.split('/');
+  const feature = featureOf(parts[5] ?? '', parts[6] ?? '');
+  if (feature && !plan.features[feature]) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+}
 const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> => async (c, next) => {
   const orgId = c.req.param('orgId') ?? '';
   const key = c.get('apiKey');
@@ -246,26 +279,30 @@ const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindin
     // Inventory only: never members, invitations, the activity log or organization settings.
     const area = new URL(c.req.url).pathname.split('/')[5] ?? '';
     if (!['products', 'locations', 'stock', 'orders', 'dashboard', 'reports'].includes(area)) throw new AppError(403, 'forbidden', 'API keys can only be used for inventory.');
-    const live = await c.env.DB.prepare(`SELECT 1 AS x FROM organizations WHERE id = ? AND deleted_at IS NULL AND suspended_at IS NULL`).bind(orgId).first();
+    const live = await c.env.DB.prepare(`SELECT p.limits, p.features, o.plan_id AS planId, o.plan_overrides AS overrides FROM organizations o JOIN plans p ON p.id = o.plan_id WHERE o.id = ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL`).bind(orgId).first<PlanRow>();
     if (!live) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
+    const plan = planOf(live);
+    gate(c, plan);
     const perms = keyPermissions(key.scopes);
     if (SESSION_ONLY.includes(permission) || !perms.includes(permission)) {
       throw new AppError(403, 'forbidden', 'This API key does not have permission to do that.');
     }
-    c.set('org', { id: orgId, role: 'viewer', locationIds: null, perms });
+    c.set('org', { id: orgId, role: 'viewer', locationIds: null, perms, plan });
     return next();
   }
   const row = await c.env.DB.prepare(
-    `SELECT m.role, m.location_ids AS locationIds FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.org_id = ? AND m.user_id = ? AND m.deactivated_at IS NULL AND o.deleted_at IS NULL AND o.suspended_at IS NULL`,
+    `SELECT m.role, m.location_ids AS locationIds, p.limits, p.features, o.plan_id AS planId, o.plan_overrides AS overrides FROM memberships m JOIN organizations o ON o.id = m.org_id JOIN plans p ON p.id = o.plan_id WHERE m.org_id = ? AND m.user_id = ? AND m.deactivated_at IS NULL AND o.deleted_at IS NULL AND o.suspended_at IS NULL`,
   )
     .bind(orgId, c.get('user').id)
-    .first<{ role: Role; locationIds: string | null }>();
+    .first<{ role: Role; locationIds: string | null } & PlanRow>();
   // Not a member: 404, so organization ids cannot be probed.
   if (!row) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
   if (!can(row.role, permission)) throw new AppError(403, 'forbidden', `Your role (${row.role}) cannot do this. Ask your admin for access.`);
   let locationIds: string[] | null = null;
   try { locationIds = row.locationIds ? (JSON.parse(row.locationIds) as string[]) : null; } catch { locationIds = []; }
-  c.set('org', { id: orgId, role: row.role, locationIds });
+  const plan = planOf(row);
+  gate(c, plan);
+  c.set('org', { id: orgId, role: row.role, locationIds, plan });
   return next();
 };
 
@@ -769,8 +806,18 @@ async function createInvitation(c: Ctx, o: { orgId: string; email: string; role:
   return { id, token, link: `${c.env.APP_ORIGIN}/invite/${token}`, expiresAt };
 }
 
+/** Members plus open invitations, so sending invitations cannot get around the limit. */
+async function seatsUsed(c: Ctx, orgId: string, exceptEmail?: string): Promise<number> {
+  const r = await c.env.DB.prepare(
+    `SELECT (SELECT COUNT(*) FROM memberships WHERE org_id = ? AND deactivated_at IS NULL)
+          + (SELECT COUNT(*) FROM invitations WHERE org_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ? AND lower(email) <> ?) AS n`,
+  ).bind(orgId, orgId, nowIso(), (exceptEmail ?? '').toLowerCase()).first<{ n: number }>();
+  return r?.n ?? 0;
+}
+
 route('post', '/orgs/:orgId/invitations', 'team:manage', async (c) => {
   const { data } = await readJson(c, inviteInput);
+  planLimit(c, 'members', await seatsUsed(c, c.get('org').id, data.email), 'team members');
   await guardSecondAdmin(c, data.role, data.confirmSecondAdmin);
   const existing = await c.env.DB.prepare(`SELECT 1 AS x FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = ? AND lower(u.email) = ?`).bind(c.get('org').id, data.email.toLowerCase()).first();
   if (existing) throw new AppError(409, 'already_member', 'That person is already a member of this organization.');
@@ -834,6 +881,7 @@ route('get', '/orgs/:orgId/api-keys', 'settings:manage', async (c) => {
 route('post', '/orgs/:orgId/api-keys', 'settings:manage', async (c) => {
   const { data } = await readJson(c, apiKeyInput);
   const count = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM api_keys WHERE org_id = ? AND revoked_at IS NULL`).bind(c.get('org').id).first<{ n: number }>();
+  planLimit(c, 'apiKeys', count?.n ?? 0, 'active API keys');
   if ((count?.n ?? 0) >= 20) throw new AppError(409, 'key_limit', 'An organization can have at most 20 active API keys. Revoke one first.');
   const secret = `${KEY_PREFIX}${randomToken(30)}`;
   const id = newId('key');
@@ -869,6 +917,7 @@ route('post', '/orgs/:orgId/webhooks', 'settings:manage', async (c) => {
   if (problem) throw new AppError(400, 'invalid_webhook_url', problem, { errors: [{ field: 'url', code: 'invalid_url', message: problem }] });
   const orgId = c.get('org').id;
   const count = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM webhooks WHERE org_id = ?`).bind(orgId).first<{ n: number }>();
+  planLimit(c, 'webhooks', count?.n ?? 0, 'webhooks');
   if ((count?.n ?? 0) >= 10) throw new AppError(409, 'webhook_limit', 'An organization can have at most 10 webhooks.');
   const id = newId('whk');
   const secret = `whsec_${randomToken(24)}`;
@@ -1375,11 +1424,57 @@ route('post', '/admin/orgs/:id/resend-invitation', 'super', async (c) => {
 });
 
 /** A business page for the platform owner: health and people, never products, customers or orders. */
+// ------------------------------------------------------------------ plans (F20)
+const planRows = async (c: Ctx) => (await c.env.DB.prepare(`SELECT id, name, limits, features FROM plans ORDER BY CASE id WHEN 'free' THEN 0 WHEN 'standard' THEN 1 ELSE 2 END, id`).all<{ id: string; name: string; limits: string; features: string }>()).results
+  .map((r) => ({ id: r.id, name: r.name, limits: JSON.parse(r.limits) as PlanLimits, features: JSON.parse(r.features) as PlanFeatures }));
+
+route('get', '/admin/plans', 'super', async (c) => c.json({ data: await planRows(c) }));
+
+route('patch', '/admin/plans/:id', 'super', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const { data } = await readJson(c, z.object({ name: z.string().trim().min(1).max(40).optional(), limits: planLimitsInput.optional(), features: planFeaturesInput.optional() }).strict());
+  const cur = (await planRows(c)).find((p) => p.id === id);
+  if (!cur) throw new AppError(404, 'plan_not_found', 'That plan does not exist.');
+  const limits: PlanLimits = { ...cur.limits, ...data.limits };
+  for (const k of PLAN_LIMIT_KEYS) if (limits[k] === null) delete limits[k]; // null means "no limit"
+  const features = { ...cur.features, ...data.features };
+  await c.env.DB.prepare(`UPDATE plans SET name = ?, limits = ?, features = ? WHERE id = ?`).bind(data.name ?? cur.name, JSON.stringify(limits), JSON.stringify(features), id).run();
+  await platformAudit(c, 'plan.update', id, data);
+  return c.json({ plan: { id, name: data.name ?? cur.name, limits, features } });
+});
+
+route('patch', '/admin/orgs/:id/plan', 'super', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const { data } = await readJson(c, z.object({ plan: z.string().min(1).max(40), overrides: planOverrides.nullable().optional() }).strict());
+  if (!(await planRows(c)).some((p) => p.id === data.plan)) throw new AppError(404, 'plan_not_found', 'That plan does not exist.');
+  const cur = await c.env.DB.prepare(`SELECT plan_overrides AS o FROM organizations WHERE id = ? AND deleted_at IS NULL`).bind(id).first<{ o: string | null }>();
+  if (!cur) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
+  const overrides = data.overrides === undefined ? cur.o : data.overrides && (data.overrides.limits || data.overrides.features) ? JSON.stringify(data.overrides) : null;
+  await c.env.DB.prepare(`UPDATE organizations SET plan_id = ?, plan_overrides = ? WHERE id = ?`).bind(data.plan, overrides, id).run();
+  await platformAudit(c, 'org.plan', id, { plan: data.plan, overrides: overrides ? JSON.parse(overrides) : null });
+  return c.json({ ok: true });
+});
+
+route('get', '/orgs/:orgId/plan', 'inventory:read', async (c) => {
+  const org = c.get('org');
+  const name = (await c.env.DB.prepare(`SELECT name FROM plans WHERE id = ?`).bind(org.plan.id).first<{ name: string }>())?.name ?? org.plan.id;
+  const base = { plan: { id: org.plan.id, name }, limits: org.plan.limits, features: org.plan.features };
+  if (!allowed(org, 'settings:manage')) return c.json(base);
+  const orgId = org.id;
+  const [u, seats, k, w] = await Promise.all([
+    inventory(c).planUsage(),
+    seatsUsed(c, orgId),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM api_keys WHERE org_id = ? AND revoked_at IS NULL`).bind(orgId).first<{ n: number }>(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM webhooks WHERE org_id = ?`).bind(orgId).first<{ n: number }>(),
+  ]);
+  return c.json({ ...base, usage: { products: u.products, locations: u.locations, ordersPerMonth: u.ordersThisMonth, importsPerDay: u.importsToday, members: seats, apiKeys: k?.n ?? 0, webhooks: w?.n ?? 0 } });
+});
+
 route('get', '/admin/orgs/:id', 'super', async (c) => {
   const id = c.req.param('id') ?? '';
   const org = await c.env.DB.prepare(
-    `SELECT id, name, slug, currency, created_at AS createdAt, suspended_at AS suspendedAt, deleted_at AS deletedAt FROM organizations WHERE id = ?`,
-  ).bind(id).first<{ id: string; suspendedAt: string | null; deletedAt: string | null }>();
+    `SELECT id, name, slug, currency, created_at AS createdAt, suspended_at AS suspendedAt, deleted_at AS deletedAt, plan_id AS planId, plan_overrides AS planOverrides FROM organizations WHERE id = ?`,
+  ).bind(id).first<{ id: string; suspendedAt: string | null; deletedAt: string | null; planId: string; planOverrides: string | null }>();
   if (!org) throw new AppError(404, 'org_not_found', 'That organization does not exist.');
   const { results: members } = await c.env.DB.prepare(
     `SELECT u.id, u.name, u.email, m.role, m.deactivated_at AS deactivatedAt, (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id) AS lastSeenAt
@@ -1390,7 +1485,8 @@ route('get', '/admin/orgs/:id', 'super', async (c) => {
   const stub = c.env.INVENTORY.get(c.env.INVENTORY.idFromName(id));
   const stats = await stub.stats();
   const status = org.deletedAt ? 'deleted' : org.suspendedAt ? 'suspended' : members.length === 0 ? 'pending' : 'active';
-  return c.json({ organization: { ...org, status }, members, pendingInvitations: pending, counts: { ...keys, ...stats } });
+  const { planOverrides: ov, ...orgOut } = org;
+  return c.json({ organization: { ...orgOut, status }, plan: { id: org.planId, overrides: ov ? (JSON.parse(ov) as unknown) : null }, members, pendingInvitations: pending, counts: { ...keys, ...stats } });
 });
 
 /** Recovery when the only admin has gone: the platform owner makes an existing member the admin. Changes a role only. */

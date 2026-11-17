@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
+import type { PlanFeatureKey } from '@shoplist/shared';
 import { NavLink, Outlet, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { Icon } from '../icons';
 import { NotificationBell } from './NotificationBell';
-import { useDashboard, useLocations, useMe, canDo, type OrgSummary } from '../queries';
+import { useDashboard, useLocations, useMe, usePlan, canDo, type OrgSummary } from '../queries';
 import { AdjustDialog } from './AdjustDialog';
 import { OrderDialog } from './OrderDialog';
 import { CommandPalette } from './CommandPalette';
@@ -33,6 +34,8 @@ export function Shell() {
   const org = me.data?.organizations.find((o) => o.id === orgId);
   const dash = useDashboard(orgId);
   const locations = useLocations(orgId);
+  const plan = usePlan(orgId);
+  const feat = (k: PlanFeatureKey) => plan.data?.features[k] !== false; // until the plan loads, show everything
 
   useEffect(() => {
     const up = () => setOnline(true);
@@ -171,14 +174,14 @@ export function Shell() {
 
         <nav className="sidebar-nav" aria-label="Main">
           <div className="nav-icons">
-            <NavLink to={`/o/${orgId}/orders`} className="nav-icon" title="Orders" aria-label="Orders"><Icon name="cart" size={18} /></NavLink>
+            {feat('orders') && <NavLink to={`/o/${orgId}/orders`} className="nav-icon" title="Orders" aria-label="Orders"><Icon name="cart" size={18} /></NavLink>}
             <NavLink to={`/o/${orgId}/products`} className="nav-icon" title="Products" aria-label="Products"><Icon name="grid" size={18} /></NavLink>
             <NavLink to={`/o/${orgId}/history`} className="nav-icon" title="Stock history" aria-label="Stock history"><Icon name="clock" size={18} /></NavLink>
             {org && canDo(org.role, 'customers:read') && <NavLink to={`/o/${orgId}/customers`} className="nav-icon" title="Customers" aria-label="Customers"><Icon name="users" size={18} /></NavLink>}
             {org && canDo(org.role, 'stock:write') && <NavLink to={`/o/${orgId}/counts`} className="nav-icon" title="Counts" aria-label="Counts"><Icon name="scan" size={18} /></NavLink>}
-            <NavLink to={`/o/${orgId}/purchasing`} className="nav-icon" title="Purchasing" aria-label="Purchasing"><Icon name="truck" size={18} /></NavLink>
-            {org && canDo(org.role, 'reports:read') && <NavLink to={`/o/${orgId}/reports`} className="nav-icon" title="Reports" aria-label="Reports"><Icon name="chart" size={18} /></NavLink>}
-            <NavLink to={`/o/${orgId}/approvals`} className="nav-icon" title="Approvals" aria-label="Approvals"><Icon name="check" size={18} /></NavLink>
+            {feat('purchasing') && <NavLink to={`/o/${orgId}/purchasing`} className="nav-icon" title="Purchasing" aria-label="Purchasing"><Icon name="truck" size={18} /></NavLink>}
+            {org && feat('reports') && canDo(org.role, 'reports:read') && <NavLink to={`/o/${orgId}/reports`} className="nav-icon" title="Reports" aria-label="Reports"><Icon name="chart" size={18} /></NavLink>}
+            {feat('approvals') && <NavLink to={`/o/${orgId}/approvals`} className="nav-icon" title="Approvals" aria-label="Approvals"><Icon name="check" size={18} /></NavLink>}
             <NavLink to={`/o/${orgId}/settings`} className="nav-icon" title="Settings" aria-label="Settings"><Icon name="cog" size={18} /></NavLink>
             <NotificationBell />
             {me.data?.user.isSuperAdmin && <NavLink to="/admin" className="nav-icon" title="Platform admin" aria-label="Platform admin"><Icon name="shield" size={18} /></NavLink>}

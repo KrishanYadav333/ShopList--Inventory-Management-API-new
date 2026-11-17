@@ -1,12 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { API_KEY_SCOPE_LABELS, ROLES, ROLE_LABELS, ROLE_SUMMARY, SETTINGS_DEFAULTS, WEBHOOK_EVENTS, type OrgSettings, type Role } from '@shoplist/shared';
+import { API_KEY_SCOPE_LABELS, PLAN_LIMIT_KEYS, PLAN_LIMIT_LABELS, ROLES, ROLE_LABELS, ROLE_SUMMARY, SETTINGS_DEFAULTS, WEBHOOK_EVENTS, type OrgSettings, type Role } from '@shoplist/shared';
 import { api, ApiError } from '../api';
 import { useShell } from '../components/Shell';
 import { dateParts } from '../format';
 import { Icon } from '../icons';
-import { canAdmin, useLocations, useMe } from '../queries';
+import { canAdmin, useLocations, useMe, usePlan } from '../queries';
 import { useToast } from '../toast';
 import { addPasskey, passkeysSupported, wasCancelled } from '../passkeys';
 
@@ -27,6 +27,8 @@ export function SettingsPage() {
   const rename = useMutation({ mutationFn: () => api('PATCH', `/orgs/${org.id}`, { body: { name } }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['me'] }); toast({ kind: 'success', text: 'Organization renamed' }); }, onError: fail });
 
   const passkeys = useQuery({ queryKey: ['passkeys'], queryFn: () => api<{ data: { id: string; name: string; created_at: string; last_used_at: string | null }[] }>('GET', '/auth/passkeys'), enabled: passkeysSupported() });
+  const plan = usePlan(org.id);
+  const feat = (k: 'apiKeys' | 'webhooks') => plan.data?.features[k] !== false;
   const [pkName, setPkName] = useState('');
   const addPk = useMutation({
     mutationFn: () => addPasskey(pkName.trim() || 'Passkey'),
@@ -252,7 +254,30 @@ export function SettingsPage() {
           )}
         </section>
 
-        {admin && (
+        {admin && plan.data?.usage && (
+          <section className="card" aria-labelledby="h-plan">
+            <h2 id="h-plan">Plan: {plan.data.plan.name}</h2>
+            <p className="hint">What your business uses, against what your plan allows. Need more? Ask the ShopList owner.</p>
+            <ul className="list">
+              {PLAN_LIMIT_KEYS.map((k) => {
+                const max = plan.data!.limits[k];
+                const used = plan.data!.usage![k];
+                const pct = max ? Math.min(100, Math.round((used / max) * 100)) : 0;
+                return (
+                  <li key={k}>
+                    <span style={{ flex: 1 }}>
+                      <strong>{PLAN_LIMIT_LABELS[k]}</strong>
+                      <div className="time">{used.toLocaleString()} of {max === undefined || max === null ? 'no limit' : max.toLocaleString()}{max && pct >= 80 ? ' · nearly full' : ''}</div>
+                      {max ? <progress max={max} value={Math.min(used, max)} aria-label={`${PLAN_LIMIT_LABELS[k]} used`} style={{ width: '100%' }} /> : null}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
+        {admin && feat('apiKeys') && (
           <section className="card" aria-labelledby="h-keys">
             <h2 id="h-keys">API keys</h2>
             <p className="hint">For other systems, such as a web shop or a scanner. A key belongs to this organization only and can read or write inventory, nothing else. Send it as <code>Authorization: Bearer &lt;key&gt;</code>.</p>
@@ -289,7 +314,7 @@ export function SettingsPage() {
           </section>
         )}
 
-        {admin && (
+        {admin && feat('webhooks') && (
           <section className="card" aria-labelledby="h-hooks">
             <h2 id="h-hooks">Webhooks</h2>
             <p className="hint">ShopList sends a signed POST to your address when something happens. Each request carries <code>ShopList-Signature: t=…,v1=…</code>, an HMAC-SHA256 of <code>timestamp.body</code> with your signing secret. Failed deliveries are retried for about a day.</p>

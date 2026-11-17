@@ -334,6 +334,8 @@ class Fail extends Error {
 export interface Caller {
   actor: string;
   requestId: string;
+  /** Plan limits for this business, sent by the Worker with every call. Missing means unlimited. */
+  limits?: { products?: number | null; locations?: number | null; ordersPerMonth?: number | null; importsPerDay?: number | null };
 }
 export interface Idem {
   key: string;
@@ -736,8 +738,13 @@ export class InventoryDO extends DurableObject<Bindings> {
     return this.tx(idem, c, () => this.doCreate(c, input));
   }
 
+  private planCheck(max: number | null | undefined, current: number, noun: string): void {
+    if (max !== undefined && max !== null && current >= max) throw new Fail(403, 'plan_limit', `Your plan allows ${max} ${noun}. Ask the ShopList owner to raise it.`);
+  }
+
   private doCreate(c: Caller, input: ProductInput): Out<{ product: Product }> {
     {
+      this.planCheck(c.limits?.products, this.one<{ value: number }>(`SELECT value FROM counters WHERE name = 'products'`)?.value ?? 0, 'products');
       this.assertUnique(input.sku, input.barcode ?? null);
       const id = newId('prd');
       const now = nowIso();
@@ -930,6 +937,17 @@ export class InventoryDO extends DurableObject<Bindings> {
     try { return JSON.parse(this.one<{ value: string }>(`SELECT value FROM meta WHERE key = 'settings'`)?.value ?? '{}'); } catch { return {}; }
   }
 
+  /** What counts against the plan's limits. Numbers only. */
+  planUsage(): { products: number; locations: number; ordersThisMonth: number; importsToday: number } {
+    const n = (sql: string, ...b: SqlStorageValue[]) => this.one<{ n: number }>(sql, ...b)?.n ?? 0;
+    return {
+      products: this.one<{ value: number }>(`SELECT value FROM counters WHERE name = 'products'`)?.value ?? 0,
+      locations: n(`SELECT COUNT(*) AS n FROM locations WHERE archived_at IS NULL`),
+      ordersThisMonth: n(`SELECT COUNT(*) AS n FROM orders WHERE created_at >= ?`, `${nowIso().slice(0, 7)}-01T00:00:00.000Z`),
+      importsToday: this.one<{ value: number }>(`SELECT value FROM counters WHERE name = ?`, `imports_${nowIso().slice(0, 10)}`)?.value ?? 0,
+    };
+  }
+
   /** Numbers only, for the platform console. Never returns product, customer or order details. */
   stats(): { products: number; locations: number; openOrders: number; orders: number; lastActivityAt: string | null } {
     const counters = Object.fromEntries(this.all<{ name: string; value: number }>(`SELECT name, value FROM counters`).map((r) => [r.name, r.value]));
@@ -949,6 +967,7 @@ export class InventoryDO extends DurableObject<Bindings> {
 
   createLocation(c: Caller, input: LocationInput): Result<Out<{ location: Location }>> {
     return this.tx(undefined, c, () => {
+      this.planCheck(c.limits?.locations, this.one<{ n: number }>(`SELECT COUNT(*) AS n FROM locations WHERE archived_at IS NULL`)!.n, 'locations');
       if (this.all(`SELECT 1 AS x FROM locations WHERE code = ? AND archived_at IS NULL`, input.code).length) {
         throw new Fail(409, 'duplicate_code', `A location with code ${input.code} already exists.`, { errors: [{ field: 'code', code: 'duplicate' }] });
       }
@@ -1116,6 +1135,12 @@ export class InventoryDO extends DurableObject<Bindings> {
         return ok({ status: hit.status, body: JSON.parse(hit.response) as { results: ImportResult[] } });
       }
     }
+    // One import call is one use of the day's allowance, whatever it contains.
+    const day = `imports_${nowIso().slice(0, 10)}`;
+    const used = this.one<{ value: number }>(`SELECT value FROM counters WHERE name = ?`, day)?.value ?? 0;
+    const max = c.limits?.importsPerDay;
+    if (max !== undefined && max !== null && used >= max) return { ok: false, status: 403, code: 'plan_limit', detail: `Your plan allows ${max} imports per day. Ask the ShopList owner to raise it.` };
+    this.run(`INSERT INTO counters(name, value) VALUES (?, 1) ON CONFLICT(name) DO UPDATE SET value = value + 1`, day);
     const results: ImportResult[] = rows.map(({ index, row }) => {
       try {
         return this.ctx.storage.transactionSync(() => this.importRow(c, mode, index, row));
@@ -1166,6 +1191,7 @@ export class InventoryDO extends DurableObject<Bindings> {
 
   createOrder(c: Caller, idem: Idem | undefined, input: OrderInput): Result<Out<{ order: Order }>> {
     return this.tx(idem, c, () => {
+      this.planCheck(c.limits?.ordersPerMonth, this.one<{ n: number }>(`SELECT COUNT(*) AS n FROM orders WHERE created_at >= ?`, `${nowIso().slice(0, 7)}-01T00:00:00.000Z`)!.n, 'orders per month');
       const locationId = input.locationId ?? this.one<{ id: string }>(`SELECT id FROM locations WHERE is_default = 1 AND archived_at IS NULL`)?.id;
       if (!locationId) throw new Fail(409, 'no_default_location', 'Create a location first.');
       this.activeLocation(locationId);

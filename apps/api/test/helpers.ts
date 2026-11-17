@@ -65,6 +65,8 @@ export async function newOrg(name = 'Test Org') {
   const cookie = await login(email);
   const r = await call(cookie, 'POST', '/orgs', { name });
   if (r.status !== 201) throw new Error(`org create failed: ${JSON.stringify(r.body)}`);
+  // Tests run on an unlimited plan so they can create as much as they need; plan tests set their own.
+  await env.DB.prepare(`UPDATE organizations SET plan_id = 'custom' WHERE id = ?`).bind(r.body.organization.id).run();
   return { cookie, email, orgId: r.body.organization.id as string, base: `/orgs/${r.body.organization.id}` };
 }
 

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Navigate, NavLink, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { PLAN_FEATURE_KEYS, PLAN_FEATURE_LABELS, PLAN_LIMIT_KEYS, PLAN_LIMIT_LABELS, type PlanFeatureKey, type PlanLimitKey } from '@shoplist/shared';
 import { api, ApiError } from '../api';
 import { dateParts } from '../format';
 import { Icon } from '../icons';
@@ -15,7 +16,9 @@ interface OrgDetail {
   members: { id: string; name: string; email: string; role: string; deactivatedAt: string | null; lastSeenAt: string | null }[];
   pendingInvitations: { id: string; email: string; role: string; expiresAt: string }[];
   counts: { products: number; locations: number; openOrders: number; apiKeys: number; webhooks: number; lastActivityAt: string | null };
+  plan: { id: string; overrides: { limits?: Partial<Record<PlanLimitKey, number | null>>; features?: Partial<Record<PlanFeatureKey, boolean>> } | null };
 }
+interface PlanDef { id: string; name: string; limits: Partial<Record<PlanLimitKey, number | null>>; features: Record<PlanFeatureKey, boolean> }
 interface UserDetail {
   user: { id: string; email: string; name: string; createdAt: string; disabledAt: string | null };
   signInMethods: string[];
@@ -198,6 +201,7 @@ export function AdminPage() {
                 {[['Products', orgDetail.data.counts.products], ['Locations', orgDetail.data.counts.locations], ['Open orders', orgDetail.data.counts.openOrders], ['API keys', orgDetail.data.counts.apiKeys], ['Webhooks', orgDetail.data.counts.webhooks]].map(([l, n]) => <div className="tile" key={l as string}><div className="num">{n}</div><div className="lbl">{l}</div></div>)}
               </div>
               <p className="time">Last activity: {when(orgDetail.data.counts.lastActivityAt)}</p>
+              <PlanEditor key={orgDetail.data.organization.id + JSON.stringify(orgDetail.data.plan)} orgId={orgDetail.data.organization.id} current={orgDetail.data.plan} />
               <ul className="list">
                 {orgDetail.data.members.map((m) => (
                   <li key={m.id}>
@@ -258,5 +262,45 @@ export function AdminPage() {
         </section>
       </main>
     </div>
+  );
+}
+
+/** Pick a plan for one business and override single limits or features. A blank limit means "use the plan's value". */
+function PlanEditor({ orgId, current }: { orgId: string; current: OrgDetail['plan'] }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const plans = useQuery({ queryKey: ['admin', 'plans'], queryFn: () => api<{ data: PlanDef[] }>('GET', '/admin/plans').then((r) => r.data) });
+  const [planId, setPlanId] = useState(current.id);
+  const [limits, setLimits] = useState<Record<string, string>>(() => Object.fromEntries(PLAN_LIMIT_KEYS.map((k) => [k, current.overrides?.limits?.[k] == null ? '' : String(current.overrides.limits[k])])));
+  const [features, setFeatures] = useState<Record<string, string>>(() => Object.fromEntries(PLAN_FEATURE_KEYS.map((k) => [k, current.overrides?.features?.[k] === undefined ? '' : String(current.overrides.features[k])])));
+  const save = useMutation({
+    mutationFn: () => {
+      const l = Object.fromEntries(PLAN_LIMIT_KEYS.filter((k) => limits[k] !== '').map((k) => [k, Number(limits[k])]));
+      const f = Object.fromEntries(PLAN_FEATURE_KEYS.filter((k) => features[k] !== '').map((k) => [k, features[k] === 'true']));
+      return api('PATCH', `/admin/orgs/${orgId}/plan`, { body: { plan: planId, overrides: Object.keys(l).length || Object.keys(f).length ? { limits: l, features: f } : null } });
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin', 'org', orgId] }); toast({ kind: 'success', text: 'Plan saved' }); },
+    onError: (e) => toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Could not save the plan.' }),
+  });
+  const base = plans.data?.find((p) => p.id === planId);
+  return (
+    <details className="plan-editor">
+      <summary>Plan: {plans.data?.find((p) => p.id === current.id)?.name ?? current.id}{current.overrides ? ' (with overrides)' : ''}</summary>
+      <form className="settings-grid" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+        <div className="field"><label htmlFor={`pl-${orgId}`}>Plan</label>
+          <select id={`pl-${orgId}`} value={planId} onChange={(e) => setPlanId(e.target.value)}>{plans.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+        {PLAN_LIMIT_KEYS.map((k) => (
+          <div className="field" key={k}><label htmlFor={`pl-${orgId}-${k}`}>{PLAN_LIMIT_LABELS[k]}</label>
+            <input id={`pl-${orgId}-${k}`} type="number" min={0} inputMode="numeric" placeholder={base ? (base.limits[k] == null ? 'No limit' : String(base.limits[k])) : ''} value={limits[k]} onChange={(e) => setLimits({ ...limits, [k]: e.target.value })} /></div>
+        ))}
+        {PLAN_FEATURE_KEYS.map((k) => (
+          <div className="field" key={k}><label htmlFor={`pf-${orgId}-${k}`}>{PLAN_FEATURE_LABELS[k]}</label>
+            <select id={`pf-${orgId}-${k}`} value={features[k]} onChange={(e) => setFeatures({ ...features, [k]: e.target.value })}>
+              <option value="">Plan default ({base ? (base.features[k] ? 'on' : 'off') : '…'})</option><option value="true">On</option><option value="false">Off</option>
+            </select></div>
+        ))}
+        <button className="btn btn-primary" disabled={save.isPending}>Save plan</button>
+      </form>
+    </details>
   );
 }
