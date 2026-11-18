@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { RestoreCard } from '../components/RestoreCard';
-import { API_KEY_SCOPE_LABELS, BACKUP_FORMAT, BACKUP_VERSION, PLAN_LIMIT_KEYS, PLAN_LIMIT_LABELS, ROLES, ROLE_LABELS, ROLE_SUMMARY, SETTINGS_DEFAULTS, WEBHOOK_EVENTS, type OrgSettings, type Role } from '@shoplist/shared';
+import { API_KEY_SCOPE_LABELS, BACKUP_FORMAT, IMPERSONATION_REASONS, type ImpersonationReason, BACKUP_VERSION, PLAN_LIMIT_KEYS, PLAN_LIMIT_LABELS, ROLES, ROLE_LABELS, ROLE_SUMMARY, SETTINGS_DEFAULTS, WEBHOOK_EVENTS, type OrgSettings, type Role } from '@shoplist/shared';
 import { api, ApiError } from '../api';
 import { useShell } from '../components/Shell';
 import { dateParts } from '../format';
@@ -10,6 +10,7 @@ import { Icon } from '../icons';
 import { canAdmin, canDo, useLocations, useMe, usePlan } from '../queries';
 import { useToast } from '../toast';
 import { addPasskey, passkeysSupported, wasCancelled } from '../passkeys';
+import { getSupport } from '../support';
 
 interface Member { id: string; name: string; email?: string; role: Role; deactivatedAt?: string | null; lastSeenAt?: string | null; locationIds?: string[] | null }
 interface Pending { id: string; email: string; role: Role; createdAt: string; expiresAt: string; invitedBy: string | null }
@@ -21,20 +22,23 @@ export function SettingsPage() {
   const qc = useQueryClient();
   const me = useMe();
   const admin = canAdmin(org.role);
+  // Inside a support window the page shows the business only: nothing personal (those routes would show the owner's own data) and nothing with secrets.
+  const supportWindow = getSupport();
+  const inSupport = !!supportWindow && supportWindow.orgId === org.id;
   const refresh = () => qc.invalidateQueries({ queryKey: ['org', org.id] });
   const fail = (e: ApiError) => toast({ kind: 'error', text: e.message });
 
   const [name, setName] = useState(org.name);
   const rename = useMutation({ mutationFn: () => api('PATCH', `/orgs/${org.id}`, { body: { name } }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['me'] }); toast({ kind: 'success', text: 'Organization renamed' }); }, onError: fail });
 
-  const passkeys = useQuery({ queryKey: ['passkeys'], queryFn: () => api<{ data: { id: string; name: string; created_at: string; last_used_at: string | null }[] }>('GET', '/auth/passkeys'), enabled: passkeysSupported() });
+  const passkeys = useQuery({ enabled: passkeysSupported() && !inSupport, queryKey: ['passkeys'], queryFn: () => api<{ data: { id: string; name: string; created_at: string; last_used_at: string | null }[] }>('GET', '/auth/passkeys') });
   const plan = usePlan(org.id);
   const feat = (k: 'apiKeys' | 'webhooks' | 'supportAccess') => plan.data?.features[k] !== false;
   const [sup, setSup] = useState({ minutes: 60, note: '', includeCustomers: false, write: false });
   interface Grant { id: string; note: string | null; includeCustomers: boolean; mode: 'view' | 'assist'; acts: number; createdAt: string; expiresAt: string; endedAt: string | null; active: boolean; views: number; firstViewAt: string | null; lastViewAt: string | null }
-  const grants = useQuery({ enabled: admin && plan.data?.features.supportAccess !== false, queryKey: ['org', org.id, 'support-grants'], queryFn: () => api<{ data: Grant[] }>('GET', `/orgs/${org.id}/support-grants`).then((r) => r.data) });
-  interface AccessReq { id: string; reason: string; minutes: number; write: boolean; includeCustomers: boolean; state: 'pending' | 'approved' | 'declined' | 'cancelled' | 'expired'; createdAt: string; expiresAt: string }
-  const requests = useQuery({ enabled: admin && plan.data?.features.supportAccess !== false, queryKey: ['org', org.id, 'access-requests'], queryFn: () => api<{ data: AccessReq[] }>('GET', `/orgs/${org.id}/access-requests`).then((r) => r.data), refetchInterval: 60_000 });
+  const grants = useQuery({ enabled: admin && !inSupport && plan.data?.features.supportAccess !== false, queryKey: ['org', org.id, 'support-grants'], queryFn: () => api<{ data: Grant[] }>('GET', `/orgs/${org.id}/support-grants`).then((r) => r.data) });
+  interface AccessReq { id: string; kind: 'support' | 'impersonate'; reasonCode: string | null; reason: string; minutes: number; write: boolean; includeCustomers: boolean; state: 'pending' | 'approved' | 'declined' | 'cancelled' | 'expired'; createdAt: string; expiresAt: string }
+  const requests = useQuery({ enabled: admin && !inSupport && plan.data?.features.supportAccess !== false, queryKey: ['org', org.id, 'access-requests'], queryFn: () => api<{ data: AccessReq[] }>('GET', `/orgs/${org.id}/access-requests`).then((r) => r.data), refetchInterval: 60_000 });
   const [reqEdit, setReqEdit] = useState<Record<string, { minutes: number; write: boolean; includeCustomers: boolean }>>({});
   const decideReq = useMutation({
     mutationFn: (v: { id: string; decision: 'approve' | 'decline'; r: AccessReq }) => {
@@ -55,11 +59,11 @@ export function SettingsPage() {
   const removePk = useMutation({ mutationFn: (id: string) => api('DELETE', `/auth/passkeys/${id}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['passkeys'] }); toast({ text: 'Passkey removed' }); }, onError: fail });
 
   interface Sess { id: string; current: boolean; lastSeenAt: string; userAgent: string | null; country: string | null; via: string }
-  const sessions = useQuery({ queryKey: ['sessions'], queryFn: () => api<{ data: Sess[] }>('GET', '/auth/sessions') });
+  const sessions = useQuery({ enabled: !inSupport, queryKey: ['sessions'], queryFn: () => api<{ data: Sess[] }>('GET', '/auth/sessions') });
   const revoke = useMutation({ mutationFn: (id: string) => api('DELETE', `/auth/sessions/${id}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['sessions'] }); toast({ text: 'Signed out' }); }, onError: fail });
   const revokeOthers = useMutation({ mutationFn: () => api('POST', '/auth/sessions/revoke-others', { body: {} }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['sessions'] }); toast({ text: 'Signed out everywhere else' }); }, onError: fail });
   interface AuthEv { at: string; kind: string; door: string | null; country: string | null; browser: string | null; reason: string | null }
-  const events = useQuery({ queryKey: ['auth-events'], queryFn: () => api<{ data: AuthEv[] }>('GET', '/auth/events') });
+  const events = useQuery({ enabled: !inSupport, queryKey: ['auth-events'], queryFn: () => api<{ data: AuthEv[] }>('GET', '/auth/events') });
   const notMe = useMutation({ mutationFn: () => api('POST', '/auth/not-me', { body: {} }), onSuccess: () => { qc.clear(); nav('/login'); }, onError: fail });
   const EVENT_LABEL: Record<string, string> = { signin_ok: 'Signed in', signin_refused: 'Sign-in refused', signout: 'Signed out', session_revoked: 'A session was ended', passkey_added: 'Passkey added', passkey_removed: 'Passkey removed', user_disabled: 'Account disabled', not_me: 'Reported “not me”' };
   const device = (ua: string | null) => (ua ? `${/iPhone|iPad|Android/.test(ua) ? 'Phone or tablet' : /Mac|Windows|Linux/.test(ua) ? 'Computer' : 'Device'} · ${/Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Browser'}` : 'Unknown device');
@@ -73,7 +77,7 @@ export function SettingsPage() {
     onSuccess: (r) => { setForm(null); qc.setQueryData(['org', org.id, 'settings'], r.settings); qc.invalidateQueries({ queryKey: ['me'] }); toast({ kind: 'success', text: 'Business settings saved' }); },
     onError: fail,
   });
-  const prefs = useQuery({ queryKey: ['notification-prefs', org.id], queryFn: () => api<{ data: { kind: string; label: string; inApp: boolean; email: boolean }[]; digest: boolean }>('GET', `/me/notification-preferences?org=${org.id}`) });
+  const prefs = useQuery({ enabled: !inSupport, queryKey: ['notification-prefs', org.id], queryFn: () => api<{ data: { kind: string; label: string; inApp: boolean; email: boolean }[]; digest: boolean }>('GET', `/me/notification-preferences?org=${org.id}`) });
   const setPref = useMutation({ mutationFn: (v: { kind: string; inApp?: boolean; email?: boolean }) => api('PATCH', '/me/notification-preferences', { body: { orgId: org.id, ...v } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['notification-prefs', org.id] }), onError: fail });
   const [backingUp, setBackingUp] = useState(false);
   /** Pages through every product and downloads one JSON file: a copy you control, and the input for a CSV re-import. */
@@ -146,7 +150,7 @@ export function SettingsPage() {
   });
 
   interface ApiKeyRow { id: string; name: string; prefix: string; scopes: string[]; createdAt: string; lastUsedAt: string | null; expiresAt: string | null; revokedAt: string | null }
-  const keys = useQuery({ enabled: admin, queryKey: ['org', org.id, 'api-keys'], queryFn: () => api<{ data: ApiKeyRow[] }>('GET', `/orgs/${org.id}/api-keys`).then((r) => r.data) });
+  const keys = useQuery({ enabled: admin && !inSupport, queryKey: ['org', org.id, 'api-keys'], queryFn: () => api<{ data: ApiKeyRow[] }>('GET', `/orgs/${org.id}/api-keys`).then((r) => r.data) });
   const [keyForm, setKeyForm] = useState<{ name: string; scopes: string[]; days: string }>({ name: '', scopes: [], days: '' });
   const [newKey, setNewKey] = useState('');
   const makeKey = useMutation({
@@ -158,7 +162,7 @@ export function SettingsPage() {
 
   interface HookRow { id: string; url: string; events: string[]; active: boolean; secretPrefix: string; lastStatus: string | null; lastDeliveryAt: string | null }
   interface DeliveryRow { id: string; eventType: string; status: string; httpStatus: number | null; attempts: number; createdAt: string }
-  const hooks = useQuery({ enabled: admin, queryKey: ['org', org.id, 'webhooks'], queryFn: () => api<{ data: HookRow[] }>('GET', `/orgs/${org.id}/webhooks`).then((r) => r.data) });
+  const hooks = useQuery({ enabled: admin && !inSupport, queryKey: ['org', org.id, 'webhooks'], queryFn: () => api<{ data: HookRow[] }>('GET', `/orgs/${org.id}/webhooks`).then((r) => r.data) });
   const [hookForm, setHookForm] = useState<{ url: string; all: boolean; events: string[] }>({ url: '', all: true, events: [] });
   const [newSecret, setNewSecret] = useState('');
   const [openHook, setOpenHook] = useState<string | null>(null);
@@ -305,7 +309,7 @@ export function SettingsPage() {
         )}
 
         {admin && feat('supportAccess') && (
-          <section className="card" aria-labelledby="h-support">
+          <section hidden={inSupport} className="card" aria-labelledby="h-support">
             <h2 id="h-support">Support access</h2>
             <p className="hint">Stuck? Let ShopList support into your business for a short time, or answer a request from them below. Support can only look unless you tick the box to allow changes. They never see your team or settings and can never delete anything. Everything they open or change is logged here and in your activity log as "ShopList support". You can end it at any time.</p>
             {grants.data?.find((g) => g.active) ? (() => {
@@ -331,7 +335,7 @@ export function SettingsPage() {
               const set = (v: Partial<typeof e>) => setReqEdit({ ...reqEdit, [r.id]: { ...e, ...v } });
               return (
                 <div key={r.id} className="card" role="group" aria-label="Support request" style={{ borderColor: '#f39c12' }}>
-                  <p><strong>ShopList support asks to look at your business.</strong> Reason: {r.reason}</p>
+                  <p><strong>{r.kind === 'impersonate' ? 'ShopList support asks to see your business as you see it (including team, settings and activity).' : 'ShopList support asks to look at your business.'}</strong> Reason: {r.kind === 'impersonate' && r.reasonCode ? `${IMPERSONATION_REASONS[r.reasonCode as ImpersonationReason] ?? r.reasonCode}. ` : ''}{r.reason}</p>{r.kind === 'impersonate' && <p className="hint">They act as you, read-only unless you allow changes below. They can never delete, change people or invitations, or see API keys. It shows in your activity log as ShopList support acting as you.</p>}
                   <p className="hint">Asked for {r.minutes} minutes, {r.write ? 'with changes allowed' : 'read-only'}{r.includeCustomers ? ', with customer details' : ''}. Waiting until {dateParts(r.expiresAt).date} {dateParts(r.expiresAt).time}.</p>
                   <div className="settings-grid">
                     <div className="field"><label htmlFor={`rq-min-${r.id}`}>Allow for</label>
@@ -364,7 +368,7 @@ export function SettingsPage() {
         )}
 
         {admin && feat('apiKeys') && (
-          <section className="card" aria-labelledby="h-keys">
+          <section hidden={inSupport} className="card" aria-labelledby="h-keys">
             <h2 id="h-keys">API keys</h2>
             <p className="hint">For other systems, such as a web shop or a scanner. A key belongs to this organization only and can read or write inventory, nothing else. Send it as <code>Authorization: Bearer &lt;key&gt;</code>.</p>
             {keys.data?.length ? (
@@ -401,7 +405,7 @@ export function SettingsPage() {
         )}
 
         {admin && feat('webhooks') && (
-          <section className="card" aria-labelledby="h-hooks">
+          <section hidden={inSupport} className="card" aria-labelledby="h-hooks">
             <h2 id="h-hooks">Webhooks</h2>
             <p className="hint">ShopList sends a signed POST to your address when something happens. Each request carries <code>ShopList-Signature: t=…,v1=…</code>, an HMAC-SHA256 of <code>timestamp.body</code> with your signing secret. Failed deliveries are retried for about a day.</p>
             {hooks.data?.length ? (
@@ -483,7 +487,7 @@ export function SettingsPage() {
           </section>
         )}
 
-        <section className="card">
+        <section hidden={inSupport} className="card">
           <h2>Notifications</h2>
           <p className="hint">Choose what shows up under the bell. Only events relevant to your role are sent.</p>
           <div className="modes">
@@ -498,13 +502,13 @@ export function SettingsPage() {
           </div>
         </section>
 
-        <section className="card">
+        <section hidden={inSupport} className="card">
           <h2>Password</h2>
           <p className="hint">Signed up with Google or an emailed code? Add a password here so you can also sign in with your email and password. You can change it here too.</p>
           <a className="btn btn-outline" href="/account/password">Set or change password</a>
         </section>
 
-        <section className="card">
+        <section hidden={inSupport} className="card">
           <h2>Where you are signed in</h2>
           {sessions.data?.data.length ? (
             <ul className="list">
@@ -519,7 +523,7 @@ export function SettingsPage() {
           {(sessions.data?.data.length ?? 0) > 1 && <button className="btn btn-outline" disabled={revokeOthers.isPending} onClick={() => revokeOthers.mutate()}>Sign out everywhere else</button>}
         </section>
 
-        <section className="card">
+        <section hidden={inSupport} className="card">
           <h2>Recent sign-in activity</h2>
           {events.data?.data.length ? (
             <ul className="list">
@@ -533,7 +537,7 @@ export function SettingsPage() {
         </section>
 
         {passkeysSupported() && (
-          <section className="card">
+          <section hidden={inSupport} className="card">
             <h2>Passkeys</h2>
             <p className="hint">Sign in with your fingerprint, face or device PIN. Your passkey can live on this computer or on your phone: choose the phone option and scan the QR code your browser shows. {admin ? 'Business admins are required to have a passkey. Add two, for example your phone and your computer, so losing one never locks you out.' : 'Passkeys are optional for you but recommended.'}</p>
             {passkeys.data?.data.length ? (
@@ -566,7 +570,7 @@ export function SettingsPage() {
         )}
 
         {(admin || canDo(org.role, 'audit:read')) && (
-          <section className="card" aria-labelledby="h-export">
+          <section hidden={inSupport} className="card" aria-labelledby="h-export">
             <h2 id="h-export">Export the activity log</h2>
             <p className="hint">Who did what and when, as a spreadsheet file. Up to 5,000 rows per file; choose a shorter range for more.</p>
             <div className="settings-grid">
@@ -578,7 +582,7 @@ export function SettingsPage() {
         )}
 
         {admin && (
-          <section className="card">
+          <section hidden={inSupport} className="card">
             <h2>Backup</h2>
             <p className="hint">Download every product and location as one JSON file. Keep it somewhere safe before big changes. </p>
             <button className="btn btn-outline" onClick={backup} disabled={backingUp}>{backingUp ? 'Preparing…' : 'Download backup (JSON)'}</button>
@@ -587,7 +591,7 @@ export function SettingsPage() {
         )}
 
         {org.role === 'admin' && (
-          <section className="card danger">
+          <section hidden={inSupport} className="card danger">
             <h2>Danger zone</h2>
             {org.deleteAfter ? (
               <>

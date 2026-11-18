@@ -686,3 +686,15 @@ export function scoreHealth(i: HealthInput): { score: number; label: HealthLabel
   const score = parts.activity + parts.adminSignIn + parts.backups + parts.headroom;
   return { score, label: score >= 70 ? 'healthy' : score >= 40 ? 'watch' : 'at_risk', parts };
 }
+
+// ---------------------------------------------------------------- support: viewing a business as its admin
+/** The fixed reasons for asking to view a business as its admin. The owner picks one and adds a note. */
+export const IMPERSONATION_REASONS = {
+  reproduce: 'Reproduce a problem only the admin sees',
+  team_setup: 'Check team or role setup',
+  plan_limits: 'Check plan or limits',
+  settings_help: 'Help with settings',
+  other: 'Other (explained in the note)',
+} as const;
+export type ImpersonationReason = keyof typeof IMPERSONATION_REASONS;
+export const IMPERSONATION_REASON_KEYS = Object.keys(IMPERSONATION_REASONS) as [ImpersonationReason, ...ImpersonationReason[]];

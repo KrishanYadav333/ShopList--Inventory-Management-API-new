@@ -272,6 +272,7 @@ While maintenance is on, every write outside `/admin` and `/auth` answers `503 m
 | Route | Purpose |
 |---|---|
 | `POST /admin/orgs/{id}/access-requests` | Owner asks a business for access: `{ minutes: 30|60|240, reason, write?, includeCustomers? }`. 409 `request_pending` if one is waiting; 429 `too_soon` for 15 minutes after a decline or expiry |
+| `POST /admin/orgs/{id}/access-requests` with `kind: 'impersonate'` | Also needs `reasonCode` (`reproduce`, `team_setup`, `plan_limits`, `settings_help`, `other`; `other` needs a note of 10+ characters) and `minutes` 30 or 60 |
 | `GET /admin/access-requests` | Owner: requests across businesses |
 | `DELETE /admin/access-requests/{rid}` | Owner withdraws a pending request |
 | `GET /orgs/{orgId}/access-requests` | Business admin: requests from ShopList support |

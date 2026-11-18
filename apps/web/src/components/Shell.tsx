@@ -36,7 +36,7 @@ export function Shell() {
   const support = me.data?.user.isSuperAdmin ? getSupport() : null;
   const supportOrg = support && support.orgId === orgId ? support : null;
   // The owner is no member: inside a support window the business is shown as if viewed by a read-only person.
-  const org = me.data?.organizations.find((o) => o.id === orgId) ?? (supportOrg ? { id: orgId, name: supportOrg.orgName, slug: '', currency: supportOrg.currency, role: (supportOrg.mode === 'assist' ? 'manager' : 'viewer') as 'manager' | 'viewer' } : undefined);
+  const org = me.data?.organizations.find((o) => o.id === orgId) ?? (supportOrg ? { id: orgId, name: supportOrg.orgName, slug: '', currency: supportOrg.currency, role: (supportOrg.impersonating ? 'admin' : supportOrg.mode === 'assist' ? 'manager' : 'viewer') as 'admin' | 'manager' | 'viewer' } : undefined);
   const dash = useDashboard(orgId);
   const locations = useLocations(orgId);
   const plan = usePlan(orgId);
@@ -191,7 +191,7 @@ export function Shell() {
           )}
         </div>}
         <div className="side-foot">
-          {!supportOrg && <NavLink to={`/o/${orgId}/settings`} className="nav-item"><Icon name="cog" size={18} /><span className="nav-label">Settings</span></NavLink>}
+          {(!supportOrg || supportOrg.impersonating) && <NavLink to={`/o/${orgId}/settings`} className="nav-item"><Icon name="cog" size={18} /><span className="nav-label">Settings</span></NavLink>}
           {!supportOrg && <NotificationBell />}
           {me.data?.user.isSuperAdmin && <NavLink to="/admin" className="nav-item"><Icon name="shield" size={18} /><span className="nav-label">Platform admin</span></NavLink>}
           <button className="nav-item" onClick={async () => { await api('POST', '/auth/logout', { body: {} }).catch(() => {}); qc.clear(); location.assign('/login'); /* a full load, so nothing from the last person stays in memory */ }}><Icon name="logout" size={18} /><span className="nav-label">Sign out</span></button>
@@ -209,7 +209,9 @@ export function Shell() {
         )}
         {supportOrg && (
           <div className="banner banner-support" role="status">
-            <strong>{supportOrg.mode === 'assist' ? 'Support access (can make changes) to' : 'Support access (read-only) to'} {supportOrg.orgName}.</strong> {supportOrg.mode === 'assist' ? 'You can edit products, stock and orders, but not delete. Changes appear as "ShopList support". Ends at' : 'Read-only. Ends at'} {new Date(supportOrg.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Every page you open is logged.
+            {supportOrg.impersonating ? (
+              <><strong>Acting as the admin of {supportOrg.orgName} ({supportOrg.mode === 'assist' ? 'can make changes' : 'read-only'}).</strong> {supportOrg.mode === 'assist' ? 'You can change products, stock, orders and settings, but not delete, and not people, invitations, keys or access. Changes appear as "ShopList support, acting as the admin".' : 'Read-only.'} Ends at {new Date(supportOrg.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Every page you open is logged.</>
+            ) : <><strong>{supportOrg.mode === 'assist' ? 'Support access (can make changes) to' : 'Support access (read-only) to'} {supportOrg.orgName}.</strong> {supportOrg.mode === 'assist' ? 'You can edit products, stock and orders, but not delete. Changes appear as "ShopList support". Ends at' : 'Read-only. Ends at'} {new Date(supportOrg.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Every page you open is logged.</>}
             <button className="btn btn-outline" onClick={() => { clearSupport(); nav('/admin'); }}>Leave</button>
           </div>
         )}

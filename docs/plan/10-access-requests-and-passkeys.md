@@ -1,6 +1,6 @@
 # Access requests, impersonation and passkeys (A1 to A3)
 
-Written 2026-11-19. Status (2026-11-19): **A1 and A3 are built and deployed; A3 enforcement is off until you switch it on. A2 (impersonation) is next.** Builds on hands-on support ([04-phase2-platform.md](04-phase2-platform.md), F19) and passkeys (already in Settings).
+Written 2026-11-19. Status (2026-11-19): **A1, A2 and A3 are built and deployed. Passkey enforcement is off until you switch it on in the owner console. Deviation: the admin is told when a window is approved (they approve it) but not by a separate notice when it ends; the end shows in their Support access history.** Builds on hands-on support ([04-phase2-platform.md](04-phase2-platform.md), F19) and passkeys (already in Settings).
 
 ## What you asked for, and where it stands
 

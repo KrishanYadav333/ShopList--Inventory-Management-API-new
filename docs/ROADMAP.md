@@ -129,3 +129,7 @@ v1 was retired on 2026-11-18 (see OPERATIONS.md, "v1 retired").
 ## Owner console (built 2026-11-18)
 
 See [plan/09-owner-console.md](plan/09-owner-console.md). Built and deployed: O5 console pages with a labelled sidebar, O4 system status and job run records, O2 security alerts with states and notes, O3 business health scores, O1 owner dashboard with an attention list, plus hands-on support (assist) mode. Open: O6, the test business, which needs your test admin email. 331 tests.
+
+## Access requests, view-as-admin and passkeys (built 2026-11-19)
+
+See [plan/10-access-requests-and-passkeys.md](plan/10-access-requests-and-passkeys.md): A1 access requests in both directions with the write tick, A2 viewing a business as its admin (approval, fixed reasons, read-only by default), A3 passkeys with QR with an owner and admin enforcement switch (off by default). 361 tests.

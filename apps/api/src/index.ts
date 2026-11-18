@@ -53,6 +53,8 @@ import {
   type Permission,
   type Role,
   HEALTH_NEW_DAYS,
+  IMPERSONATION_REASONS,
+  IMPERSONATION_REASON_KEYS,
   HEALTH_WEIGHTS,
   scoreHealth,
   type HealthParts,
@@ -97,7 +99,7 @@ import { base64url, decodeCursor, encodeCursor, newId, nowIso, randomToken, sha2
 export { InventoryDO } from './inventory-do';
 
 type OrgPlan = { id: string; limits: PlanLimits; features: PlanFeatures };
-type Vars = { requestId: string; user: AuthUser; org: { id: string; role: Role; locationIds: string[] | null; perms?: readonly Permission[]; plan: OrgPlan; support?: { grantId: string; mode: 'view' | 'assist' } }; apiKey?: ApiKeyPrincipal };
+type Vars = { requestId: string; user: AuthUser; org: { id: string; role: Role; locationIds: string[] | null; perms?: readonly Permission[]; plan: OrgPlan; support?: { grantId: string; mode: 'view' | 'assist'; as?: string } }; apiKey?: ApiKeyPrincipal };
 type Ctx = Context<{ Bindings: Bindings; Variables: Vars }>;
 
 const MAX_BODY = 64 * 1024;
@@ -202,7 +204,7 @@ function ifMatch(c: Ctx): number {
 
 const caller = (c: Ctx): Caller => {
   const l = c.get('org')?.plan.limits;
-  return { actor: c.get('org')?.support ? SUPPORT_ACTOR : c.get('user').id, requestId: c.get('requestId'), ...(l ? { limits: { products: l.products, locations: l.locations, ordersPerMonth: l.ordersPerMonth, importsPerDay: l.importsPerDay } } : {}) };
+  return { actor: c.get('org')?.support ? (c.get('org').support!.as ? `${SUPPORT_ACTOR}:as:${c.get('org').support!.as}` : SUPPORT_ACTOR) : c.get('user').id, requestId: c.get('requestId'), ...(l ? { limits: { products: l.products, locations: l.locations, ordersPerMonth: l.ordersPerMonth, importsPerDay: l.importsPerDay } } : {}) };
 };
 
 /** Which plan feature an organization route belongs to. A switched-off feature does not exist for that business. */
@@ -327,6 +329,10 @@ function gate(c: Ctx, plan: OrgPlan): void {
 /** What a support session may open: inventory screens and reports, never people, settings, keys or integrations. */
 /** How a support session's changes appear in the business's own history. */
 const SUPPORT_ACTOR = 'support:shoplist';
+/** What "view as the admin" may open on top of the usual support areas. API keys and webhooks are left out: they hold secrets. */
+const IMPERSONATE_EXTRA_AREAS = ['members', 'invitations', 'settings', 'audit', 'support-grants', 'access-requests'];
+/** Where changes are possible when the admin also approved changes. People, invitations, keys, grants and deletion are never among them. */
+const IMPERSONATE_WRITE_EXTRA_AREAS = ['settings'];
 const SUPPORT_AREAS = ['products', 'locations', 'stock', 'orders', 'dashboard', 'reports', 'customers', 'purchase-orders', 'suppliers', 'purchasing', 'count-tasks', 'plan'];
 
 async function supportAccess(c: Ctx, orgId: string, grantId: string, permission: Permission, next: () => Promise<void>) {
@@ -334,11 +340,14 @@ async function supportAccess(c: Ctx, orgId: string, grantId: string, permission:
   const gone = () => new AppError(404, 'org_not_found', 'That organization does not exist.');
   const now = nowIso();
   const g = await c.env.DB.prepare(
-    `SELECT g.include_customers AS customers, g.mode, p.limits, p.features, o.plan_id AS planId, o.plan_overrides AS overrides
+    `SELECT g.include_customers AS customers, g.mode, g.impersonate_user_id AS imp,
+            (g.impersonate_user_id IS NULL OR EXISTS (SELECT 1 FROM memberships m WHERE m.org_id = g.org_id AND m.user_id = g.impersonate_user_id AND m.role = 'admin' AND m.deactivated_at IS NULL)) AS impOk,
+            p.limits, p.features, o.plan_id AS planId, o.plan_overrides AS overrides
        FROM support_grants g JOIN organizations o ON o.id = g.org_id JOIN plans p ON p.id = o.plan_id
       WHERE g.id = ? AND g.org_id = ? AND g.ended_at IS NULL AND g.expires_at > ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL`,
-  ).bind(grantId, orgId, now).first<PlanRow & { customers: number; mode: 'view' | 'assist' }>();
-  if (!g) throw gone();
+  ).bind(grantId, orgId, now).first<PlanRow & { customers: number; mode: 'view' | 'assist'; imp: string | null; impOk: number }>();
+  // If the admin being viewed leaves or loses the role, the window is over.
+  if (!g || !g.impOk) throw gone();
   const plan = planOf(g);
   if (!plan.features.supportAccess) throw gone();
   // Enforced here, before any route runs: a 'view' window is read-only, and even 'assist' never deletes.
@@ -346,23 +355,26 @@ async function supportAccess(c: Ctx, orgId: string, grantId: string, permission:
   if (writing && g.mode !== 'assist') throw new AppError(403, 'support_read_only', 'Support access is read-only.');
   if (c.req.method === 'DELETE') throw new AppError(403, 'support_no_delete', 'Support cannot delete anything. Ask the business to do it.');
   const area = new URL(c.req.url).pathname.split('/')[5] ?? '';
-  if (!SUPPORT_AREAS.includes(area)) throw new AppError(403, 'forbidden', 'Support access does not include this page.');
+  if (![...SUPPORT_AREAS, ...(g.imp ? IMPERSONATE_EXTRA_AREAS : [])].includes(area)) throw new AppError(403, 'forbidden', 'Support access does not include this page.');
+  if (writing && g.imp && ![...SUPPORT_AREAS, ...IMPERSONATE_WRITE_EXTRA_AREAS].includes(area)) throw new AppError(403, 'forbidden', 'Support access does not include changing this.');
   gate(c, plan);
   // Assist adds day-to-day inventory work only: never people, settings, keys, approvals, the activity log or deletion.
-  const perms: Permission[] = [...ROLE_PERMISSIONS.viewer, 'cost:read', 'reports:read', ...(g.mode === 'assist' ? (['products:write', 'stock:write', 'orders:write', 'purchasing:write', 'counts:assign'] as Permission[]) : []), ...(g.customers ? (['customers:read'] as Permission[]) : [])];
-  if (SESSION_ONLY.includes(permission) || !perms.includes(permission)) throw new AppError(403, 'forbidden', 'Support access does not include this.');
+  // Viewing as the admin uses the admin's permissions (minus deleting the business and customer details unless allowed); the area lists above do the restricting.
+  const perms: Permission[] = g.imp ? ROLE_PERMISSIONS.admin.filter((x) => x !== 'org:delete' && (x !== 'customers:read' || g.customers === 1)) : [...ROLE_PERMISSIONS.viewer, 'cost:read', 'reports:read', ...(g.mode === 'assist' ? (['products:write', 'stock:write', 'orders:write', 'purchasing:write', 'counts:assign'] as Permission[]) : []), ...(g.customers ? (['customers:read'] as Permission[]) : [])];
+  if ((SESSION_ONLY.includes(permission) && !g.imp) || !perms.includes(permission)) throw new AppError(403, 'forbidden', 'Support access does not include this.');
   const me = c.get('user').id;
+  const actor = g.imp ? `${SUPPORT_ACTOR}:as:${g.imp}` : SUPPORT_ACTOR;
   const path = new URL(c.req.url).pathname.slice('/api/v1'.length);
   // Logged at both ends: the platform audit, and the business's own activity log.
   await Promise.all([
     c.env.DB.batch([
       c.env.DB.prepare(writing ? `UPDATE support_grants SET acts = acts + 1, first_view_at = COALESCE(first_view_at, ?), last_view_at = ? WHERE id = ?` : `UPDATE support_grants SET views = views + 1, first_view_at = COALESCE(first_view_at, ?), last_view_at = ? WHERE id = ?`).bind(now, now, grantId),
-      c.env.DB.prepare(`INSERT INTO platform_audit(id, actor, action, target, detail, request_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(newId('pau'), me, writing ? 'support.act' : 'support.view', orgId, JSON.stringify({ grant: grantId, method: c.req.method, path }), c.get('requestId'), now),
+      c.env.DB.prepare(`INSERT INTO platform_audit(id, actor, action, target, detail, request_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(newId('pau'), me, writing ? 'support.act' : 'support.view', orgId, JSON.stringify({ grant: grantId, method: c.req.method, path, ...(g.imp ? { actingAs: g.imp } : {}) }), c.get('requestId'), now),
     ]),
     // The business sees it as "ShopList support", never as one of its own people. The real person is in the platform audit.
-    c.env.INVENTORY.get(c.env.INVENTORY.idFromName(orgId)).supportView(SUPPORT_ACTOR, c.get('requestId'), `${writing ? c.req.method + ' ' : ''}${path}`),
+    c.env.INVENTORY.get(c.env.INVENTORY.idFromName(orgId)).supportView(actor, c.get('requestId'), `${writing ? c.req.method + ' ' : ''}${path}`),
   ]);
-  c.set('org', { id: orgId, role: g.mode === 'assist' ? 'manager' : 'viewer', locationIds: null, perms, plan, support: { grantId, mode: g.mode } });
+  c.set('org', { id: orgId, role: g.imp ? 'admin' : g.mode === 'assist' ? 'manager' : 'viewer', locationIds: null, perms, plan, support: { grantId, mode: g.mode, ...(g.imp ? { as: g.imp } : {}) } });
   return next();
 }
 
@@ -1824,16 +1836,16 @@ async function ownerUserId(env: Bindings): Promise<string | null> {
 }
 
 /** Opens a support window for the current business. One at a time: a new one replaces any open one. Read-only unless `write`. */
-async function openGrant(c: Ctx, o: { grantedBy: string; note: string | null; minutes: number; includeCustomers: boolean; write: boolean; requestId?: string }): Promise<{ id: string; expiresAt: string }> {
+async function openGrant(c: Ctx, o: { grantedBy: string; note: string | null; minutes: number; includeCustomers: boolean; write: boolean; requestId?: string; impersonateUserId?: string }): Promise<{ id: string; expiresAt: string }> {
   const org = c.get('org');
   const now = nowIso();
   const id = newId('sgr');
   const expiresAt = new Date(Date.now() + o.minutes * 60_000).toISOString();
   await c.env.DB.batch([
     c.env.DB.prepare(`UPDATE support_grants SET ended_at = ? WHERE org_id = ? AND ended_at IS NULL AND expires_at > ?`).bind(now, org.id, now),
-    c.env.DB.prepare(`INSERT INTO support_grants(id, org_id, granted_by, note, include_customers, mode, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, org.id, o.grantedBy, o.note, o.includeCustomers ? 1 : 0, o.write ? 'assist' : 'view', now, expiresAt),
+    c.env.DB.prepare(`INSERT INTO support_grants(id, org_id, granted_by, note, include_customers, mode, created_at, expires_at, impersonate_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, org.id, o.grantedBy, o.note, o.includeCustomers ? 1 : 0, o.write ? 'assist' : 'view', now, expiresAt, o.impersonateUserId ?? null),
   ]);
-  await inventory(c).supportNote(o.grantedBy, c.get('requestId'), 'support.grant', { minutes: o.minutes, write: o.write, includeCustomers: o.includeCustomers, ...(o.requestId ? { request: o.requestId } : {}) });
+  await inventory(c).supportNote(o.grantedBy, c.get('requestId'), 'support.grant', { minutes: o.minutes, write: o.write, includeCustomers: o.includeCustomers, ...(o.requestId ? { request: o.requestId } : {}), ...(o.impersonateUserId ? { actingAs: o.impersonateUserId } : {}) });
   return { id, expiresAt };
 }
 
@@ -1854,7 +1866,19 @@ route('post', '/orgs/:orgId/support-grants', 'settings:manage', async (c) => {
 // ------------------------------------------------------------------ access requests (A1)
 const REQUEST_TTL_MS = 48 * 3600_000;
 const REPEAT_AFTER_MS = 15 * 60_000;
-const requestInput = z.object({ minutes: z.union([z.literal(30), z.literal(60), z.literal(240)]), reason: z.string().trim().min(3).max(300), write: z.boolean().optional(), includeCustomers: z.boolean().optional() }).strict();
+const requestInput = z.object({
+  minutes: z.union([z.literal(30), z.literal(60), z.literal(240)]),
+  reason: z.string().trim().min(3).max(300),
+  write: z.boolean().optional(),
+  includeCustomers: z.boolean().optional(),
+  kind: z.enum(['support', 'impersonate']).optional(),
+  reasonCode: z.enum(IMPERSONATION_REASON_KEYS).optional(),
+}).strict().superRefine((r, ctx) => {
+  if (r.kind !== 'impersonate') return;
+  if (r.minutes > 60) ctx.addIssue({ code: 'custom', path: ['minutes'], message: 'Viewing as the admin is 30 or 60 minutes only.' });
+  if (!r.reasonCode) ctx.addIssue({ code: 'custom', path: ['reasonCode'], message: 'Choose a reason.' });
+  if (r.reasonCode === 'other' && r.reason.length < 10) ctx.addIssue({ code: 'custom', path: ['reason'], message: 'Explain in a sentence.' });
+});
 const decideInput = z.object({ decision: z.enum(['approve', 'decline']), minutes: z.union([z.literal(30), z.literal(60), z.literal(240)]).optional(), write: z.boolean().optional(), includeCustomers: z.boolean().optional() }).strict();
 
 /** A request nobody answered in 48 hours is over. Done lazily, whenever requests are read or made. */
@@ -1862,9 +1886,9 @@ async function expireRequests(env: Bindings, orgId?: string): Promise<void> {
   await env.DB.prepare(`UPDATE access_requests SET state = 'expired', decided_at = expires_at WHERE state = 'pending' AND expires_at <= ?${orgId ? ' AND org_id = ?' : ''}`).bind(...[nowIso(), ...(orgId ? [orgId] : [])]).run();
 }
 
-type RequestRow = { id: string; orgId: string; reason: string; minutes: number; write: number; includeCustomers: number; state: string; createdAt: string; expiresAt: string; decidedAt: string | null };
+type RequestRow = { id: string; orgId: string; kind: string; reasonCode: string | null; reason: string; minutes: number; write: number; includeCustomers: number; state: string; createdAt: string; expiresAt: string; decidedAt: string | null };
 const requestOut = (r: RequestRow & { orgName?: string }) => ({ ...r, write: r.write === 1, includeCustomers: r.includeCustomers === 1 });
-const REQUEST_COLS = `r.id, r.org_id AS orgId, r.reason, r.minutes, r.write, r.include_customers AS includeCustomers, r.state, r.created_at AS createdAt, r.expires_at AS expiresAt, r.decided_at AS decidedAt`;
+const REQUEST_COLS = `r.id, r.org_id AS orgId, r.kind, r.reason_code AS reasonCode, r.reason, r.minutes, r.write, r.include_customers AS includeCustomers, r.state, r.created_at AS createdAt, r.expires_at AS expiresAt, r.decided_at AS decidedAt`;
 
 /** ShopList support asks one business for access. The business admin decides. */
 route('post', '/admin/orgs/:id/access-requests', 'super', async (c) => {
@@ -1879,12 +1903,12 @@ route('post', '/admin/orgs/:id/access-requests', 'super', async (c) => {
   if (recent) throw new AppError(429, 'too_soon', 'The last request was not accepted. Wait 15 minutes before asking again.');
   const rid = newId('arq');
   const now = nowIso();
-  await c.env.DB.prepare(`INSERT INTO access_requests(id, org_id, requested_by, reason, minutes, write, include_customers, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(rid, id, c.get('user').id, data.reason, data.minutes, data.write ? 1 : 0, data.includeCustomers ? 1 : 0, now, new Date(Date.now() + REQUEST_TTL_MS).toISOString()).run();
-  await platformAudit(c, 'access.request', id, { request: rid, minutes: data.minutes, write: !!data.write });
+  await c.env.DB.prepare(`INSERT INTO access_requests(id, org_id, kind, reason_code, requested_by, reason, minutes, write, include_customers, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(rid, id, data.kind ?? 'support', data.reasonCode ?? null, c.get('user').id, data.reason, data.minutes, data.write ? 1 : 0, data.includeCustomers ? 1 : 0, now, new Date(Date.now() + REQUEST_TTL_MS).toISOString()).run();
+  await platformAudit(c, 'access.request', id, { request: rid, kind: data.kind ?? 'support', minutes: data.minutes, write: !!data.write });
   await c.env.INVENTORY.get(c.env.INVENTORY.idFromName(id)).supportNote(SUPPORT_ACTOR, c.get('requestId'), 'support.request', { request: rid, minutes: data.minutes, write: !!data.write });
   const admins = await recipients(c.env, id, ['admin'], 'access.requested');
-  await notify(c.env, id, admins, { kind: 'access.requested', title: `ShopList support asks to look at your business (${accessLabel(!!data.write)}, ${data.minutes} minutes): ${data.reason}`, link: `/o/${id}/settings` });
+  await notify(c.env, id, admins, { kind: 'access.requested', title: data.kind === 'impersonate' ? `ShopList support asks to see your business as you see it (${IMPERSONATION_REASONS[data.reasonCode!]}; ${accessLabel(!!data.write)}, ${data.minutes} minutes): ${data.reason}` : `ShopList support asks to look at your business (${accessLabel(!!data.write)}, ${data.minutes} minutes): ${data.reason}`, link: `/o/${id}/settings` });
   return c.json({ id: rid, state: 'pending' }, 201);
 });
 
@@ -1928,9 +1952,10 @@ route('post', '/orgs/:orgId/access-requests/:rid/decide', 'settings:manage', asy
   const minutes = Math.min(data.minutes ?? req.minutes, req.minutes);
   const write = req.write === 1 && data.write !== false;
   const includeCustomers = req.includeCustomers === 1 && data.includeCustomers !== false;
-  const g = await openGrant(c, { grantedBy: me, note: req.reason, minutes, includeCustomers, write, requestId: req.id });
+  // Viewing as the admin is the approving admin's own view; it ends if they leave the role.
+  const g = await openGrant(c, { grantedBy: me, note: req.reason, minutes, includeCustomers, write, requestId: req.id, ...(req.kind === 'impersonate' ? { impersonateUserId: me } : {}) });
   await c.env.DB.prepare(`UPDATE access_requests SET state = 'approved', decided_by = ?, decided_at = ?, grant_id = ? WHERE id = ?`).bind(me, now, g.id, req.id).run();
-  if (dev) await notify(c.env, '_platform', [dev], { kind: 'access.decided', title: `${name} approved your request (${accessLabel(write)}, ${minutes} minutes)`, link: '/admin/support' });
+  if (dev) await notify(c.env, '_platform', [dev], { kind: 'access.decided', title: `${name} approved your ${req.kind === 'impersonate' ? 'request to view as the admin' : 'request'} (${accessLabel(write)}, ${minutes} minutes)`, link: '/admin/support' });
   return c.json({ state: 'approved', grantId: g.id, expiresAt: g.expiresAt, write, minutes });
 });
 
@@ -1943,21 +1968,21 @@ route('delete', '/orgs/:orgId/support-grants/:gid', 'settings:manage', async (c)
 
 route('get', '/orgs/:orgId/support-grants', 'settings:manage', async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT id, note, include_customers AS includeCustomers, mode, acts, created_at AS createdAt, expires_at AS expiresAt, ended_at AS endedAt, views, first_view_at AS firstViewAt, last_view_at AS lastViewAt
+    `SELECT id, note, include_customers AS includeCustomers, mode, (impersonate_user_id IS NOT NULL) AS impersonating, acts, created_at AS createdAt, expires_at AS expiresAt, ended_at AS endedAt, views, first_view_at AS firstViewAt, last_view_at AS lastViewAt
        FROM support_grants WHERE org_id = ? ORDER BY created_at DESC LIMIT 20`,
   ).bind(c.get('org').id).all<{ id: string; expiresAt: string; endedAt: string | null; includeCustomers: number }>();
   const now = nowIso();
-  return c.json({ data: results.map((g) => ({ ...g, includeCustomers: g.includeCustomers === 1, active: !g.endedAt && g.expiresAt > now })) });
+  return c.json({ data: results.map((g) => ({ ...g, includeCustomers: g.includeCustomers === 1, impersonating: (g as { impersonating?: number }).impersonating === 1, active: !g.endedAt && g.expiresAt > now })) });
 });
 
 /** Windows that are open right now, for the owner to open. */
 route('get', '/admin/support', 'super', async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT g.id, g.org_id AS orgId, o.name AS orgName, g.note, g.include_customers AS includeCustomers, g.mode, g.created_at AS createdAt, g.expires_at AS expiresAt
+    `SELECT g.id, g.org_id AS orgId, o.name AS orgName, g.note, g.include_customers AS includeCustomers, g.mode, (g.impersonate_user_id IS NOT NULL) AS impersonating, g.created_at AS createdAt, g.expires_at AS expiresAt
        FROM support_grants g JOIN organizations o ON o.id = g.org_id JOIN plans p ON p.id = o.plan_id
       WHERE g.ended_at IS NULL AND g.expires_at > ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL ORDER BY g.created_at DESC`,
   ).bind(nowIso()).all<{ includeCustomers: number }>();
-  return c.json({ data: results.map((g) => ({ ...g, includeCustomers: g.includeCustomers === 1 })) });
+  return c.json({ data: results.map((g) => ({ ...g, includeCustomers: g.includeCustomers === 1, impersonating: (g as { impersonating?: number }).impersonating === 1 })) });
 });
 
 // ------------------------------------------------------------------ security alerts (O2)

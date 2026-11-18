@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { PLAN_FEATURE_KEYS, PLAN_FEATURE_LABELS, PLAN_LIMIT_KEYS, PLAN_LIMIT_LABELS, type PlanFeatureKey, type PlanLimitKey } from '@shoplist/shared';
+import { IMPERSONATION_REASONS, type ImpersonationReason, PLAN_FEATURE_KEYS, PLAN_FEATURE_LABELS, PLAN_LIMIT_KEYS, PLAN_LIMIT_LABELS, type PlanFeatureKey, type PlanLimitKey } from '@shoplist/shared';
 import { api, ApiError } from '../api';
 import { dateParts } from '../format';
 import { Icon } from '../icons';
@@ -34,7 +34,7 @@ interface Usage { days: UsageDay[]; limits: Record<string, number>; cpuLimitUs: 
 interface BackupRow { orgId: string; name: string; day: string | null; ok: boolean | null; sizeBytes: number | null; rows: number | null; error: string | null; at: string | null; days: string[] }
 interface Ann { id: string; message: string; severity: string; audience: string; orgId: string | null; startsAt: string; endsAt: string | null; endedAt: string | null }
 interface Maint { id: string; orgId: string | null; orgName: string | null; message: string; startedAt: string }
-interface AccessRequest { id: string; orgId: string; orgName: string; reason: string; minutes: number; write: boolean; includeCustomers: boolean; state: 'pending' | 'approved' | 'declined' | 'cancelled' | 'expired'; createdAt: string; expiresAt: string }
+interface AccessRequest { id: string; kind: 'support' | 'impersonate'; reasonCode: string | null; orgId: string; orgName: string; reason: string; minutes: number; write: boolean; includeCustomers: boolean; state: 'pending' | 'approved' | 'declined' | 'cancelled' | 'expired'; createdAt: string; expiresAt: string }
 interface PasskeyPolicy { on: boolean; ownerHasPasskey: boolean; admins: { total: number; withPasskey: number }; graceDays: number }
 interface Alert { id: string; kind: string; severity: 'high' | 'medium'; label: string; who: string | null; count: number; firstAt: string; lastAt: string; state: 'open' | 'investigating' | 'resolved' | 'dismissed'; note: string | null }
 interface HealthRow { id: string; name: string; day: string | null; score: number | null; status: 'healthy' | 'watch' | 'at_risk' | 'new' | 'suspended' | 'deleting' | 'not_scored'; parts: { activity: number; adminSignIn: number; backups: number; headroom: number } | null }
@@ -79,9 +79,9 @@ export function AdminPage() {
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Restore failed.' }),
   });
   const accessReqs = useQuery({ enabled: on('support'), queryKey: ['admin', 'access-requests'], queryFn: () => api<{ data: AccessRequest[] }>('GET', '/admin/access-requests').then((r) => r.data), refetchInterval: 30_000 });
-  const [rq, setRq] = useState({ orgId: '', minutes: 60, reason: '', write: false, includeCustomers: false });
+  const [rq, setRq] = useState({ orgId: '', minutes: 60, reason: '', write: false, includeCustomers: false, kind: 'support' as 'support' | 'impersonate', reasonCode: 'reproduce' as ImpersonationReason });
   const sendReq = useMutation({
-    mutationFn: () => api('POST', `/admin/orgs/${rq.orgId}/access-requests`, { body: { minutes: rq.minutes, reason: rq.reason.trim(), write: rq.write, includeCustomers: rq.includeCustomers } }),
+    mutationFn: () => api('POST', `/admin/orgs/${rq.orgId}/access-requests`, { body: { minutes: rq.kind === 'impersonate' ? Math.min(rq.minutes, 60) : rq.minutes, reason: rq.reason.trim(), write: rq.write, includeCustomers: rq.includeCustomers, ...(rq.kind === 'impersonate' ? { kind: 'impersonate', reasonCode: rq.reasonCode } : {}) } }),
     onSuccess: () => { setRq({ ...rq, reason: '', write: false, includeCustomers: false }); qc.invalidateQueries({ queryKey: ['admin', 'access-requests'] }); toast({ kind: 'success', text: 'Request sent. The business admin has been told.' }); },
     onError: (e: ApiError) => toast({ kind: 'error', text: e.message }),
   });
@@ -107,7 +107,7 @@ export function AdminPage() {
     onError: (e: ApiError) => toast({ kind: 'error', text: e.message }),
   });
   const security = useQuery({ enabled: on('security'), queryKey: ['admin', 'security'], queryFn: () => api<Security>('GET', '/admin/security') });
-  const support = useQuery({ enabled: on('support'), queryKey: ['admin', 'support'], queryFn: () => api<{ data: { id: string; orgId: string; orgName: string; note: string | null; includeCustomers: boolean; mode: 'view' | 'assist'; expiresAt: string }[] }>('GET', '/admin/support').then((r) => r.data), refetchInterval: 30_000 });
+  const support = useQuery({ enabled: on('support'), queryKey: ['admin', 'support'], queryFn: () => api<{ data: { id: string; orgId: string; orgName: string; note: string | null; includeCustomers: boolean; mode: 'view' | 'assist'; impersonating?: boolean; expiresAt: string }[] }>('GET', '/admin/support').then((r) => r.data), refetchInterval: 30_000 });
   const anns = useQuery({ enabled: on('notices'), queryKey: ['admin', 'announcements'], queryFn: () => api<{ data: Ann[] }>('GET', '/admin/announcements').then((r) => r.data) });
   const maint = useQuery({ enabled: on('notices'), queryKey: ['admin', 'maintenance'], queryFn: () => api<{ data: Maint[] }>('GET', '/admin/maintenance').then((r) => r.data) });
   const [ann, setAnn] = useState({ message: '', severity: 'info', audience: 'everyone', orgId: '' });
@@ -358,8 +358,13 @@ export function AdminPage() {
           <form className="settings-grid" onSubmit={(e) => { e.preventDefault(); sendReq.mutate(); }}>
             <div className="field"><label htmlFor="rq-org">Business</label>
               <select id="rq-org" required value={rq.orgId} onChange={(e) => setRq({ ...rq, orgId: e.target.value })}><option value="">Choose…</option>{orgs.data?.filter((x) => x.status === 'active').map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></div>
+            <fieldset className="field"><legend>What do you need?</legend>
+              <label className="check"><input type="radio" name="rq-kind" checked={rq.kind === 'support'} onChange={() => setRq({ ...rq, kind: 'support' })} /> Look at the business (inventory, orders, reports)</label>
+              <label className="check"><input type="radio" name="rq-kind" checked={rq.kind === 'impersonate'} onChange={() => setRq({ ...rq, kind: 'impersonate', minutes: Math.min(rq.minutes, 60) })} /> View it as the admin sees it (also team, settings and activity). Only for a few cases; 30 or 60 minutes.</label></fieldset>
+            {rq.kind === 'impersonate' && <div className="field"><label htmlFor="rq-code">Case</label>
+              <select id="rq-code" value={rq.reasonCode} onChange={(e) => setRq({ ...rq, reasonCode: e.target.value as ImpersonationReason })}>{Object.entries(IMPERSONATION_REASONS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}</select></div>}
             <div className="field"><label htmlFor="rq-min">For how long</label>
-              <select id="rq-min" value={rq.minutes} onChange={(e) => setRq({ ...rq, minutes: Number(e.target.value) })}><option value={30}>30 minutes</option><option value={60}>1 hour</option><option value={240}>4 hours</option></select></div>
+              <select id="rq-min" value={rq.minutes} onChange={(e) => setRq({ ...rq, minutes: Number(e.target.value) })}><option value={30}>30 minutes</option><option value={60}>1 hour</option>{rq.kind === 'support' && <option value={240}>4 hours</option>}</select></div>
             <div className="field"><label htmlFor="rq-why">Reason (the admin reads this)</label><input id="rq-why" required minLength={3} maxLength={300} value={rq.reason} onChange={(e) => setRq({ ...rq, reason: e.target.value })} /></div>
             <label className="check"><input type="checkbox" checked={rq.write} onChange={(e) => setRq({ ...rq, write: e.target.checked })} /> Also ask to make changes (products, stock, orders; never delete)</label>
             <label className="check"><input type="checkbox" checked={rq.includeCustomers} onChange={(e) => setRq({ ...rq, includeCustomers: e.target.checked })} /> Also ask to see customer details</label>
@@ -369,7 +374,7 @@ export function AdminPage() {
             <ul className="list" aria-label="Access requests">
               {accessReqs.data.slice(0, 10).map((r) => (
                 <li key={r.id}>
-                  <span><strong>{r.orgName}</strong> · {r.reason}<div className="time"><span className={`pill ${r.state === 'approved' ? 'ok' : r.state === 'pending' ? 'warn' : ''}`}>{r.state}</span> {r.minutes} min, {r.write ? 'changes asked for' : 'read-only'} · sent {when(r.createdAt)}</div></span>
+                  <span><strong>{r.orgName}</strong> · {r.kind === 'impersonate' ? `View as admin (${IMPERSONATION_REASONS[r.reasonCode as ImpersonationReason] ?? r.reasonCode}) · ` : ''}{r.reason}<div className="time"><span className={`pill ${r.state === 'approved' ? 'ok' : r.state === 'pending' ? 'warn' : ''}`}>{r.state}</span> {r.minutes} min, {r.write ? 'changes asked for' : 'read-only'} · sent {when(r.createdAt)}</div></span>
                   {r.state === 'pending' && <button className="btn btn-outline" disabled={withdraw.isPending} onClick={() => withdraw.mutate(r.id)}>Withdraw</button>}
                 </li>
               ))}
@@ -384,10 +389,10 @@ export function AdminPage() {
             <ul className="list">
               {support.data.map((g) => (
                 <li key={g.id}>
-                  <span><strong>{g.orgName}</strong>{g.note ? ` · ${g.note}` : ''}<div className="time">{g.mode === 'assist' ? 'Can make changes (never delete)' : 'Read-only'} · {g.includeCustomers ? 'customer details included' : 'no customer details'} · open until {when(g.expiresAt)} ({Math.max(1, Math.round((Date.parse(g.expiresAt) - Date.now()) / 60000))} min left)</div></span>
+                  <span><strong>{g.orgName}</strong>{g.note ? ` · ${g.note}` : ''}<div className="time">{g.impersonating ? 'View as the admin, ' : ''}{g.mode === 'assist' ? 'can make changes (never delete)' : 'read-only'} · {g.includeCustomers ? 'customer details included' : 'no customer details'} · open until {when(g.expiresAt)} ({Math.max(1, Math.round((Date.parse(g.expiresAt) - Date.now()) / 60000))} min left)</div></span>
                   <button className="btn btn-primary" onClick={async () => {
                     const d = await api<OrgDetail>('GET', `/admin/orgs/${g.orgId}`);
-                    setSupport({ orgId: g.orgId, grantId: g.id, orgName: g.orgName, currency: d.organization.currency, expiresAt: g.expiresAt, mode: g.mode });
+                    setSupport({ orgId: g.orgId, grantId: g.id, orgName: g.orgName, currency: d.organization.currency, expiresAt: g.expiresAt, mode: g.mode, impersonating: g.impersonating });
                     nav(`/o/${g.orgId}/products`);
                   }}>Open</button>
                 </li>
