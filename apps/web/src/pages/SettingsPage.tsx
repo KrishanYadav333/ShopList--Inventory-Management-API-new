@@ -463,6 +463,12 @@ export function SettingsPage() {
         </section>
 
         <section className="card">
+          <h2>Password</h2>
+          <p className="hint">Signed up with Google or an emailed code? Add a password here so you can also sign in with your email and password. You can change it here too.</p>
+          <a className="btn btn-outline" href="/account/password">Set or change password</a>
+        </section>
+
+        <section className="card">
           <h2>Where you are signed in</h2>
           {sessions.data?.data.length ? (
             <ul className="list">

@@ -17,6 +17,7 @@ const InvoicePage = lazy(() => import('./pages/InvoicePage'));
 const SharePage = lazy(() => import('./pages/SharePage'));
 const ClerkSignIn = lazy(() => import('./pages/ClerkSignIn'));
 // The platform console is only for the owner, so it loads on demand too.
+const AccountPassword = lazy(() => import('./pages/AccountPassword'));
 const AdminPage = lazy(() => import('./pages/AdminPage').then((m) => ({ default: m.AdminPage })));
 
 export function App() {
@@ -29,6 +30,7 @@ export function App() {
       <Route path="/o/:orgId/orders/:orderId/print" element={<Suspense fallback={<div className="boot">Loading…</div>}><InvoicePage /></Suspense>} />
       <Route path="/s/:kind/:token" element={<Suspense fallback={<div className="boot">Loading…</div>}><SharePage /></Suspense>} />
       <Route path="/invite/:token" element={<Invite />} />
+      <Route path="/account/password/*" element={<Suspense fallback={<div className="boot">Loading…</div>}><AccountPassword /></Suspense>} />
       <Route path="/admin/:page?" element={<Suspense fallback={<div className="boot">Loading…</div>}><AdminPage /></Suspense>} />
       <Route path="/" element={<Home />} />
       <Route path="/o/:orgId" element={<Shell />}>
