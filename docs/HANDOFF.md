@@ -18,8 +18,7 @@ Create a new one, set it with `npx wrangler secret put NAME` (from `apps/api`), 
 Done: phone number and username are off, so clients sign in with email only.
 
 ## Test a real client
-1. As owner, onboard a business or invite an email in Settings.
-2. Open `/login` in a private window with that email and confirm you land in the business with the right role.
+Done 2026-11-17: the owner invited a client email and the client signed in successfully.
 
 ## When you can enable them
 - **R2**: create a bucket `shoplist-backups`; nightly copies can then move out of D1 (they currently sit in the same account).
