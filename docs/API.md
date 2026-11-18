@@ -262,5 +262,6 @@ While maintenance is on, every write outside `/admin` and `/auth` answers `503 m
 | Route | Purpose |
 |---|---|
 | `GET /admin/status` | Last result of every housekeeping job, failures in 7 days, last backup, email sent and failed today |
+| `GET /admin/health` | Each business with its health status, score and the four parts (activity, admin seen, backups, headroom) |
 | `GET /admin/security/alerts?state=` | Security alerts, open first |
 | `PATCH /admin/security/alerts/{id}` | Set `state` (`open`, `investigating`, `resolved`, `dismissed`) and an optional `note` (500 characters) |

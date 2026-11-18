@@ -52,6 +52,10 @@ import {
   type ImportResult,
   type Permission,
   type Role,
+  HEALTH_NEW_DAYS,
+  HEALTH_WEIGHTS,
+  scoreHealth,
+  type HealthParts,
 } from '@shoplist/shared';
 import {
   OAUTH_COOKIE,
@@ -1754,6 +1758,26 @@ route('patch', '/admin/security/alerts/:id', 'super', async (c) => {
   return c.json({ ok: true });
 });
 
+// ------------------------------------------------------------------ business health (O3)
+route('get', '/admin/health', 'super', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT o.id, o.name, o.created_at AS createdAt, o.suspended_at AS suspendedAt, o.delete_after AS deleteAfter,
+            h.score, h.label, h.parts, h.day
+       FROM organizations o
+       LEFT JOIN org_health h ON h.org_id = o.id AND h.day = (SELECT MAX(day) FROM org_health WHERE org_id = o.id)
+      WHERE o.deleted_at IS NULL ORDER BY o.created_at DESC LIMIT 500`,
+  ).all<{ id: string; name: string; createdAt: string; suspendedAt: string | null; deleteAfter: string | null; score: number | null; label: string | null; parts: string | null; day: string | null }>();
+  const rank: Record<string, number> = { at_risk: 0, watch: 1, healthy: 2 };
+  const data = results.map((r) => ({
+    id: r.id, name: r.name, day: r.day, score: r.score,
+    // Suspended and deleting businesses are not scored; a business younger than two weeks is New.
+    status: r.suspendedAt ? 'suspended' : r.deleteAfter ? 'deleting' : Date.now() - Date.parse(r.createdAt) < HEALTH_NEW_DAYS * 86400_000 ? 'new' : r.label ?? 'not_scored',
+    parts: r.parts ? (JSON.parse(r.parts) as HealthParts) : null,
+  }));
+  data.sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3) || (a.score ?? 101) - (b.score ?? 101));
+  return c.json({ data, weights: HEALTH_WEIGHTS });
+});
+
 // ------------------------------------------------------------------ system status (O4)
 /** Is the housekeeping really running? Last result of every job, recent failures, last backups, and today's email. */
 route('get', '/admin/status', 'super', async (c) => {
@@ -2161,10 +2185,38 @@ export async function remindOverdueCounts(env: Bindings): Promise<number> {
   return sent;
 }
 
+/** Scores every live business from four plain parts (see HEALTH_WEIGHTS). Counts only: nothing about products, customers or money is read. */
+export async function computeHealth(env: Bindings, day = nowIso().slice(0, 10)): Promise<{ scored: number }> {
+  const { results } = await env.DB.prepare(
+    `SELECT o.id, o.created_at AS createdAt, p.limits, p.features, o.plan_id AS planId, o.plan_overrides AS overrides
+       FROM organizations o JOIN plans p ON p.id = o.plan_id
+      WHERE o.deleted_at IS NULL AND o.suspended_at IS NULL AND o.delete_after IS NULL LIMIT 500`,
+  ).all<PlanRow & { id: string; createdAt: string }>();
+  const week = new Date(Date.parse(`${day}T00:00:00Z`) - 7 * 86400_000).toISOString().slice(0, 10);
+  const since = new Date(Date.now() - 14 * 86400_000).toISOString();
+  let scored = 0;
+  for (const o of results) {
+    if (Date.now() - Date.parse(o.createdAt) < HEALTH_NEW_DAYS * 86400_000) continue; // shown as New, not scored
+    try {
+      const plan = planOf(o);
+      const stub = env.INVENTORY.get(env.INVENTORY.idFromName(o.id));
+      const [changes14d, usage] = await Promise.all([stub.changesSince(since), stub.planUsage()]);
+      const seen = await env.DB.prepare(`SELECT MAX(s.last_seen_at) AS t FROM sessions s JOIN memberships m ON m.user_id = s.user_id WHERE m.org_id = ? AND m.role = 'admin' AND m.deactivated_at IS NULL`).bind(o.id).first<{ t: string | null }>();
+      const bk = await env.DB.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(ok), 0) AS ok FROM backup_runs WHERE org_id = ? AND day >= ?`).bind(o.id, week).first<{ n: number; ok: number }>();
+      const use = (n: number, limit: number | null | undefined) => (limit ? n / limit : 0);
+      const limitUse = Math.max(use(usage.products, plan.limits.products), use(usage.locations, plan.limits.locations));
+      const r = scoreHealth({ changes14d, adminSeenDaysAgo: seen?.t ? Math.floor((Date.now() - Date.parse(seen.t)) / 86400_000) : null, backupDays: bk?.n ?? 0, backupOkDays: bk?.ok ?? 0, limitUse });
+      await env.DB.prepare(`INSERT OR REPLACE INTO org_health(org_id, day, score, label, parts) VALUES (?, ?, ?, ?, ?)`).bind(o.id, day, r.score, r.label, JSON.stringify(r.parts)).run();
+      scored++;
+    } catch (e) { console.error(JSON.stringify({ level: 'error', message: 'health failed for one business', org: o.id, error: (e as Error).message })); }
+  }
+  return { scored };
+}
+
 /** The housekeeping jobs, with how often each is expected to run (used by the status card). */
 const JOBS = [
   { job: 'usage', every: 'hourly' }, { job: 'digests', every: 'hourly' }, { job: 'security-alerts', every: 'hourly' },
-  { job: 'count-reminders', every: 'daily' }, { job: 'backups', every: 'daily' }, { job: 'purge', every: 'daily' }, { job: 'retention', every: 'daily' }, { job: 'prune', every: 'daily' },
+  { job: 'count-reminders', every: 'daily' }, { job: 'backups', every: 'daily' }, { job: 'health', every: 'daily' }, { job: 'purge', every: 'daily' }, { job: 'retention', every: 'daily' }, { job: 'prune', every: 'daily' },
 ] as const;
 
 /** Runs one job, records how it went, and never lets a failure (or a failure to record) stop the next job. */
@@ -2208,11 +2260,13 @@ export async function dailyJob(env: Bindings, hourUtc = new Date().getUTCHours()
     }
     return { ok: r.ok, failed: r.failed };
   });
+  await step(env, 'health', hourUtc, () => computeHealth(env));
   await step(env, 'purge', hourUtc, () => purgeDueOrgs(env));
   await step(env, 'retention', hourUtc, () => pruneRetention(env));
   await step(env, 'prune', hourUtc, async () => {
     await pruneAuthEvents(env);
     await pruneAlerts(env);
+    await env.DB.prepare(`DELETE FROM org_health WHERE day < ?`).bind(new Date(Date.now() - 90 * 86400_000).toISOString().slice(0, 10)).run();
     await env.DB.prepare(`DELETE FROM cron_runs WHERE started_at < ?`).bind(new Date(Date.now() - 30 * 86400_000).toISOString()).run();
   });
 }

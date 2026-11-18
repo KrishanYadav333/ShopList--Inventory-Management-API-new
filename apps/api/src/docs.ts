@@ -155,6 +155,7 @@ export const DOCS: Record<string, Doc> = {
   'GET /admin/security': { tag: 'Platform admin', summary: 'Sign-in counts, refusals, rate limits and notable events' },
   'GET /admin/security/alerts': { tag: 'Platform admin', summary: 'Security alerts with their state and note, open first (filter with ?state=)' },
   'PATCH /admin/security/alerts/:id': { tag: 'Platform admin', summary: 'Set an alert to open, investigating, resolved or dismissed, with an optional note' },
+  'GET /admin/health': { tag: 'Platform admin', summary: 'Each business with a health score and the four parts that make it up' },
   'GET /admin/status': { tag: 'Platform admin', summary: 'Last result of every housekeeping job, recent failures, last backup and email sent today' },
   'GET /admin/orgs': { tag: 'Platform admin', summary: 'All organizations with status', query: pageQuery },
   'POST /admin/orgs': { tag: 'Platform admin', summary: 'Onboard a business: create it with no members and invite its admin' },

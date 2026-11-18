@@ -1,6 +1,6 @@
 # Owner console plan (O1 to O6)
 
-Written 2026-11-18. Status (2026-11-18): **O5, O4 and O2 are built and deployed; O3, O1 and O6 are next.** Nothing here changes the three access levels in [01-model.md](01-model.md).
+Written 2026-11-18. Status (2026-11-18): **O5, O4, O2 and O3 are built and deployed; O1 and O6 are next.** Nothing here changes the three access levels in [01-model.md](01-model.md).
 
 ## Why this plan exists
 

@@ -656,3 +656,33 @@ export function parseBackup(raw: unknown): { ok: true; backup: ParsedBackup } | 
   }
   return { ok: true, backup: { fromOrgId: typeof org.id === 'string' ? org.id : null, fromName: typeof org.name === 'string' ? org.name : null, locations, rows, skipped } };
 }
+
+// ---------------------------------------------------------------- business health (owner console)
+/** Weights live here so they can be tuned without a migration. They add up to 100. */
+export const HEALTH_WEIGHTS = { activity: 40, adminSignIn: 20, backups: 20, headroom: 20 } as const;
+export const HEALTH_NEW_DAYS = 14;
+export interface HealthInput {
+  /** Changes recorded in the business's own activity log in the last 14 days, support actions excluded. */
+  changes14d: number;
+  /** Days since any admin of the business was last seen, or null if never. */
+  adminSeenDaysAgo: number | null;
+  /** Nightly backups in the last 7 days. */
+  backupDays: number;
+  backupOkDays: number;
+  /** Highest use of a finite plan limit (products, locations) as a fraction, 0 when every limit is unlimited. */
+  limitUse: number;
+}
+export interface HealthParts { activity: number; adminSignIn: number; backups: number; headroom: number }
+export type HealthLabel = 'healthy' | 'watch' | 'at_risk';
+
+export function scoreHealth(i: HealthInput): { score: number; label: HealthLabel; parts: HealthParts } {
+  const w = HEALTH_WEIGHTS;
+  const activity = i.changes14d <= 0 ? 0 : i.changes14d < 5 ? w.activity * 0.375 : i.changes14d < 20 ? w.activity * 0.75 : w.activity;
+  const adminSignIn = i.adminSeenDaysAgo === null ? 0 : i.adminSeenDaysAgo <= 7 ? w.adminSignIn : i.adminSeenDaysAgo <= 30 ? w.adminSignIn / 2 : 0;
+  // Nothing to judge yet counts as fine; a failed night does not.
+  const backups = i.backupDays === 0 ? w.backups : Math.round((w.backups * i.backupOkDays) / i.backupDays);
+  const headroom = i.limitUse >= 1 ? 0 : i.limitUse >= 0.7 ? w.headroom / 2 : w.headroom;
+  const parts = { activity: Math.round(activity), adminSignIn: Math.round(adminSignIn), backups, headroom: Math.round(headroom) };
+  const score = parts.activity + parts.adminSignIn + parts.backups + parts.headroom;
+  return { score, label: score >= 70 ? 'healthy' : score >= 40 ? 'watch' : 'at_risk', parts };
+}

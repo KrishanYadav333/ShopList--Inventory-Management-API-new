@@ -16,7 +16,7 @@ describe('system status (O4)', () => {
     const r = await call(dev, 'GET', '/admin/status');
     expect(r.status).toBe(200);
     const byJob = Object.fromEntries(r.body.jobs.map((j: { job: string; state: string }) => [j.job, j.state]));
-    for (const j of ['usage', 'digests', 'security-alerts', 'count-reminders', 'backups', 'purge', 'retention', 'prune']) expect(byJob[j], j).toBe('ok');
+    for (const j of ['usage', 'digests', 'security-alerts', 'count-reminders', 'backups', 'health', 'purge', 'retention', 'prune']) expect(byJob[j], j).toBe('ok');
     expect(r.body.email.dailyCap).toBe(250);
     expect(r.body.healthUrl).toContain('/api/v1/health');
   });

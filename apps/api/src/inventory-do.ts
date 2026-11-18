@@ -1041,6 +1041,11 @@ export class InventoryDO extends DurableObject<Bindings> {
     };
   }
 
+  /** How many changes the business itself made since a date. ShopList support's own actions do not count as the business being active. */
+  changesSince(since: string): number {
+    return this.one<{ n: number }>(`SELECT COUNT(*) AS n FROM audit_log WHERE created_at >= ? AND actor NOT LIKE 'support:%' AND action NOT LIKE 'support.%'`, since)?.n ?? 0;
+  }
+
   /** Numbers only, for the platform console. Never returns product, customer or order details. */
   stats(): { products: number; locations: number; openOrders: number; orders: number; lastActivityAt: string | null } {
     const counters = Object.fromEntries(this.all<{ name: string; value: number }>(`SELECT name, value FROM counters`).map((r) => [r.name, r.value]));

@@ -35,6 +35,7 @@ interface BackupRow { orgId: string; name: string; day: string | null; ok: boole
 interface Ann { id: string; message: string; severity: string; audience: string; orgId: string | null; startsAt: string; endsAt: string | null; endedAt: string | null }
 interface Maint { id: string; orgId: string | null; orgName: string | null; message: string; startedAt: string }
 interface Alert { id: string; kind: string; severity: 'high' | 'medium'; label: string; who: string | null; count: number; firstAt: string; lastAt: string; state: 'open' | 'investigating' | 'resolved' | 'dismissed'; note: string | null }
+interface HealthRow { id: string; name: string; day: string | null; score: number | null; status: 'healthy' | 'watch' | 'at_risk' | 'new' | 'suspended' | 'deleting' | 'not_scored'; parts: { activity: number; adminSignIn: number; backups: number; headroom: number } | null }
 interface JobStatus { job: string; every: 'hourly' | 'daily'; state: 'ok' | 'failed' | 'not running' | 'no runs yet'; lastAt: string | null; error: string | null; detail: Record<string, number> | null; failures7d: number }
 interface SystemStatus { jobs: JobStatus[]; lastBackup: { day: string; ok: number; failed: number } | null; email: { sentToday: number; failedToday: number; dailyCap: number; configured: boolean }; healthUrl: string }
 interface AuditRow { id: string; action: string; target: string | null; createdAt: string; requestId: string }
@@ -75,6 +76,7 @@ export function AdminPage() {
     onSuccess: (r) => { setRehearse(null); qc.invalidateQueries({ queryKey: ['admin'] }); toast({ kind: 'success', text: `Created “${r.organization.name}”.${r.invitation ? ' Send its admin the invitation link from the business details.' : ''}` }); },
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Restore failed.' }),
   });
+  const health = useQuery({ enabled: on('operations'), queryKey: ['admin', 'health'], queryFn: () => api<{ data: HealthRow[]; weights: Record<string, number> }>('GET', '/admin/health'), staleTime: 300_000 });
   const status = useQuery({ enabled: on('operations'), queryKey: ['admin', 'status'], queryFn: () => api<SystemStatus>('GET', '/admin/status'), refetchInterval: 60_000 });
   const alerts = useQuery({ enabled: on('security'), queryKey: ['admin', 'alerts'], queryFn: () => api<{ data: Alert[] }>('GET', '/admin/security/alerts').then((r) => r.data), refetchInterval: 60_000 });
   const [alertNote, setAlertNote] = useState<Record<string, string>>({});
@@ -186,6 +188,26 @@ export function AdminPage() {
                 <li><span>Is the whole site up?<div className="time">Only an outside checker can tell you when the site itself is down. Point a free uptime checker at {status.data.healthUrl}</div></span></li>
               </ul>
             </>
+          )}
+        </section>
+      )}
+      {page === 'operations' && (
+        <section className="admin-section" aria-labelledby="h-health">
+          <h2 id="h-health">Business health</h2>
+          <p className="hint">Scored each night from four parts: activity in the last 14 days, an admin seen recently, nightly backups, and room under the plan limits. Counts only; nothing about products or customers is read. It is a prompt to look, not a verdict.</p>
+          {health.isError ? <p className="hint">Could not load.</p> : !health.data ? <p className="hint">Loading…</p> : !health.data.data.length ? <p className="hint">No businesses yet.</p> : (
+            <div className="orders-table-container"><table className="orders-table">
+              <caption className="sr-only">Business health, worst first</caption>
+              <thead><tr><th>Business</th><th>Status</th><th>Score</th><th>Activity /{health.data.weights.activity}</th><th>Admin seen /{health.data.weights.adminSignIn}</th><th>Backups /{health.data.weights.backups}</th><th>Headroom /{health.data.weights.headroom}</th></tr></thead>
+              <tbody>{health.data.data.map((h) => (
+                <tr key={h.id}>
+                  <td>{h.name}</td>
+                  <td><span className={`pill ${h.status === 'healthy' ? 'ok' : h.status === 'at_risk' ? 'bad' : h.status === 'watch' ? 'warn' : ''}`}>{({ healthy: 'Healthy', watch: 'Watch', at_risk: 'At risk', new: 'New', suspended: 'Suspended', deleting: 'Deleting', not_scored: 'Not scored yet' })[h.status]}</span></td>
+                  <td>{h.score ?? '-'}</td>
+                  <td>{h.parts?.activity ?? '-'}</td><td>{h.parts?.adminSignIn ?? '-'}</td><td>{h.parts?.backups ?? '-'}</td><td>{h.parts?.headroom ?? '-'}</td>
+                </tr>
+              ))}</tbody>
+            </table></div>
           )}
         </section>
       )}
