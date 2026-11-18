@@ -80,11 +80,9 @@ describe('rate limiting', () => {
   it('returns 429 with Retry-After when one client floods the API', async () => {
     const flood = ip();
     // Keep flooding in bursts: on a slow CI runner one burst can straddle the limiter's window.
-    let limited: Response[] = [];
-    for (let i = 0; i < 6 && !limited.length; i++) {
-      const burst = await Promise.all(Array.from({ length: 160 }, () => call(null, 'GET', '/health', undefined, { 'cf-connecting-ip': flood })));
-      limited = burst.filter((r) => r.status === 429);
-    }
+    const burst = () => Promise.all(Array.from({ length: 160 }, () => call(null, 'GET', '/health', undefined, { 'cf-connecting-ip': flood })));
+    let limited = (await burst()).filter((r) => r.status === 429);
+    for (let i = 0; i < 5 && !limited.length; i++) limited = (await burst()).filter((r) => r.status === 429);
     expect(limited.length).toBeGreaterThan(0);
     expect(limited[0].headers.get('retry-after')).toBe('10');
     expect(limited[0].headers.get('content-type')).toContain('application/problem+json');
