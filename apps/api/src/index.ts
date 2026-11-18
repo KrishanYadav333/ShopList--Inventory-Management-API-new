@@ -494,7 +494,7 @@ route('post', '/auth/clerk/session', 'public', async (c) => {
     email = profile.email;
     // By invitation: no account is created for someone the owner has not invited.
     if ((await clerkAdmission(c.env, profile.email)) === 'not_invited') {
-      throw new AppError(403, 'not_invited', 'This ShopList is by invitation. Ask the owner to invite this email address, then sign in again.');
+      throw new AppError(403, 'not_invited', `Access is by invitation, and ${profile.email} has not been invited. Ask your company admin to invite this email address, then sign in again.`);
     }
     // The owner's account is reachable only through the owner's door. A customer-door identity must never attach to it.
     const owner = await c.env.DB.prepare(`SELECT 1 AS x FROM users u JOIN oauth_accounts o ON o.user_id = u.id WHERE u.email = ? AND o.provider = 'github' LIMIT 1`).bind(profile.email.toLowerCase()).first();
