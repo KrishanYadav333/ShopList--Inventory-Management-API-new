@@ -151,7 +151,7 @@ export function AdminPage() {
         </nav>
         <div className="side-foot">
           <p className="side-note">Sign-in: {o ? ({ 'owner-only': 'owner only', 'invite-only': 'by invitation', open: 'open to anyone' }[o.signin]) : '...'}</p>
-          <button className="nav-item" onClick={async () => { await api('POST', '/auth/logout', { body: {} }).catch(() => {}); qc.clear(); nav('/login'); }}><Icon name="logout" size={18} /><span className="nav-label">Sign out</span></button>
+          <button className="nav-item" onClick={async () => { await api('POST', '/auth/logout', { body: {} }).catch(() => {}); qc.clear(); location.assign('/login'); /* a full load, so nothing from the last person stays in memory */ }}><Icon name="logout" size={18} /><span className="nav-label">Sign out</span></button>
         </div>
       </aside>
 

@@ -194,7 +194,7 @@ export function Shell() {
           {!supportOrg && <NavLink to={`/o/${orgId}/settings`} className="nav-item"><Icon name="cog" size={18} /><span className="nav-label">Settings</span></NavLink>}
           {!supportOrg && <NotificationBell />}
           {me.data?.user.isSuperAdmin && <NavLink to="/admin" className="nav-item"><Icon name="shield" size={18} /><span className="nav-label">Platform admin</span></NavLink>}
-          <button className="nav-item" onClick={async () => { await api('POST', '/auth/logout', { body: {} }).catch(() => {}); qc.clear(); nav('/login'); }}><Icon name="logout" size={18} /><span className="nav-label">Sign out</span></button>
+          <button className="nav-item" onClick={async () => { await api('POST', '/auth/logout', { body: {} }).catch(() => {}); qc.clear(); location.assign('/login'); /* a full load, so nothing from the last person stays in memory */ }}><Icon name="logout" size={18} /><span className="nav-label">Sign out</span></button>
         </div>
       </aside>
       {menuOpen && <div className="scrim" onClick={() => setMenuOpen(false)} />}

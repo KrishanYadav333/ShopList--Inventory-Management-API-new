@@ -46,6 +46,9 @@ export function Login({ owner = false }: { owner?: boolean }) {
             {health.data?.signin !== 'owner-only' && import.meta.env.VITE_CLERK_PUBLISHABLE_KEY && (
               <a className="btn btn-primary full" href="/sign-in">Sign in with email or Google</a>
             )}
+            {health.data?.signin !== 'owner-only' && import.meta.env.VITE_CLERK_PUBLISHABLE_KEY && (
+              <a className="fine" href="/sign-up">Invited? Create your account and choose a password</a>
+            )}
             {health.data?.signin !== 'owner-only' && passkeysSupported() && (
               <button type="button" className="btn btn-outline full" disabled={passkey.isPending} onClick={() => { setError(''); passkey.mutate(); }}>
                 {passkey.isPending ? 'Waiting for your passkey…' : 'Sign in with a passkey'}
@@ -94,7 +97,7 @@ export function Home() {
           <img className="brand-mark-lg" src="/logo-symbol.png" alt="ShopList" width="56" height="60" />
           <h1>Welcome, {me.data.user.name.split(' ')[0]}</h1>
           <p>You are not part of a business yet. Ask your admin to invite you with this email address ({me.data.user.email}), then sign in again.</p>
-          <button className="btn btn-outline full" onClick={async () => { await api('POST', '/auth/logout', { body: {} }).catch(() => {}); qc.clear(); nav('/login'); }}>Sign out</button>
+          <button className="btn btn-outline full" onClick={async () => { await api('POST', '/auth/logout', { body: {} }).catch(() => {}); qc.clear(); location.assign('/login'); /* a full load, so nothing from the last person stays in memory */ }}>Sign out</button>
         </div>
       </main>
     );
@@ -125,7 +128,8 @@ export function Invite() {
   if (me.isLoading) return <div className="boot">Loading…</div>;
   if (!me.data) {
     try { sessionStorage.setItem('sl_return', location.pathname); } catch { /* storage unavailable */ }
-    return <Navigate to="/login" replace />;
+    // An invited person usually has no account yet, so start at sign-up, where they choose a password or use Google.
+    return <Navigate to="/sign-up" replace />;
   }
   return (
     <main className="auth">
