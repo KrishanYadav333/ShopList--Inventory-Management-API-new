@@ -2,7 +2,7 @@
 
 ShopList is a multi-tenant inventory management system that runs entirely on Cloudflare and can be operated on the **Workers Free plan**. These documents are the specification for v2. They describe the target system, the reasoning behind each decision, and the order to build it in.
 
-> **Status:** v1 (live at https://shoplist.technology1.workers.dev) is a single shared product list with no accounts. Everything in these documents describes **v2**, which has not been built yet. Use [ROADMAP.md](ROADMAP.md) to see what is done.
+> **Status:** v2 is built and live at https://shoplist-v2.technology1.workers.dev. [ROADMAP.md](ROADMAP.md) shows what is done.
 
 ## Documents
 

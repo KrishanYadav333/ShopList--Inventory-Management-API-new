@@ -106,7 +106,7 @@ Single shared product list, Worker + D1, public writes capped at 500 products. L
 
 Built and tested: orders with stock reservations, API keys, CSV import, webhooks, barcode scanning, generated API docs (`/api/docs`, `/api/v1/openapi.json`) and a CI pipeline (`.github/workflows/ci.yml`: typecheck, tests, bundle budget, audit).
 
-Also built since: Clerk customer sign-in and sign-up (invite-only), a separate owner page (`/owner`), passkeys (register, sign in, remove), products table virtualization, and `apps/api/scripts/migrate-v1.mjs` for the v1 to v2 copy.
+Also built since: Clerk customer sign-in and sign-up (invite-only), a separate owner page (`/owner`), passkeys (register, sign in, remove), products table virtualization. v1 was retired and removed.
 
 Measured on the live site: axe reports 0 violations on login, owner, orders, products, history and settings at 1280 px and 390 px. Lighthouse mobile on `/login`: performance 99, accessibility 100, best practices 92 (the one flag is the expected 401 from `/me` when signed out), SEO 100. A 1,500-product table keeps about 20 rows in the DOM while scrolling.
 

@@ -199,23 +199,6 @@ Setup for a new instance:
 A development instance (`pk_test_`) works on any address but is limited and shows a "Development mode" badge. A production instance needs a domain you control, because Clerk verifies it with DNS records.
 
 
-## Moving from v1 to v2
-
-v1 (`shoplist.technology1.workers.dev`) is a single shared list. v2 is multi-tenant, so the data goes into one organization. Nothing in v1 is changed or deleted.
-
-1. Sign in to v2 at `/owner` with GitHub and create an organization (for example "Demo").
-2. In Settings → API keys, create a key with **Write inventory**.
-3. Dry run, which only reads v1 and prints what it would send:
-   ```
-   node apps/api/scripts/migrate-v1.mjs
-   ```
-4. Import. The script upserts by SKU, so running it twice is harmless and reports "unchanged" the second time:
-   ```
-   V2_URL=https://shoplist-v2.technology1.workers.dev ORG_ID=org_xxx API_KEY=sl_live_xxx \
-     node apps/api/scripts/migrate-v1.mjs --apply
-   ```
-5. Check the product count and a few quantities in v2, then revoke the API key.
-6. Cutover is your call and is not scripted: point links at v2, and leave v1 running read-only until you are happy. Prices are converted from decimals to integer minor units, and each product's quantity lands at the organization's default location as an opening stock movement.
 
 ## Accessibility and performance checks
 
@@ -244,4 +227,4 @@ Secrets for the usage page: `CF_ANALYTICS_TOKEN` (read-only), `CF_ACCOUNT_ID`. T
 
 ## v1 retired
 
-2026-11-18: the v1 Worker `shoplist` (https://shoplist.technology1.workers.dev) was deleted at the owner's request once v2 was stable. Its code stays in this repo (`backend/`, `frontend/`, `worker/`, root `wrangler.jsonc`) and can be redeployed with `npx wrangler deploy` from the repo root. Its D1 database `shoplist-db` (2 demo products) was left in place; delete it with `npx wrangler d1 delete shoplist-db` if you no longer want it.
+2026-11-18: v1 (`shoplist.technology1.workers.dev`) was deleted at the owner's request: the Worker, its D1 database `shoplist-db` (2 demo products), and its code (`backend/`, `frontend/`, `worker/`, root `wrangler.jsonc`, `migrations/`, `SETUP.md`) and the `migrate-v1.mjs` script. Git history still has all of it.
