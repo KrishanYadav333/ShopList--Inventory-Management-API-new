@@ -16,7 +16,7 @@ describe('system status (O4)', () => {
     const r = await call(dev, 'GET', '/admin/status');
     expect(r.status).toBe(200);
     const byJob = Object.fromEntries(r.body.jobs.map((j: { job: string; state: string }) => [j.job, j.state]));
-    for (const j of ['usage', 'digests', 'count-reminders', 'backups', 'purge', 'retention', 'prune']) expect(byJob[j], j).toBe('ok');
+    for (const j of ['usage', 'digests', 'security-alerts', 'count-reminders', 'backups', 'purge', 'retention', 'prune']) expect(byJob[j], j).toBe('ok');
     expect(r.body.email.dailyCap).toBe(250);
     expect(r.body.healthUrl).toContain('/api/v1/health');
   });
@@ -25,7 +25,7 @@ describe('system status (O4)', () => {
     await env.DB.prepare(`DELETE FROM cron_runs`).run();
     await dailyJob(env, 9);
     const { results } = await env.DB.prepare(`SELECT DISTINCT job FROM cron_runs ORDER BY job`).all<{ job: string }>();
-    expect(results.map((x) => x.job)).toEqual(['digests', 'usage']);
+    expect(results.map((x) => x.job)).toEqual(['digests', 'security-alerts', 'usage']);
   });
 
   it('a job stuck failing is shown as failed, and two failures in a row tell the owner once', async () => {

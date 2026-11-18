@@ -384,3 +384,6 @@ a.btn { text-decoration: none; }
 .pill.ok { background: #d4edda; color: #14532d; }
 .pill.bad { background: #f8d7da; color: #7a1b13; }
 .pill.warn { background: #fff3cd; color: #6b4e00; }
+.alert-row { flex-wrap: wrap; gap: 8px; }
+.alert-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.alert-actions input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; min-width: 160px; }

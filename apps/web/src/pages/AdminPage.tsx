@@ -34,6 +34,7 @@ interface Usage { days: UsageDay[]; limits: Record<string, number>; cpuLimitUs: 
 interface BackupRow { orgId: string; name: string; day: string | null; ok: boolean | null; sizeBytes: number | null; rows: number | null; error: string | null; at: string | null; days: string[] }
 interface Ann { id: string; message: string; severity: string; audience: string; orgId: string | null; startsAt: string; endsAt: string | null; endedAt: string | null }
 interface Maint { id: string; orgId: string | null; orgName: string | null; message: string; startedAt: string }
+interface Alert { id: string; kind: string; severity: 'high' | 'medium'; label: string; who: string | null; count: number; firstAt: string; lastAt: string; state: 'open' | 'investigating' | 'resolved' | 'dismissed'; note: string | null }
 interface JobStatus { job: string; every: 'hourly' | 'daily'; state: 'ok' | 'failed' | 'not running' | 'no runs yet'; lastAt: string | null; error: string | null; detail: Record<string, number> | null; failures7d: number }
 interface SystemStatus { jobs: JobStatus[]; lastBackup: { day: string; ok: number; failed: number } | null; email: { sentToday: number; failedToday: number; dailyCap: number; configured: boolean }; healthUrl: string }
 interface AuditRow { id: string; action: string; target: string | null; createdAt: string; requestId: string }
@@ -75,6 +76,13 @@ export function AdminPage() {
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Restore failed.' }),
   });
   const status = useQuery({ enabled: on('operations'), queryKey: ['admin', 'status'], queryFn: () => api<SystemStatus>('GET', '/admin/status'), refetchInterval: 60_000 });
+  const alerts = useQuery({ enabled: on('security'), queryKey: ['admin', 'alerts'], queryFn: () => api<{ data: Alert[] }>('GET', '/admin/security/alerts').then((r) => r.data), refetchInterval: 60_000 });
+  const [alertNote, setAlertNote] = useState<Record<string, string>>({});
+  const setAlert = useMutation({
+    mutationFn: (v: { id: string; state: Alert['state'] }) => api('PATCH', `/admin/security/alerts/${v.id}`, { body: { state: v.state, note: alertNote[v.id]?.trim() || undefined } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin', 'alerts'] }); toast({ text: 'Alert updated' }); },
+    onError: (e: ApiError) => toast({ kind: 'error', text: e.message }),
+  });
   const security = useQuery({ enabled: on('security'), queryKey: ['admin', 'security'], queryFn: () => api<Security>('GET', '/admin/security') });
   const support = useQuery({ enabled: on('support'), queryKey: ['admin', 'support'], queryFn: () => api<{ data: { id: string; orgId: string; orgName: string; note: string | null; includeCustomers: boolean; mode: 'view' | 'assist'; expiresAt: string }[] }>('GET', '/admin/support').then((r) => r.data), refetchInterval: 30_000 });
   const anns = useQuery({ enabled: on('notices'), queryKey: ['admin', 'announcements'], queryFn: () => api<{ data: Ann[] }>('GET', '/admin/announcements').then((r) => r.data) });
@@ -308,6 +316,32 @@ export function AdminPage() {
         </section>)}
 
         {page === 'security' && (
+        <section className="admin-section" aria-labelledby="h-alerts">
+          <h2 id="h-alerts">Alerts</h2>
+          {alerts.isError ? <p className="hint">Could not load alerts.</p> : !alerts.data ? <p className="hint">Loading…</p> : !alerts.data.length ? <p className="hint">No alerts. They appear here when the sign-in log shows something worth a look.</p> : (
+            <ul className="list" aria-label="Security alerts">
+              {alerts.data.map((a) => (
+                <li key={a.id} className="alert-row">
+                  <span>
+                    <strong>{a.label}</strong> <span className={`pill ${a.severity === 'high' ? 'bad' : 'warn'}`}>{a.severity}</span> <span className="pill">{a.state}</span>
+                    <div className="time">{a.who ?? 'unknown'} · seen {a.count} time{a.count === 1 ? '' : 's'} · last {when(a.lastAt)}{a.note ? ` · note: ${a.note}` : ''}</div>
+                  </span>
+                  {(a.state === 'open' || a.state === 'investigating') && (
+                    <span className="alert-actions">
+                      <label className="sr-only" htmlFor={`an-${a.id}`}>Note for this alert</label>
+                      <input id={`an-${a.id}`} maxLength={500} placeholder="Note (optional)" value={alertNote[a.id] ?? ''} onChange={(e) => setAlertNote({ ...alertNote, [a.id]: e.target.value })} />
+                      {a.state === 'open' && <button className="btn btn-outline" disabled={setAlert.isPending} onClick={() => setAlert.mutate({ id: a.id, state: 'investigating' })}>Investigate</button>}
+                      <button className="btn btn-primary" disabled={setAlert.isPending} onClick={() => setAlert.mutate({ id: a.id, state: 'resolved' })}>Resolve</button>
+                      <button className="btn btn-outline" disabled={setAlert.isPending} onClick={() => setAlert.mutate({ id: a.id, state: 'dismissed' })}>Dismiss</button>
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+      {page === 'security' && (
         <section className="admin-section" aria-labelledby="h-sec">
           <h2 id="h-sec">Security</h2>
           {security.data ? (() => {

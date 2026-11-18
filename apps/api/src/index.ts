@@ -83,6 +83,7 @@ import { backupOrg, readBackup, runBackups } from './backups';
 import { fetchUsage, foldUsage, overLine, topBusinesses, FREE_LIMITS, CPU_LIMIT_US, METRIC_LABEL } from './usage';
 import { sendMail, unsubscribeUrl, DIGEST_KIND, EMAIL_DEFAULT_ON, PLATFORM_DAILY_CAP, wantsEmail } from './email';
 import { KIND_LABELS, NOTIFICATION_KINDS, notify, notifyForEvent, recipients } from './notify';
+import { ALERT_KINDS, ALERT_STATES, detectAlerts, pruneAlerts } from './alerts';
 import { pruneAuthEvents, recordAuthEvent, recordRateLimited, type AuthEventKind } from './authevents';
 import { clerkConfigured, fetchClerkProfile, verifyClerkToken } from './clerk';
 import { AppError, problemResponse, unwrap } from './errors';
@@ -1722,6 +1723,37 @@ route('get', '/admin/support', 'super', async (c) => {
   return c.json({ data: results.map((g) => ({ ...g, includeCustomers: g.includeCustomers === 1 })) });
 });
 
+// ------------------------------------------------------------------ security alerts (O2)
+route('get', '/admin/security/alerts', 'super', async (c) => {
+  const state = c.req.query('state');
+  if (state && !(ALERT_STATES as readonly string[]).includes(state)) throw new AppError(400, 'invalid_state', 'Unknown state.');
+  const { results } = await c.env.DB.prepare(
+    `SELECT a.id, a.kind, a.severity, a.subject, a.count, a.detail, a.first_at AS firstAt, a.last_at AS lastAt, a.state, a.note, a.updated_at AS updatedAt, u.email AS userEmail
+       FROM security_alerts a LEFT JOIN users u ON u.id = substr(a.subject, 1, instr(a.subject || '|', '|') - 1)
+      ${state ? 'WHERE a.state = ?' : ''} ORDER BY CASE a.state WHEN 'open' THEN 0 WHEN 'investigating' THEN 1 ELSE 2 END, a.last_at DESC LIMIT 100`,
+  ).bind(...(state ? [state] : [])).all<{ id: string; kind: keyof typeof ALERT_KINDS; severity: string; subject: string | null; detail: string | null; userEmail: string | null; [k: string]: unknown }>();
+  return c.json({
+    data: results.map(({ subject, detail, userEmail, ...a }) => ({
+      ...a,
+      label: ALERT_KINDS[a.kind]?.label ?? a.kind,
+      // A user id becomes their email (the owner may see it); a hash is shortened; nothing raw is stored.
+      who: userEmail ?? (subject === 'owner-door' ? 'the owner sign-in' : subject ? `address ${subject.slice(0, 8)}` : null),
+      detail: detail ? (JSON.parse(detail) as unknown) : null,
+    })),
+  });
+});
+
+const alertPatch = z.object({ state: z.enum(ALERT_STATES), note: z.string().trim().max(500).optional() }).strict();
+route('patch', '/admin/security/alerts/:id', 'super', async (c) => {
+  const { data } = await readJson(c, alertPatch);
+  const id = c.req.param('id') ?? '';
+  const old = await c.env.DB.prepare(`SELECT state FROM security_alerts WHERE id = ?`).bind(id).first<{ state: string }>();
+  if (!old) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  await c.env.DB.prepare(`UPDATE security_alerts SET state = ?, note = COALESCE(?, note), updated_at = ?, updated_by = ? WHERE id = ?`).bind(data.state, data.note ?? null, nowIso(), c.get('user').id, id).run();
+  await platformAudit(c, 'security.alert', id, { from: old.state, to: data.state, noted: data.note !== undefined });
+  return c.json({ ok: true });
+});
+
 // ------------------------------------------------------------------ system status (O4)
 /** Is the housekeeping really running? Last result of every job, recent failures, last backups, and today's email. */
 route('get', '/admin/status', 'super', async (c) => {
@@ -2131,7 +2163,7 @@ export async function remindOverdueCounts(env: Bindings): Promise<number> {
 
 /** The housekeeping jobs, with how often each is expected to run (used by the status card). */
 const JOBS = [
-  { job: 'usage', every: 'hourly' }, { job: 'digests', every: 'hourly' },
+  { job: 'usage', every: 'hourly' }, { job: 'digests', every: 'hourly' }, { job: 'security-alerts', every: 'hourly' },
   { job: 'count-reminders', every: 'daily' }, { job: 'backups', every: 'daily' }, { job: 'purge', every: 'daily' }, { job: 'retention', every: 'daily' }, { job: 'prune', every: 'daily' },
 ] as const;
 
@@ -2165,6 +2197,7 @@ async function alertIfRepeated(env: Bindings, job: string): Promise<void> {
 export async function dailyJob(env: Bindings, hourUtc = new Date().getUTCHours()): Promise<void> {
   await step(env, 'usage', hourUtc, () => checkUsage(env));
   await step(env, 'digests', hourUtc, () => sendDigests(env));
+  await step(env, 'security-alerts', hourUtc, () => detectAlerts(env));
   if (hourUtc !== 3) return; // the rest runs once a day
   await step(env, 'count-reminders', hourUtc, () => remindOverdueCounts(env));
   await step(env, 'backups', hourUtc, async () => {
@@ -2179,6 +2212,7 @@ export async function dailyJob(env: Bindings, hourUtc = new Date().getUTCHours()
   await step(env, 'retention', hourUtc, () => pruneRetention(env));
   await step(env, 'prune', hourUtc, async () => {
     await pruneAuthEvents(env);
+    await pruneAlerts(env);
     await env.DB.prepare(`DELETE FROM cron_runs WHERE started_at < ?`).bind(new Date(Date.now() - 30 * 86400_000).toISOString()).run();
   });
 }

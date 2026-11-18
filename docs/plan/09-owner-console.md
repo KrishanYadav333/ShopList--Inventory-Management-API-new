@@ -1,6 +1,6 @@
 # Owner console plan (O1 to O6)
 
-Written 2026-11-18. Status: **planned, not built.** Nothing here changes the three access levels in [01-model.md](01-model.md).
+Written 2026-11-18. Status (2026-11-18): **O5, O4 and O2 are built and deployed; O3, O1 and O6 are next.** Nothing here changes the three access levels in [01-model.md](01-model.md).
 
 ## Why this plan exists
 
@@ -108,7 +108,7 @@ Each step ships on its own: migration first, then deploy, then CI green. No step
 **Who.** Owner only.
 
 **How it works.**
-- The hourly job turns four existing detections into alerts: five or more refused sign-ins for one email in a week, any refused attempt at the owner's GitHub door, an admin signing in from a new country, and a "this was not me" report.
+- The hourly job turns four existing detections into alerts: five or more refused sign-ins for one email in the last 24 hours (the plan said a week; a 24-hour window with one alert per day avoids repeating the same alert for seven days), any refused attempt at the owner's GitHub door, an admin signing in from a new country, and a "this was not me" report.
 - An alert has a severity (high for the owner door and not-me reports, medium for the other two), a count, first and last seen, and a state: Open, Investigating, Resolved, Dismissed.
 - The owner opens an alert, changes the state, and may add a note. Each change is written to the platform audit.
 - A new alert sends one in-app notice (new kind `security.alert`) and an email under the existing preferences and caps. A repeat of the same thing updates the count; it does not notify again the same day.

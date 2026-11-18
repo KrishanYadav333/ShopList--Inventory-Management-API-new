@@ -188,3 +188,5 @@ Rules:
 ## Reporting a vulnerability
 
 Email the maintainer (address in the repository's `SECURITY.md` at the root once published) with steps to reproduce. Expect acknowledgement within 3 days. Please do not open a public issue.
+
+- **Security alerts.** The hourly job turns four sign-in patterns into alerts for the owner only: five refusals for one address in 24 hours, any refusal at the owner door, an admin signing in from a new country, and a "not me" report. One alert per source per day (the dedupe key), so a noisy address cannot flood the list. Alerts store a user id or a hash, never a raw email or IP address; the owner console shows the person's email only where the owner may already see it. Each state change (open, investigating, resolved, dismissed) is written to the platform audit. Resolved and dismissed alerts are deleted after 180 days.

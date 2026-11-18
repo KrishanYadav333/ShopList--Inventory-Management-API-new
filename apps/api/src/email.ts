@@ -5,7 +5,7 @@ import { nowIso } from './util';
 export type MailEnv = Pick<Bindings, 'DB' | 'APP_ORIGIN' | 'COOKIE_SIGNING_KEY'> & Partial<Pick<Bindings, 'BREVO_API_KEY' | 'EMAIL_FROM'>>;
 
 /** Which notification kinds are emailed unless the person switches them off. Everything else is in-app only until they opt in. */
-export const EMAIL_DEFAULT_ON = new Set(['approval.requested', 'approval.decided', 'security.not_me', 'support.granted', 'usage.alert', 'backup.failed', 'count.overdue', 'system.alert']);
+export const EMAIL_DEFAULT_ON = new Set(['approval.requested', 'approval.decided', 'security.not_me', 'support.granted', 'usage.alert', 'backup.failed', 'count.overdue', 'system.alert', 'security.alert']);
 export const DIGEST_KIND = 'digest';
 
 export const ORG_DAILY_CAP = 50;
