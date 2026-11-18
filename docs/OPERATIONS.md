@@ -241,3 +241,7 @@ These are local numbers, not the deployed Workers free plan under sustained load
 Secrets: `BREVO_API_KEY`, `EMAIL_FROM` (`wrangler secret put`). Brevo's IP allow-list must be off, because Workers have no fixed address.
 
 Secrets for the usage page: `CF_ANALYTICS_TOKEN` (read-only), `CF_ACCOUNT_ID`. The hourly job warns the owner when any free allowance passes 70%. To turn on per-business counting: enable Analytics Engine in the dashboard, then add `"analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "shoplist_requests" }]` to `wrangler.jsonc`.
+
+## v1 retired
+
+2026-11-18: the v1 Worker `shoplist` (https://shoplist.technology1.workers.dev) was deleted at the owner's request once v2 was stable. Its code stays in this repo (`backend/`, `frontend/`, `worker/`, root `wrangler.jsonc`) and can be redeployed with `npx wrangler deploy` from the repo root. Its D1 database `shoplist-db` (2 demo products) was left in place; delete it with `npx wrangler d1 delete shoplist-db` if you no longer want it.

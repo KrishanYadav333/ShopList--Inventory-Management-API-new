@@ -26,5 +26,5 @@ Done 2026-11-17: the owner invited a client email and the client signed in succe
 - **Own email domain**: add SPF and DKIM for a domain you own in Brevo, then change `EMAIL_FROM`, so mail is less likely to land in spam.
 
 ## Decisions
-- **v1 to v2 cutover**: see OPERATIONS.md. Not started because it retires the old site.
+- **v1 to v2 cutover**: done 2026-11-18. The v1 Worker was deleted; the two demo products were not copied.
 - **Physical phone and VoiceOver checks**: need a person with the device.
