@@ -387,3 +387,5 @@ a.btn { text-decoration: none; }
 .alert-row { flex-wrap: wrap; gap: 8px; }
 .alert-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .alert-actions input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; min-width: 160px; }
+/* Clerk's card has a fixed 25rem width, wider than this card's content box, so it overhung on the right. Fit it instead. */
+.clerk-card .cl-rootBox, .clerk-card .cl-cardBox { width: 100% !important; max-width: 100% !important; box-sizing: border-box; }
