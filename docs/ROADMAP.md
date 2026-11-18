@@ -126,6 +126,6 @@ Also built 2026-11-18: per-product tax rates, receiving up to 10% over on a purc
 
 v1 was retired on 2026-11-18 (see OPERATIONS.md, "v1 retired").
 
-## Planned next: owner console
+## Owner console (built 2026-11-18)
 
-Planned 2026-11-18, not built. See [plan/09-owner-console.md](plan/09-owner-console.md): O5 console structure, O4 system status, O2 security alerts, O3 business health, O1 owner dashboard, O6 test business and runbook.
+See [plan/09-owner-console.md](plan/09-owner-console.md). Built and deployed: O5 console pages with a labelled sidebar, O4 system status and job run records, O2 security alerts with states and notes, O3 business health scores, O1 owner dashboard with an attention list, plus hands-on support (assist) mode. Open: O6, the test business, which needs your test admin email. 331 tests.
