@@ -150,3 +150,47 @@ describe('support access (F19)', () => {
     void uid;
   });
 });
+
+describe('hands-on support (assist mode)', () => {
+  it('needs a reason, and a plain grant stays read-only', async () => {
+    const { org } = await seed();
+    expect((await grant(org, { mode: 'assist', note: undefined })).status).toBe(400);
+    expect((await grant(org, { mode: 'assist', note: 'ab' })).status).toBe(400);
+    const dev = await loginAdmin();
+    const g = (await grant(org)).body;
+    expect(g.mode).toBe('view');
+    expect((await asDev(dev, g.id, 'POST', `${org.base}/products`, { sku: 'V1', name: 'V', priceMinor: 1 })).body.type).toContain('support-read-only');
+  });
+
+  it('assist can change inventory, is recorded as ShopList support, and cannot delete or reach people and settings', async () => {
+    const { org, p } = await seed();
+    const dev = await loginAdmin();
+    const g = (await grant(org, { mode: 'assist', note: 'fix the prices' })).body;
+    expect(g.mode).toBe('assist');
+    const made = await asDev(dev, g.id, 'POST', `${org.base}/products`, { sku: `A-${uid()}`, name: 'Made by support', priceMinor: 500 });
+    expect(made.status).toBe(201);
+    expect((await asDev(dev, g.id, 'PATCH', `${org.base}/products/${p.id}`, { name: 'Renamed' }, )).status).not.toBe(403);
+    expect((await asDev(dev, g.id, 'DELETE', `${org.base}/products/${p.id}`)).body.type).toContain('support-no-delete');
+    for (const path of ['/members', '/api-keys', '/webhooks', '/audit', '/support-grants']) {
+      expect((await asDev(dev, g.id, 'GET', `${org.base}${path}`)).status, path).toBeGreaterThanOrEqual(403);
+    }
+    expect((await asDev(dev, g.id, 'POST', `${org.base}/invitations`, { email: 'x@example.com', role: 'viewer' })).status).toBeGreaterThanOrEqual(403);
+    // The business history names support, never a person.
+    const hist = await call(org.cookie, 'GET', `${org.base}/stock/movements`);
+    expect(hist.status).toBe(200);
+    const list = await call(org.cookie, 'GET', `${org.base}/support-grants`);
+    expect(list.body.data[0].acts).toBeGreaterThanOrEqual(2);
+    const audit = await env.DB.prepare(`SELECT COUNT(*) AS n FROM platform_audit WHERE action = 'support.act' AND target = ?`).bind(org.orgId).first<{ n: number }>();
+    expect(audit!.n).toBeGreaterThanOrEqual(2);
+    const log = await call(org.cookie, 'GET', `${org.base}/audit?limit=50`);
+    expect(JSON.stringify(log.body)).toContain('support:shoplist');
+  });
+
+  it('ending the window stops assist at once', async () => {
+    const { org } = await seed();
+    const dev = await loginAdmin();
+    const g = (await grant(org, { mode: 'assist', note: 'help' })).body;
+    await call(org.cookie, 'DELETE', `${org.base}/support-grants/${g.id}`);
+    expect((await asDev(dev, g.id, 'POST', `${org.base}/products`, { sku: `Z-${uid()}`, name: 'Z', priceMinor: 1 })).status).toBe(404);
+  });
+});

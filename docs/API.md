@@ -241,7 +241,7 @@ All under `/orgs/{orgId}` unless noted. The generated reference at `/api/docs` i
 |---|---|
 | Sign-in history | `GET /auth/events` (your last 20 events), `POST /auth/not-me` (signs you out everywhere, tells your admins) |
 | Plan | `GET /orgs/{orgId}/plan` (limits, switched-on features; admins also get usage). A limit answers `403 plan_limit`; a switched-off feature answers `404` |
-| Support access | `POST/GET /orgs/{orgId}/support-grants`, `DELETE /orgs/{orgId}/support-grants/{id}`. The owner reads with the header `X-Support-Grant: <id>`; every non-GET answers `403 support_read_only` |
+| Support access | `POST/GET /orgs/{orgId}/support-grants`, `DELETE /orgs/{orgId}/support-grants/{id}`. The owner uses the header `X-Support-Grant: <id>`. Body field `mode`: `view` (default, read-only: every non-GET answers `403 support_read_only`) or `assist` (needs a `note` giving the reason; allows changes to products, stock, orders, purchasing and counts; every DELETE answers `403 support_no_delete`) |
 | Deletion | `DELETE /orgs/{orgId}` with `{ "confirmName": "<business name>" }` schedules deletion in 14 days (read-only until then; writes answer `403 org_read_only`); `POST /orgs/{orgId}/cancel-deletion` |
 | Notices | `GET /announcements` (notices and maintenance that apply to you) |
 | Audit export | `GET /orgs/{orgId}/audit?format=csv&from=YYYY-MM-DD&to=YYYY-MM-DD` (5,000 rows at most, `X-Truncated: true` when cut) |

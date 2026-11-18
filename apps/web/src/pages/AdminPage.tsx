@@ -59,7 +59,7 @@ export function AdminPage() {
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Restore failed.' }),
   });
   const security = useQuery({ enabled, queryKey: ['admin', 'security'], queryFn: () => api<Security>('GET', '/admin/security') });
-  const support = useQuery({ enabled, queryKey: ['admin', 'support'], queryFn: () => api<{ data: { id: string; orgId: string; orgName: string; note: string | null; includeCustomers: boolean; expiresAt: string }[] }>('GET', '/admin/support').then((r) => r.data), refetchInterval: 30_000 });
+  const support = useQuery({ enabled, queryKey: ['admin', 'support'], queryFn: () => api<{ data: { id: string; orgId: string; orgName: string; note: string | null; includeCustomers: boolean; mode: 'view' | 'assist'; expiresAt: string }[] }>('GET', '/admin/support').then((r) => r.data), refetchInterval: 30_000 });
   const anns = useQuery({ enabled, queryKey: ['admin', 'announcements'], queryFn: () => api<{ data: Ann[] }>('GET', '/admin/announcements').then((r) => r.data) });
   const maint = useQuery({ enabled, queryKey: ['admin', 'maintenance'], queryFn: () => api<{ data: Maint[] }>('GET', '/admin/maintenance').then((r) => r.data) });
   const [ann, setAnn] = useState({ message: '', severity: 'info', audience: 'everyone', orgId: '' });
@@ -258,10 +258,10 @@ export function AdminPage() {
             <ul className="list">
               {support.data.map((g) => (
                 <li key={g.id}>
-                  <span><strong>{g.orgName}</strong>{g.note ? ` · ${g.note}` : ''}<div className="time">Read-only · {g.includeCustomers ? 'customer details included' : 'no customer details'} · open until {when(g.expiresAt)} ({Math.max(1, Math.round((Date.parse(g.expiresAt) - Date.now()) / 60000))} min left)</div></span>
+                  <span><strong>{g.orgName}</strong>{g.note ? ` · ${g.note}` : ''}<div className="time">{g.mode === 'assist' ? 'Hands-on (can edit, never delete)' : 'Read-only'} · {g.includeCustomers ? 'customer details included' : 'no customer details'} · open until {when(g.expiresAt)} ({Math.max(1, Math.round((Date.parse(g.expiresAt) - Date.now()) / 60000))} min left)</div></span>
                   <button className="btn btn-primary" onClick={async () => {
                     const d = await api<OrgDetail>('GET', `/admin/orgs/${g.orgId}`);
-                    setSupport({ orgId: g.orgId, grantId: g.id, orgName: g.orgName, currency: d.organization.currency, expiresAt: g.expiresAt });
+                    setSupport({ orgId: g.orgId, grantId: g.id, orgName: g.orgName, currency: d.organization.currency, expiresAt: g.expiresAt, mode: g.mode });
                     nav(`/o/${g.orgId}/products`);
                   }}>Open</button>
                 </li>

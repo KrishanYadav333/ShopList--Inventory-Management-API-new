@@ -15,7 +15,7 @@ export function HistoryPage() {
   const q = useMovements(org.id, { reason: reason || undefined, locationId: locationId || undefined });
   const rows = useMemo(() => q.data?.pages.flatMap((p) => p.data) ?? [], [q.data]);
   const locName = (id: string) => locations.data?.find((l) => l.id === id)?.name ?? '—';
-  const who = (actor: string) => (actor === me.data?.user.id ? 'You' : actor.startsWith('key_') ? 'API key' : 'Teammate');
+  const who = (actor: string) => (actor === me.data?.user.id ? 'You' : actor.startsWith('key_') ? 'API key' : actor.startsWith('support:') ? 'ShopList support' : 'Teammate');
 
   return (
     <>

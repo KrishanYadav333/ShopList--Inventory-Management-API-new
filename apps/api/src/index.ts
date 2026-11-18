@@ -92,7 +92,7 @@ import { base64url, decodeCursor, encodeCursor, newId, nowIso, randomToken, sha2
 export { InventoryDO } from './inventory-do';
 
 type OrgPlan = { id: string; limits: PlanLimits; features: PlanFeatures };
-type Vars = { requestId: string; user: AuthUser; org: { id: string; role: Role; locationIds: string[] | null; perms?: readonly Permission[]; plan: OrgPlan; support?: { grantId: string } }; apiKey?: ApiKeyPrincipal };
+type Vars = { requestId: string; user: AuthUser; org: { id: string; role: Role; locationIds: string[] | null; perms?: readonly Permission[]; plan: OrgPlan; support?: { grantId: string; mode: 'view' | 'assist' } }; apiKey?: ApiKeyPrincipal };
 type Ctx = Context<{ Bindings: Bindings; Variables: Vars }>;
 
 const MAX_BODY = 64 * 1024;
@@ -197,7 +197,7 @@ function ifMatch(c: Ctx): number {
 
 const caller = (c: Ctx): Caller => {
   const l = c.get('org')?.plan.limits;
-  return { actor: c.get('user').id, requestId: c.get('requestId'), ...(l ? { limits: { products: l.products, locations: l.locations, ordersPerMonth: l.ordersPerMonth, importsPerDay: l.importsPerDay } } : {}) };
+  return { actor: c.get('org')?.support ? SUPPORT_ACTOR : c.get('user').id, requestId: c.get('requestId'), ...(l ? { limits: { products: l.products, locations: l.locations, ordersPerMonth: l.ordersPerMonth, importsPerDay: l.importsPerDay } } : {}) };
 };
 
 /** Which plan feature an organization route belongs to. A switched-off feature does not exist for that business. */
@@ -290,37 +290,43 @@ function gate(c: Ctx, plan: OrgPlan): void {
   if (feature && !plan.features[feature]) throw new AppError(404, 'not_found', 'There is nothing at this address.');
 }
 /** What a support session may open: inventory screens and reports, never people, settings, keys or integrations. */
+/** How a support session's changes appear in the business's own history. */
+const SUPPORT_ACTOR = 'support:shoplist';
 const SUPPORT_AREAS = ['products', 'locations', 'stock', 'orders', 'dashboard', 'reports', 'customers', 'purchase-orders', 'suppliers', 'purchasing', 'count-tasks', 'plan'];
 
 async function supportAccess(c: Ctx, orgId: string, grantId: string, permission: Permission, next: () => Promise<void>) {
   const gone = () => new AppError(404, 'org_not_found', 'That organization does not exist.');
   const now = nowIso();
   const g = await c.env.DB.prepare(
-    `SELECT g.include_customers AS customers, p.limits, p.features, o.plan_id AS planId, o.plan_overrides AS overrides
+    `SELECT g.include_customers AS customers, g.mode, p.limits, p.features, o.plan_id AS planId, o.plan_overrides AS overrides
        FROM support_grants g JOIN organizations o ON o.id = g.org_id JOIN plans p ON p.id = o.plan_id
       WHERE g.id = ? AND g.org_id = ? AND g.ended_at IS NULL AND g.expires_at > ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL`,
-  ).bind(grantId, orgId, now).first<PlanRow & { customers: number }>();
+  ).bind(grantId, orgId, now).first<PlanRow & { customers: number; mode: 'view' | 'assist' }>();
   if (!g) throw gone();
   const plan = planOf(g);
   if (!plan.features.supportAccess) throw gone();
-  // Read-only is enforced here, before any route runs.
-  if (c.req.method !== 'GET' && c.req.method !== 'HEAD') throw new AppError(403, 'support_read_only', 'Support access is read-only.');
+  // Enforced here, before any route runs: a 'view' window is read-only, and even 'assist' never deletes.
+  const writing = c.req.method !== 'GET' && c.req.method !== 'HEAD';
+  if (writing && g.mode !== 'assist') throw new AppError(403, 'support_read_only', 'Support access is read-only.');
+  if (c.req.method === 'DELETE') throw new AppError(403, 'support_no_delete', 'Support cannot delete anything. Ask the business to do it.');
   const area = new URL(c.req.url).pathname.split('/')[5] ?? '';
   if (!SUPPORT_AREAS.includes(area)) throw new AppError(403, 'forbidden', 'Support access does not include this page.');
   gate(c, plan);
-  const perms: Permission[] = [...ROLE_PERMISSIONS.viewer, 'cost:read', 'reports:read', ...(g.customers ? (['customers:read'] as Permission[]) : [])];
+  // Assist adds day-to-day inventory work only: never people, settings, keys, approvals, the activity log or deletion.
+  const perms: Permission[] = [...ROLE_PERMISSIONS.viewer, 'cost:read', 'reports:read', ...(g.mode === 'assist' ? (['products:write', 'stock:write', 'orders:write', 'purchasing:write', 'counts:assign'] as Permission[]) : []), ...(g.customers ? (['customers:read'] as Permission[]) : [])];
   if (SESSION_ONLY.includes(permission) || !perms.includes(permission)) throw new AppError(403, 'forbidden', 'Support access does not include this.');
   const me = c.get('user').id;
   const path = new URL(c.req.url).pathname.slice('/api/v1'.length);
   // Logged at both ends: the platform audit, and the business's own activity log.
   await Promise.all([
     c.env.DB.batch([
-      c.env.DB.prepare(`UPDATE support_grants SET views = views + 1, first_view_at = COALESCE(first_view_at, ?), last_view_at = ? WHERE id = ?`).bind(now, now, grantId),
-      c.env.DB.prepare(`INSERT INTO platform_audit(id, actor, action, target, detail, request_id, created_at) VALUES (?, ?, 'support.view', ?, ?, ?, ?)`).bind(newId('pau'), me, orgId, JSON.stringify({ grant: grantId, path }), c.get('requestId'), now),
+      c.env.DB.prepare(writing ? `UPDATE support_grants SET acts = acts + 1, first_view_at = COALESCE(first_view_at, ?), last_view_at = ? WHERE id = ?` : `UPDATE support_grants SET views = views + 1, first_view_at = COALESCE(first_view_at, ?), last_view_at = ? WHERE id = ?`).bind(now, now, grantId),
+      c.env.DB.prepare(`INSERT INTO platform_audit(id, actor, action, target, detail, request_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(newId('pau'), me, writing ? 'support.act' : 'support.view', orgId, JSON.stringify({ grant: grantId, method: c.req.method, path }), c.get('requestId'), now),
     ]),
-    c.env.INVENTORY.get(c.env.INVENTORY.idFromName(orgId)).supportView(`support:${me}`, c.get('requestId'), path),
+    // The business sees it as "ShopList support", never as one of its own people. The real person is in the platform audit.
+    c.env.INVENTORY.get(c.env.INVENTORY.idFromName(orgId)).supportView(SUPPORT_ACTOR, c.get('requestId'), `${writing ? c.req.method + ' ' : ''}${path}`),
   ]);
-  c.set('org', { id: orgId, role: 'viewer', locationIds: null, perms, plan, support: { grantId } });
+  c.set('org', { id: orgId, role: g.mode === 'assist' ? 'manager' : 'viewer', locationIds: null, perms, plan, support: { grantId, mode: g.mode } });
   return next();
 }
 
@@ -1669,7 +1675,7 @@ const planRows = async (c: Ctx) => (await c.env.DB.prepare(`SELECT id, name, lim
 
 // ------------------------------------------------------------------ support access (F19)
 const SUPPORT_MINUTES = [30, 60, 240] as const;
-const grantInput = z.object({ minutes: z.union([z.literal(30), z.literal(60), z.literal(240)]), note: z.string().trim().max(300).optional(), includeCustomers: z.boolean().optional() }).strict();
+const grantInput = z.object({ minutes: z.union([z.literal(30), z.literal(60), z.literal(240)]), note: z.string().trim().max(300).optional(), includeCustomers: z.boolean().optional(), mode: z.enum(['view', 'assist']).optional() }).strict().refine((g) => g.mode !== 'assist' || (g.note?.length ?? 0) >= 3, { message: 'Say what ShopList support should help with.', path: ['note'] });
 
 route('post', '/orgs/:orgId/support-grants', 'settings:manage', async (c) => {
   const { data } = await readJson(c, grantInput);
@@ -1680,14 +1686,14 @@ route('post', '/orgs/:orgId/support-grants', 'settings:manage', async (c) => {
   // One window at a time: a new grant replaces any open one.
   await c.env.DB.batch([
     c.env.DB.prepare(`UPDATE support_grants SET ended_at = ? WHERE org_id = ? AND ended_at IS NULL AND expires_at > ?`).bind(now, org.id, now),
-    c.env.DB.prepare(`INSERT INTO support_grants(id, org_id, granted_by, note, include_customers, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(id, org.id, c.get('user').id, data.note ?? null, data.includeCustomers ? 1 : 0, now, expiresAt),
+    c.env.DB.prepare(`INSERT INTO support_grants(id, org_id, granted_by, note, include_customers, mode, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, org.id, c.get('user').id, data.note ?? null, data.includeCustomers ? 1 : 0, data.mode ?? 'view', now, expiresAt),
   ]);
-  await inventory(c).supportNote(c.get('user').id, c.get('requestId'), 'support.grant', { minutes: data.minutes, includeCustomers: !!data.includeCustomers });
+  await inventory(c).supportNote(c.get('user').id, c.get('requestId'), 'support.grant', { minutes: data.minutes, mode: data.mode ?? 'view', includeCustomers: !!data.includeCustomers });
   const dev = await c.env.DB.prepare(`SELECT user_id AS id FROM oauth_accounts WHERE provider = 'github' AND provider_user_id = ?`).bind(c.env.SUPER_ADMIN_GITHUB_ID ?? '').first<{ id: string }>();
   const name = (await c.env.DB.prepare(`SELECT name FROM organizations WHERE id = ?`).bind(org.id).first<{ name: string }>())?.name ?? 'A business';
   // The owner belongs to no business, so platform notices use the '_platform' scope.
-  if (dev) await notify(c.env, '_platform', [dev.id], { kind: 'support.granted', title: `${name} opened support access for ${data.minutes} minutes${data.note ? `: ${data.note}` : ''}`, link: '/admin' });
-  return c.json({ id, expiresAt, includeCustomers: !!data.includeCustomers }, 201);
+  if (dev) await notify(c.env, '_platform', [dev.id], { kind: 'support.granted', title: `${name} opened ${data.mode === 'assist' ? 'hands-on ' : ''}support access for ${data.minutes} minutes${data.note ? `: ${data.note}` : ''}`, link: '/admin' });
+  return c.json({ id, expiresAt, mode: data.mode ?? 'view', includeCustomers: !!data.includeCustomers }, 201);
 });
 
 route('delete', '/orgs/:orgId/support-grants/:gid', 'settings:manage', async (c) => {
@@ -1699,7 +1705,7 @@ route('delete', '/orgs/:orgId/support-grants/:gid', 'settings:manage', async (c)
 
 route('get', '/orgs/:orgId/support-grants', 'settings:manage', async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT id, note, include_customers AS includeCustomers, created_at AS createdAt, expires_at AS expiresAt, ended_at AS endedAt, views, first_view_at AS firstViewAt, last_view_at AS lastViewAt
+    `SELECT id, note, include_customers AS includeCustomers, mode, acts, created_at AS createdAt, expires_at AS expiresAt, ended_at AS endedAt, views, first_view_at AS firstViewAt, last_view_at AS lastViewAt
        FROM support_grants WHERE org_id = ? ORDER BY created_at DESC LIMIT 20`,
   ).bind(c.get('org').id).all<{ id: string; expiresAt: string; endedAt: string | null; includeCustomers: number }>();
   const now = nowIso();
@@ -1709,7 +1715,7 @@ route('get', '/orgs/:orgId/support-grants', 'settings:manage', async (c) => {
 /** Windows that are open right now, for the owner to open. */
 route('get', '/admin/support', 'super', async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT g.id, g.org_id AS orgId, o.name AS orgName, g.note, g.include_customers AS includeCustomers, g.created_at AS createdAt, g.expires_at AS expiresAt
+    `SELECT g.id, g.org_id AS orgId, o.name AS orgName, g.note, g.include_customers AS includeCustomers, g.mode, g.created_at AS createdAt, g.expires_at AS expiresAt
        FROM support_grants g JOIN organizations o ON o.id = g.org_id JOIN plans p ON p.id = o.plan_id
       WHERE g.ended_at IS NULL AND g.expires_at > ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL ORDER BY g.created_at DESC`,
   ).bind(nowIso()).all<{ includeCustomers: number }>();

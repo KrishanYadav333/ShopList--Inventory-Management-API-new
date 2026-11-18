@@ -1,5 +1,5 @@
 /** The owner's open support window, kept for this browser tab only. Closing the tab forgets it. */
-export interface SupportView { orgId: string; grantId: string; orgName: string; currency: string; expiresAt: string }
+export interface SupportView { orgId: string; grantId: string; orgName: string; currency: string; expiresAt: string; mode: 'view' | 'assist' }
 const KEY = 'shoplist.support';
 
 export function getSupport(): SupportView | null {
