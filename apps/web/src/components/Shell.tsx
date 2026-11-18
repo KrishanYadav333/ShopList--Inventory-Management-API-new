@@ -209,7 +209,7 @@ export function Shell() {
         )}
         {supportOrg && (
           <div className="banner banner-support" role="status">
-            <strong>{supportOrg.mode === 'assist' ? 'Hands-on support for' : 'Support view of'} {supportOrg.orgName}.</strong> {supportOrg.mode === 'assist' ? 'You can edit products, stock and orders, but not delete. Changes appear as "ShopList support". Ends at' : 'Read-only. Ends at'} {new Date(supportOrg.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Every page you open is logged.
+            <strong>{supportOrg.mode === 'assist' ? 'Support access (can make changes) to' : 'Support access (read-only) to'} {supportOrg.orgName}.</strong> {supportOrg.mode === 'assist' ? 'You can edit products, stock and orders, but not delete. Changes appear as "ShopList support". Ends at' : 'Read-only. Ends at'} {new Date(supportOrg.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Every page you open is logged.
             <button className="btn btn-outline" onClick={() => { clearSupport(); nav('/admin'); }}>Leave</button>
           </div>
         )}

@@ -266,3 +266,14 @@ While maintenance is on, every write outside `/admin` and `/auth` answers `503 m
 | `GET /admin/health` | Each business with its health status, score and the four parts (activity, admin seen, backups, headroom) |
 | `GET /admin/security/alerts?state=` | Security alerts, open first |
 | `PATCH /admin/security/alerts/{id}` | Set `state` (`open`, `investigating`, `resolved`, `dismissed`) and an optional `note` (500 characters) |
+
+### Access requests
+
+| Route | Purpose |
+|---|---|
+| `POST /admin/orgs/{id}/access-requests` | Owner asks a business for access: `{ minutes: 30|60|240, reason, write?, includeCustomers? }`. 409 `request_pending` if one is waiting; 429 `too_soon` for 15 minutes after a decline or expiry |
+| `GET /admin/access-requests` | Owner: requests across businesses |
+| `DELETE /admin/access-requests/{rid}` | Owner withdraws a pending request |
+| `GET /orgs/{orgId}/access-requests` | Business admin: requests from ShopList support |
+| `POST /orgs/{orgId}/access-requests/{rid}/decide` | Business admin: `{ decision: approve|decline, minutes?, write?, includeCustomers? }`. Approving can only narrow (less time, no changes, no customer details), never widen. Creates the support window |
+| `POST /orgs/{orgId}/support-grants` | Business admin opens a window at once: `{ minutes, note?, write?, includeCustomers? }`. `write` needs a `note` of 3+ characters |

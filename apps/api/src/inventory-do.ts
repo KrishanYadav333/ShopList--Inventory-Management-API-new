@@ -969,7 +969,7 @@ export class InventoryDO extends DurableObject<Bindings> {
   }
 
   /** Granting and ending a support window are recorded in the business's own log too. */
-  supportNote(actor: string, requestId: string, action: 'support.grant' | 'support.end', detail: unknown): void {
+  supportNote(actor: string, requestId: string, action: 'support.grant' | 'support.end' | 'support.request' | 'support.decline', detail: unknown): void {
     this.audit({ actor, requestId }, action, 'support', actor, detail);
   }
 

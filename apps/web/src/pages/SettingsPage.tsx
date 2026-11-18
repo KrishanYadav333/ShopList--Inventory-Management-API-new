@@ -30,10 +30,21 @@ export function SettingsPage() {
   const passkeys = useQuery({ queryKey: ['passkeys'], queryFn: () => api<{ data: { id: string; name: string; created_at: string; last_used_at: string | null }[] }>('GET', '/auth/passkeys'), enabled: passkeysSupported() });
   const plan = usePlan(org.id);
   const feat = (k: 'apiKeys' | 'webhooks' | 'supportAccess') => plan.data?.features[k] !== false;
-  const [sup, setSup] = useState({ minutes: 60, note: '', includeCustomers: false, mode: 'view' as 'view' | 'assist' });
+  const [sup, setSup] = useState({ minutes: 60, note: '', includeCustomers: false, write: false });
   interface Grant { id: string; note: string | null; includeCustomers: boolean; mode: 'view' | 'assist'; acts: number; createdAt: string; expiresAt: string; endedAt: string | null; active: boolean; views: number; firstViewAt: string | null; lastViewAt: string | null }
   const grants = useQuery({ enabled: admin && plan.data?.features.supportAccess !== false, queryKey: ['org', org.id, 'support-grants'], queryFn: () => api<{ data: Grant[] }>('GET', `/orgs/${org.id}/support-grants`).then((r) => r.data) });
-  const allow = useMutation({ mutationFn: () => api('POST', `/orgs/${org.id}/support-grants`, { body: { minutes: sup.minutes, note: sup.note.trim() || undefined, includeCustomers: sup.includeCustomers, mode: sup.mode } }), onSuccess: () => { setSup({ ...sup, note: '' }); qc.invalidateQueries({ queryKey: ['org', org.id, 'support-grants'] }); toast({ kind: 'success', text: sup.mode === 'assist' ? 'ShopList support can help until the time shown. You can end it any time.' : 'ShopList support can look until the time shown. You can end it any time.' }); }, onError: fail });
+  interface AccessReq { id: string; reason: string; minutes: number; write: boolean; includeCustomers: boolean; state: 'pending' | 'approved' | 'declined' | 'cancelled' | 'expired'; createdAt: string; expiresAt: string }
+  const requests = useQuery({ enabled: admin && plan.data?.features.supportAccess !== false, queryKey: ['org', org.id, 'access-requests'], queryFn: () => api<{ data: AccessReq[] }>('GET', `/orgs/${org.id}/access-requests`).then((r) => r.data), refetchInterval: 60_000 });
+  const [reqEdit, setReqEdit] = useState<Record<string, { minutes: number; write: boolean; includeCustomers: boolean }>>({});
+  const decideReq = useMutation({
+    mutationFn: (v: { id: string; decision: 'approve' | 'decline'; r: AccessReq }) => {
+      const e = reqEdit[v.id] ?? { minutes: v.r.minutes, write: v.r.write, includeCustomers: v.r.includeCustomers };
+      return api('POST', `/orgs/${org.id}/access-requests/${v.id}/decide`, { body: v.decision === 'decline' ? { decision: 'decline' } : { decision: 'approve', minutes: e.minutes, write: e.write, includeCustomers: e.includeCustomers } });
+    },
+    onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: ['org', org.id, 'access-requests'] }); qc.invalidateQueries({ queryKey: ['org', org.id, 'support-grants'] }); toast({ kind: 'success', text: v.decision === 'approve' ? 'Approved. ShopList support can now look, until the time shown.' : 'Declined' }); },
+    onError: fail,
+  });
+  const allow = useMutation({ mutationFn: () => api('POST', `/orgs/${org.id}/support-grants`, { body: { minutes: sup.minutes, note: sup.note.trim() || undefined, includeCustomers: sup.includeCustomers, write: sup.write } }), onSuccess: () => { setSup({ ...sup, note: '' }); qc.invalidateQueries({ queryKey: ['org', org.id, 'support-grants'] }); toast({ kind: 'success', text: sup.write ? 'ShopList support can make changes until the time shown. You can end it any time.' : 'ShopList support can look until the time shown. You can end it any time.' }); }, onError: fail });
   const endGrant = useMutation({ mutationFn: (id: string) => api('DELETE', `/orgs/${org.id}/support-grants/${id}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['org', org.id, 'support-grants'] }); toast({ text: 'Support access ended' }); }, onError: fail });
   const [pkName, setPkName] = useState('');
   const addPk = useMutation({
@@ -296,12 +307,12 @@ export function SettingsPage() {
         {admin && feat('supportAccess') && (
           <section className="card" aria-labelledby="h-support">
             <h2 id="h-support">Support access</h2>
-            <p className="hint">Stuck? Let ShopList support into your business for a short time. They never see your team or settings and can never delete anything. Everything they open or change is logged here and in your activity log as "ShopList support". You can end it at any time.</p>
+            <p className="hint">Stuck? Let ShopList support into your business for a short time, or answer a request from them below. Support can only look unless you tick the box to allow changes. They never see your team or settings and can never delete anything. Everything they open or change is logged here and in your activity log as "ShopList support". You can end it at any time.</p>
             {grants.data?.find((g) => g.active) ? (() => {
               const g = grants.data!.find((x) => x.active)!;
               return (
                 <div role="status">
-                  <p><strong>Support access ({g.mode === 'assist' ? 'can edit' : 'look only'}) is on</strong> until {dateParts(g.expiresAt).time}{g.includeCustomers ? ' (customer details included)' : ''}. {g.views} page{g.views === 1 ? '' : 's'} viewed{g.mode === 'assist' ? `, ${g.acts} change${g.acts === 1 ? '' : 's'} made` : ''} so far.</p>
+                  <p><strong>Support access ({g.mode === 'assist' ? 'can make changes' : 'read-only'}) is on</strong> until {dateParts(g.expiresAt).time}{g.includeCustomers ? ' (customer details included)' : ''}. {g.views} page{g.views === 1 ? '' : 's'} viewed{g.mode === 'assist' ? `, ${g.acts} change${g.acts === 1 ? '' : 's'} made` : ''} so far.</p>
                   <button className="btn btn-danger" disabled={endGrant.isPending} onClick={() => endGrant.mutate(g.id)}>End now</button>
                 </div>
               );
@@ -309,14 +320,39 @@ export function SettingsPage() {
               <form className="settings-grid" onSubmit={submit(() => allow.mutate())}>
                 <div className="field"><label htmlFor="sup-min">For how long</label>
                   <select id="sup-min" value={sup.minutes} onChange={(e) => setSup({ ...sup, minutes: Number(e.target.value) })}><option value={30}>30 minutes</option><option value={60}>1 hour</option><option value={240}>4 hours</option></select></div>
-                <fieldset className="field"><legend>What can support do?</legend>
-                  <label className="check"><input type="radio" name="sup-mode" checked={sup.mode === 'view'} onChange={() => setSup({ ...sup, mode: 'view' })} /> Look only</label>
-                  <label className="check"><input type="radio" name="sup-mode" checked={sup.mode === 'assist'} onChange={() => setSup({ ...sup, mode: 'assist' })} /> Look and help: edit products, stock and orders (never delete)</label></fieldset>
-                <div className="field"><label htmlFor="sup-note">{sup.mode === 'assist' ? 'What should support help with?' : 'What is the problem? (optional)'}</label><input id="sup-note" maxLength={300} required={sup.mode === 'assist'} minLength={sup.mode === 'assist' ? 3 : undefined} value={sup.note} onChange={(e) => setSup({ ...sup, note: e.target.value })} /></div>
+                <div className="field"><label htmlFor="sup-note">{sup.write ? 'What should support help with?' : 'What is the problem? (optional)'}</label><input id="sup-note" maxLength={300} required={sup.write} minLength={sup.write ? 3 : undefined} value={sup.note} onChange={(e) => setSup({ ...sup, note: e.target.value })} /></div>
+                <label className="check"><input type="checkbox" checked={sup.write} onChange={(e) => setSup({ ...sup, write: e.target.checked })} /> Also allow changes to products, stock and orders (never delete). Without this, support can only look.</label>
                 <label className="check"><input type="checkbox" checked={sup.includeCustomers} onChange={(e) => setSup({ ...sup, includeCustomers: e.target.checked })} /> Include customer names, emails and phone numbers</label>
-                <button className="btn btn-primary" disabled={allow.isPending}>Allow ShopList support</button>
+                <button className="btn btn-primary" disabled={allow.isPending}>Ask ShopList for help</button>
               </form>
             )}
+            {requests.data?.filter((r) => r.state === 'pending').map((r) => {
+              const e = reqEdit[r.id] ?? { minutes: r.minutes, write: r.write, includeCustomers: r.includeCustomers };
+              const set = (v: Partial<typeof e>) => setReqEdit({ ...reqEdit, [r.id]: { ...e, ...v } });
+              return (
+                <div key={r.id} className="card" role="group" aria-label="Support request" style={{ borderColor: '#f39c12' }}>
+                  <p><strong>ShopList support asks to look at your business.</strong> Reason: {r.reason}</p>
+                  <p className="hint">Asked for {r.minutes} minutes, {r.write ? 'with changes allowed' : 'read-only'}{r.includeCustomers ? ', with customer details' : ''}. Waiting until {dateParts(r.expiresAt).date} {dateParts(r.expiresAt).time}.</p>
+                  <div className="settings-grid">
+                    <div className="field"><label htmlFor={`rq-min-${r.id}`}>Allow for</label>
+                      <select id={`rq-min-${r.id}`} value={e.minutes} onChange={(ev) => set({ minutes: Number(ev.target.value) })}>{[30, 60, 240].filter((m) => m <= r.minutes).map((m) => <option key={m} value={m}>{m === 240 ? '4 hours' : m === 60 ? '1 hour' : '30 minutes'}</option>)}</select></div>
+                    {r.write && <label className="check"><input type="checkbox" checked={e.write} onChange={(ev) => set({ write: ev.target.checked })} /> Allow changes (untick to let them look only)</label>}
+                    {r.includeCustomers && <label className="check"><input type="checkbox" checked={e.includeCustomers} onChange={(ev) => set({ includeCustomers: ev.target.checked })} /> Show customer names, emails and phone numbers</label>}
+                  </div>
+                  <div className="alert-actions">
+                    <button className="btn btn-primary" disabled={decideReq.isPending} onClick={() => decideReq.mutate({ id: r.id, decision: 'approve', r })}>Approve</button>
+                    <button className="btn btn-outline" disabled={decideReq.isPending} onClick={() => decideReq.mutate({ id: r.id, decision: 'decline', r })}>Decline</button>
+                  </div>
+                </div>
+              );
+            })}
+            {requests.data?.filter((r) => r.state !== 'pending').length ? (
+              <ul className="list" aria-label="Past support requests">
+                {requests.data.filter((r) => r.state !== 'pending').slice(0, 5).map((r) => (
+                  <li key={r.id}><span><strong>{dateParts(r.createdAt).date}</strong> · {r.reason}<div className="time">Request {r.state}{r.write ? ', changes were asked for' : ''}</div></span></li>
+                ))}
+              </ul>
+            ) : null}
             {grants.data?.filter((g) => !g.active).length ? (
               <ul className="list" aria-label="Past support access">
                 {grants.data.filter((g) => !g.active).slice(0, 5).map((g) => (

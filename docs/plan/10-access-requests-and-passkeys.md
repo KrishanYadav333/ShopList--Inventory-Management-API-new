@@ -1,6 +1,6 @@
 # Access requests, impersonation and passkeys (A1 to A3)
 
-Written 2026-11-19. Status: **planned, not built.** Builds on hands-on support ([04-phase2-platform.md](04-phase2-platform.md), F19) and passkeys (already in Settings).
+Written 2026-11-19. Status (2026-11-19): **A1 is built and deployed; A3 and A2 are next.** Builds on hands-on support ([04-phase2-platform.md](04-phase2-platform.md), F19) and passkeys (already in Settings).
 
 ## What you asked for, and where it stands
 

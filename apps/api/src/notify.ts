@@ -3,7 +3,7 @@ import type { Bindings } from './env';
 import { sendMail, unsubscribeUrl, wantsEmail, type MailEnv } from './email';
 import { newId, nowIso } from './util';
 
-export const NOTIFICATION_KINDS = ['stock.low', 'stock.out', 'order.created', 'approval.requested', 'approval.decided', 'count.assigned', 'security.not_me', 'support.granted', 'po.supplier', 'usage.alert', 'backup.failed', 'count.overdue', 'system.alert', 'security.alert'] as const;
+export const NOTIFICATION_KINDS = ['stock.low', 'stock.out', 'order.created', 'approval.requested', 'approval.decided', 'count.assigned', 'security.not_me', 'support.granted', 'po.supplier', 'usage.alert', 'backup.failed', 'count.overdue', 'system.alert', 'security.alert', 'access.requested', 'access.decided'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 export const KIND_LABELS: Record<NotificationKind, string> = {
@@ -21,6 +21,8 @@ export const KIND_LABELS: Record<NotificationKind, string> = {
   'count.overdue': 'A stock count assigned to me is overdue',
   'system.alert': 'A platform job keeps failing',
   'security.alert': 'A new security alert needs a look',
+  'access.requested': 'ShopList support asks to look at my business',
+  'access.decided': 'A business answered my access request',
 };
 
 /** Which roles hear about which event by default. */

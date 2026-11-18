@@ -124,7 +124,7 @@ describe('support access (F19)', () => {
     const { org } = await seed();
     const dev = await loginAdmin();
     const g = (await grant(org, { note: 'help' })).body.id;
-    expect(JSON.stringify((await call(dev, 'GET', '/me/notifications')).body)).toContain('opened support access for 60 minutes: help');
+    expect(JSON.stringify((await call(dev, 'GET', '/me/notifications')).body)).toContain('asked for support (read-only) for 60 minutes: help');
     const open = await call(dev, 'GET', '/admin/support');
     expect(open.body.data.find((x: { id: string }) => x.id === g)).toMatchObject({ orgName: 'Support Co', orgId: org.orgId });
     expect((await call(org.cookie, 'GET', '/admin/support')).status).toBe(404);
@@ -154,8 +154,8 @@ describe('support access (F19)', () => {
 describe('hands-on support (assist mode)', () => {
   it('needs a reason, and a plain grant stays read-only', async () => {
     const { org } = await seed();
-    expect((await grant(org, { mode: 'assist', note: undefined })).status).toBe(400);
-    expect((await grant(org, { mode: 'assist', note: 'ab' })).status).toBe(400);
+    expect((await grant(org, { write: true, note: undefined })).status).toBe(400);
+    expect((await grant(org, { write: true, note: 'ab' })).status).toBe(400);
     const dev = await loginAdmin();
     const g = (await grant(org)).body;
     expect(g.mode).toBe('view');
@@ -165,7 +165,7 @@ describe('hands-on support (assist mode)', () => {
   it('assist can change inventory, is recorded as ShopList support, and cannot delete or reach people and settings', async () => {
     const { org, p } = await seed();
     const dev = await loginAdmin();
-    const g = (await grant(org, { mode: 'assist', note: 'fix the prices' })).body;
+    const g = (await grant(org, { write: true, note: 'fix the prices' })).body;
     expect(g.mode).toBe('assist');
     const made = await asDev(dev, g.id, 'POST', `${org.base}/products`, { sku: `A-${uid()}`, name: 'Made by support', priceMinor: 500 });
     expect(made.status).toBe(201);
@@ -189,7 +189,7 @@ describe('hands-on support (assist mode)', () => {
   it('ending the window stops assist at once', async () => {
     const { org } = await seed();
     const dev = await loginAdmin();
-    const g = (await grant(org, { mode: 'assist', note: 'help' })).body;
+    const g = (await grant(org, { write: true, note: 'help' })).body;
     await call(org.cookie, 'DELETE', `${org.base}/support-grants/${g.id}`);
     expect((await asDev(dev, g.id, 'POST', `${org.base}/products`, { sku: `Z-${uid()}`, name: 'Z', priceMinor: 1 })).status).toBe(404);
   });

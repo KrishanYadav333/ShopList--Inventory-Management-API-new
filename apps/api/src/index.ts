@@ -207,7 +207,7 @@ const caller = (c: Ctx): Caller => {
 
 /** Which plan feature an organization route belongs to. A switched-off feature does not exist for that business. */
 const featureOf = (area: string, rest: string): PlanFeatureKey | null =>
-  area === 'orders' ? 'orders' : area === 'support-grants' ? 'supportAccess' : area === 'purchase-orders' || area === 'suppliers' || area === 'purchasing' ? 'purchasing' : area === 'approvals' ? 'approvals'
+  area === 'orders' ? 'orders' : (area === 'support-grants' || area === 'access-requests') ? 'supportAccess' : area === 'purchase-orders' || area === 'suppliers' || area === 'purchasing' ? 'purchasing' : area === 'approvals' ? 'approvals'
   : area === 'reports' ? 'reports' : area === 'api-keys' ? 'apiKeys' : area === 'webhooks' ? 'webhooks' : area === 'products' && rest === 'import' ? 'import' : null;
 
 /** Refuses with a plain message when adding one more would pass the plan's limit. */
@@ -895,6 +895,7 @@ route('delete', '/orgs/:orgId', 'org:delete', async (c) => {
   await c.env.DB.prepare(`UPDATE organizations SET delete_after = ?, delete_requested_by = ? WHERE id = ?`).bind(deleteAfter, c.get('user').id, c.get('org').id).run();
   // Any open support window ends with it.
   await c.env.DB.prepare(`UPDATE support_grants SET ended_at = ? WHERE org_id = ? AND ended_at IS NULL`).bind(nowIso(), c.get('org').id).run();
+  await c.env.DB.prepare(`UPDATE access_requests SET state = 'cancelled', decided_at = ? WHERE org_id = ? AND state = 'pending'`).bind(nowIso(), c.get('org').id).run();
   return c.json({ deleteAfter });
 });
 
@@ -1701,25 +1702,122 @@ const planRows = async (c: Ctx) => (await c.env.DB.prepare(`SELECT id, name, lim
 
 // ------------------------------------------------------------------ support access (F19)
 const SUPPORT_MINUTES = [30, 60, 240] as const;
-const grantInput = z.object({ minutes: z.union([z.literal(30), z.literal(60), z.literal(240)]), note: z.string().trim().max(300).optional(), includeCustomers: z.boolean().optional(), mode: z.enum(['view', 'assist']).optional() }).strict().refine((g) => g.mode !== 'assist' || (g.note?.length ?? 0) >= 3, { message: 'Say what ShopList support should help with.', path: ['note'] });
+const grantInput = z.object({ minutes: z.union([z.literal(30), z.literal(60), z.literal(240)]), note: z.string().trim().max(300).optional(), includeCustomers: z.boolean().optional(), write: z.boolean().optional() }).strict().refine((g) => !g.write || (g.note?.length ?? 0) >= 3, { message: 'Say what ShopList support should help with.', path: ['note'] });
 
-route('post', '/orgs/:orgId/support-grants', 'settings:manage', async (c) => {
-  const { data } = await readJson(c, grantInput);
+/** The ShopList owner's user id (the one person who signs in with the owner GitHub account), if they have signed in yet. */
+async function ownerUserId(env: Bindings): Promise<string | null> {
+  return (await env.DB.prepare(`SELECT user_id AS id FROM oauth_accounts WHERE provider = 'github' AND provider_user_id = ?`).bind(env.SUPER_ADMIN_GITHUB_ID ?? '').first<{ id: string }>())?.id ?? null;
+}
+
+/** Opens a support window for the current business. One at a time: a new one replaces any open one. Read-only unless `write`. */
+async function openGrant(c: Ctx, o: { grantedBy: string; note: string | null; minutes: number; includeCustomers: boolean; write: boolean; requestId?: string }): Promise<{ id: string; expiresAt: string }> {
   const org = c.get('org');
   const now = nowIso();
   const id = newId('sgr');
-  const expiresAt = new Date(Date.now() + data.minutes * 60_000).toISOString();
-  // One window at a time: a new grant replaces any open one.
+  const expiresAt = new Date(Date.now() + o.minutes * 60_000).toISOString();
   await c.env.DB.batch([
     c.env.DB.prepare(`UPDATE support_grants SET ended_at = ? WHERE org_id = ? AND ended_at IS NULL AND expires_at > ?`).bind(now, org.id, now),
-    c.env.DB.prepare(`INSERT INTO support_grants(id, org_id, granted_by, note, include_customers, mode, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, org.id, c.get('user').id, data.note ?? null, data.includeCustomers ? 1 : 0, data.mode ?? 'view', now, expiresAt),
+    c.env.DB.prepare(`INSERT INTO support_grants(id, org_id, granted_by, note, include_customers, mode, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, org.id, o.grantedBy, o.note, o.includeCustomers ? 1 : 0, o.write ? 'assist' : 'view', now, expiresAt),
   ]);
-  await inventory(c).supportNote(c.get('user').id, c.get('requestId'), 'support.grant', { minutes: data.minutes, mode: data.mode ?? 'view', includeCustomers: !!data.includeCustomers });
-  const dev = await c.env.DB.prepare(`SELECT user_id AS id FROM oauth_accounts WHERE provider = 'github' AND provider_user_id = ?`).bind(c.env.SUPER_ADMIN_GITHUB_ID ?? '').first<{ id: string }>();
+  await inventory(c).supportNote(o.grantedBy, c.get('requestId'), 'support.grant', { minutes: o.minutes, write: o.write, includeCustomers: o.includeCustomers, ...(o.requestId ? { request: o.requestId } : {}) });
+  return { id, expiresAt };
+}
+
+const accessLabel = (write: boolean) => (write ? 'can make changes' : 'read-only');
+
+/** The business asks for help: the window opens at once and the owner is told. No second approval, because the admin started it. */
+route('post', '/orgs/:orgId/support-grants', 'settings:manage', async (c) => {
+  const { data } = await readJson(c, grantInput);
+  const org = c.get('org');
+  const g = await openGrant(c, { grantedBy: c.get('user').id, note: data.note ?? null, minutes: data.minutes, includeCustomers: !!data.includeCustomers, write: !!data.write });
+  const dev = await ownerUserId(c.env);
   const name = (await c.env.DB.prepare(`SELECT name FROM organizations WHERE id = ?`).bind(org.id).first<{ name: string }>())?.name ?? 'A business';
   // The owner belongs to no business, so platform notices use the '_platform' scope.
-  if (dev) await notify(c.env, '_platform', [dev.id], { kind: 'support.granted', title: `${name} opened ${data.mode === 'assist' ? 'hands-on ' : ''}support access for ${data.minutes} minutes${data.note ? `: ${data.note}` : ''}`, link: '/admin/support' });
-  return c.json({ id, expiresAt, mode: data.mode ?? 'view', includeCustomers: !!data.includeCustomers }, 201);
+  if (dev) await notify(c.env, '_platform', [dev], { kind: 'support.granted', title: `${name} asked for support (${accessLabel(!!data.write)}) for ${data.minutes} minutes${data.note ? `: ${data.note}` : ''}`, link: '/admin/support' });
+  return c.json({ id: g.id, expiresAt: g.expiresAt, mode: data.write ? 'assist' : 'view', write: !!data.write, includeCustomers: !!data.includeCustomers }, 201);
+});
+
+// ------------------------------------------------------------------ access requests (A1)
+const REQUEST_TTL_MS = 48 * 3600_000;
+const REPEAT_AFTER_MS = 15 * 60_000;
+const requestInput = z.object({ minutes: z.union([z.literal(30), z.literal(60), z.literal(240)]), reason: z.string().trim().min(3).max(300), write: z.boolean().optional(), includeCustomers: z.boolean().optional() }).strict();
+const decideInput = z.object({ decision: z.enum(['approve', 'decline']), minutes: z.union([z.literal(30), z.literal(60), z.literal(240)]).optional(), write: z.boolean().optional(), includeCustomers: z.boolean().optional() }).strict();
+
+/** A request nobody answered in 48 hours is over. Done lazily, whenever requests are read or made. */
+async function expireRequests(env: Bindings, orgId?: string): Promise<void> {
+  await env.DB.prepare(`UPDATE access_requests SET state = 'expired', decided_at = expires_at WHERE state = 'pending' AND expires_at <= ?${orgId ? ' AND org_id = ?' : ''}`).bind(...[nowIso(), ...(orgId ? [orgId] : [])]).run();
+}
+
+type RequestRow = { id: string; orgId: string; reason: string; minutes: number; write: number; includeCustomers: number; state: string; createdAt: string; expiresAt: string; decidedAt: string | null };
+const requestOut = (r: RequestRow & { orgName?: string }) => ({ ...r, write: r.write === 1, includeCustomers: r.includeCustomers === 1 });
+const REQUEST_COLS = `r.id, r.org_id AS orgId, r.reason, r.minutes, r.write, r.include_customers AS includeCustomers, r.state, r.created_at AS createdAt, r.expires_at AS expiresAt, r.decided_at AS decidedAt`;
+
+/** ShopList support asks one business for access. The business admin decides. */
+route('post', '/admin/orgs/:id/access-requests', 'super', async (c) => {
+  const { data } = await readJson(c, requestInput);
+  const id = c.req.param('id') ?? '';
+  const live = await c.env.DB.prepare(`SELECT o.name, p.limits, p.features, o.plan_id AS planId, o.plan_overrides AS overrides FROM organizations o JOIN plans p ON p.id = o.plan_id WHERE o.id = ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL`).bind(id).first<PlanRow & { name: string }>();
+  if (!live || !planOf(live).features.supportAccess) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  await expireRequests(c.env, id);
+  const open = await c.env.DB.prepare(`SELECT 1 AS x FROM access_requests WHERE org_id = ? AND state = 'pending'`).bind(id).first();
+  if (open) throw new AppError(409, 'request_pending', 'A request to this business is already waiting for its admin.');
+  const recent = await c.env.DB.prepare(`SELECT 1 AS x FROM access_requests WHERE org_id = ? AND state IN ('declined', 'expired') AND decided_at > ?`).bind(id, new Date(Date.now() - REPEAT_AFTER_MS).toISOString()).first();
+  if (recent) throw new AppError(429, 'too_soon', 'The last request was not accepted. Wait 15 minutes before asking again.');
+  const rid = newId('arq');
+  const now = nowIso();
+  await c.env.DB.prepare(`INSERT INTO access_requests(id, org_id, requested_by, reason, minutes, write, include_customers, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(rid, id, c.get('user').id, data.reason, data.minutes, data.write ? 1 : 0, data.includeCustomers ? 1 : 0, now, new Date(Date.now() + REQUEST_TTL_MS).toISOString()).run();
+  await platformAudit(c, 'access.request', id, { request: rid, minutes: data.minutes, write: !!data.write });
+  await c.env.INVENTORY.get(c.env.INVENTORY.idFromName(id)).supportNote(SUPPORT_ACTOR, c.get('requestId'), 'support.request', { request: rid, minutes: data.minutes, write: !!data.write });
+  const admins = await recipients(c.env, id, ['admin'], 'access.requested');
+  await notify(c.env, id, admins, { kind: 'access.requested', title: `ShopList support asks to look at your business (${accessLabel(!!data.write)}, ${data.minutes} minutes): ${data.reason}`, link: `/o/${id}/settings` });
+  return c.json({ id: rid, state: 'pending' }, 201);
+});
+
+route('get', '/admin/access-requests', 'super', async (c) => {
+  await expireRequests(c.env);
+  const { results } = await c.env.DB.prepare(`SELECT ${REQUEST_COLS}, o.name AS orgName FROM access_requests r JOIN organizations o ON o.id = r.org_id WHERE o.deleted_at IS NULL ORDER BY r.created_at DESC LIMIT 50`).all<RequestRow & { orgName: string }>();
+  return c.json({ data: results.map(requestOut) });
+});
+
+route('delete', '/admin/access-requests/:rid', 'super', async (c) => {
+  const r = await c.env.DB.prepare(`UPDATE access_requests SET state = 'cancelled', decided_at = ? WHERE id = ? AND state = 'pending'`).bind(nowIso(), c.req.param('rid') ?? '').run();
+  if (!r.meta.changes) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  await platformAudit(c, 'access.cancel', c.req.param('rid') ?? null);
+  return c.json({ ok: true });
+});
+
+route('get', '/orgs/:orgId/access-requests', 'settings:manage', async (c) => {
+  await expireRequests(c.env, c.get('org').id);
+  const { results } = await c.env.DB.prepare(`SELECT ${REQUEST_COLS} FROM access_requests r WHERE r.org_id = ? ORDER BY r.created_at DESC LIMIT 20`).bind(c.get('org').id).all<RequestRow>();
+  return c.json({ data: results.map(requestOut) });
+});
+
+/** The admin answers. Approving may only narrow what was asked for (less time, no changes), never widen it. */
+route('post', '/orgs/:orgId/access-requests/:rid/decide', 'settings:manage', async (c) => {
+  const { data } = await readJson(c, decideInput);
+  const org = c.get('org');
+  await expireRequests(c.env, org.id);
+  const req = await c.env.DB.prepare(`SELECT ${REQUEST_COLS} FROM access_requests r WHERE r.id = ? AND r.org_id = ?`).bind(c.req.param('rid') ?? '', org.id).first<RequestRow>();
+  if (!req) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  if (req.state !== 'pending') throw new AppError(409, 'request_closed', `This request is already ${req.state}.`);
+  const me = c.get('user').id;
+  const now = nowIso();
+  const name = (await c.env.DB.prepare(`SELECT name FROM organizations WHERE id = ?`).bind(org.id).first<{ name: string }>())?.name ?? 'A business';
+  const dev = await ownerUserId(c.env);
+  if (data.decision === 'decline') {
+    await c.env.DB.prepare(`UPDATE access_requests SET state = 'declined', decided_by = ?, decided_at = ? WHERE id = ?`).bind(me, now, req.id).run();
+    await inventory(c).supportNote(me, c.get('requestId'), 'support.decline', { request: req.id });
+    if (dev) await notify(c.env, '_platform', [dev], { kind: 'access.decided', title: `${name} declined your access request`, link: '/admin/support' });
+    return c.json({ state: 'declined' });
+  }
+  const minutes = Math.min(data.minutes ?? req.minutes, req.minutes);
+  const write = req.write === 1 && data.write !== false;
+  const includeCustomers = req.includeCustomers === 1 && data.includeCustomers !== false;
+  const g = await openGrant(c, { grantedBy: me, note: req.reason, minutes, includeCustomers, write, requestId: req.id });
+  await c.env.DB.prepare(`UPDATE access_requests SET state = 'approved', decided_by = ?, decided_at = ?, grant_id = ? WHERE id = ?`).bind(me, now, g.id, req.id).run();
+  if (dev) await notify(c.env, '_platform', [dev], { kind: 'access.decided', title: `${name} approved your request (${accessLabel(write)}, ${minutes} minutes)`, link: '/admin/support' });
+  return c.json({ state: 'approved', grantId: g.id, expiresAt: g.expiresAt, write, minutes });
 });
 
 route('delete', '/orgs/:orgId/support-grants/:gid', 'settings:manage', async (c) => {
@@ -1993,6 +2091,7 @@ route('post', '/admin/orgs/:id/suspend', 'super', async (c) => {
   const id = c.req.param('id') ?? '';
   const res = await c.env.DB.prepare(`UPDATE organizations SET suspended_at = ? WHERE id = ? AND suspended_at IS NULL AND deleted_at IS NULL`).bind(nowIso(), id).run();
   if (!res.meta.changes) throw new AppError(404, 'org_not_found', 'That organization does not exist or is already suspended.');
+  await c.env.DB.prepare(`UPDATE access_requests SET state = 'cancelled', decided_at = ? WHERE org_id = ? AND state = 'pending'`).bind(nowIso(), id).run();
   await platformAudit(c, 'org.suspend', id);
   return c.json({ ok: true });
 });
@@ -2135,6 +2234,7 @@ export async function purgeDueOrgs(env: Bindings): Promise<number> {
       env.DB.prepare(`DELETE FROM api_keys WHERE org_id = ?`).bind(o.id),
       env.DB.prepare(`DELETE FROM invitations WHERE org_id = ?`).bind(o.id),
       env.DB.prepare(`DELETE FROM support_grants WHERE org_id = ?`).bind(o.id),
+      env.DB.prepare(`DELETE FROM access_requests WHERE org_id = ?`).bind(o.id),
       env.DB.prepare(`DELETE FROM notifications WHERE org_id = ?`).bind(o.id),
       env.DB.prepare(`DELETE FROM notification_prefs WHERE org_id = ?`).bind(o.id),
       env.DB.prepare(`DELETE FROM memberships WHERE org_id = ?`).bind(o.id),
@@ -2292,6 +2392,7 @@ export async function dailyJob(env: Bindings, hourUtc = new Date().getUTCHours()
   await step(env, 'prune', hourUtc, async () => {
     await pruneAuthEvents(env);
     await pruneAlerts(env);
+    await env.DB.prepare(`DELETE FROM access_requests WHERE created_at < ?`).bind(new Date(Date.now() - 180 * 86400_000).toISOString()).run();
     await env.DB.prepare(`DELETE FROM org_health WHERE day < ?`).bind(new Date(Date.now() - 90 * 86400_000).toISOString().slice(0, 10)).run();
     await env.DB.prepare(`DELETE FROM cron_runs WHERE started_at < ?`).bind(new Date(Date.now() - 30 * 86400_000).toISOString()).run();
   });
