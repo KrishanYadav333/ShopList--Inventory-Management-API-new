@@ -277,3 +277,13 @@ While maintenance is on, every write outside `/admin` and `/auth` answers `503 m
 | `GET /orgs/{orgId}/access-requests` | Business admin: requests from ShopList support |
 | `POST /orgs/{orgId}/access-requests/{rid}/decide` | Business admin: `{ decision: approve|decline, minutes?, write?, includeCustomers? }`. Approving can only narrow (less time, no changes, no customer details), never widen. Creates the support window |
 | `POST /orgs/{orgId}/support-grants` | Business admin opens a window at once: `{ minutes, note?, write?, includeCustomers? }`. `write` needs a `note` of 3+ characters |
+
+### Passkeys
+
+| Route | Purpose |
+|---|---|
+| `POST /auth/passkeys/register/options` | Optional body `{ where: 'device' | 'phone' }` asks the browser for this device or a phone QR code |
+| `POST /auth/passkeys/verify/options`, `POST /auth/passkeys/verify` | Prove one of your own passkeys for the current session |
+| `GET /auth/passkey-status` | `{ enforced, applies: owner | admin | null, hasPasskey, verified, graceUntil }` |
+| `GET/POST /admin/passkey-enforcement` | Owner: read or set the switch (needs the owner's own passkey to turn on) |
+| `POST /admin/users/{id}/reset-passkeys` | Owner: remove a locked-out person's passkeys and restart their grace period |

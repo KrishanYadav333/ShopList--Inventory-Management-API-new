@@ -35,6 +35,7 @@ interface BackupRow { orgId: string; name: string; day: string | null; ok: boole
 interface Ann { id: string; message: string; severity: string; audience: string; orgId: string | null; startsAt: string; endsAt: string | null; endedAt: string | null }
 interface Maint { id: string; orgId: string | null; orgName: string | null; message: string; startedAt: string }
 interface AccessRequest { id: string; orgId: string; orgName: string; reason: string; minutes: number; write: boolean; includeCustomers: boolean; state: 'pending' | 'approved' | 'declined' | 'cancelled' | 'expired'; createdAt: string; expiresAt: string }
+interface PasskeyPolicy { on: boolean; ownerHasPasskey: boolean; admins: { total: number; withPasskey: number }; graceDays: number }
 interface Alert { id: string; kind: string; severity: 'high' | 'medium'; label: string; who: string | null; count: number; firstAt: string; lastAt: string; state: 'open' | 'investigating' | 'resolved' | 'dismissed'; note: string | null }
 interface HealthRow { id: string; name: string; day: string | null; score: number | null; status: 'healthy' | 'watch' | 'at_risk' | 'new' | 'suspended' | 'deleting' | 'not_scored'; parts: { activity: number; adminSignIn: number; backups: number; headroom: number } | null }
 interface JobStatus { job: string; every: 'hourly' | 'daily'; state: 'ok' | 'failed' | 'not running' | 'no runs yet'; lastAt: string | null; error: string | null; detail: Record<string, number> | null; failures7d: number }
@@ -87,6 +88,17 @@ export function AdminPage() {
   const withdraw = useMutation({ mutationFn: (id: string) => api('DELETE', `/admin/access-requests/${id}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin', 'access-requests'] }); toast({ text: 'Request withdrawn' }); }, onError: (e: ApiError) => toast({ kind: 'error', text: e.message }) });
   const health = useQuery({ enabled: on('operations'), queryKey: ['admin', 'health'], queryFn: () => api<{ data: HealthRow[]; weights: Record<string, number> }>('GET', '/admin/health'), staleTime: 300_000 });
   const status = useQuery({ enabled: on('operations'), queryKey: ['admin', 'status'], queryFn: () => api<SystemStatus>('GET', '/admin/status'), refetchInterval: 60_000 });
+  const policy = useQuery({ enabled: on('security'), queryKey: ['admin', 'passkey-policy'], queryFn: () => api<PasskeyPolicy>('GET', '/admin/passkey-enforcement') });
+  const setPolicy = useMutation({
+    mutationFn: (v: boolean) => api('POST', '/admin/passkey-enforcement', { body: { on: v } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin', 'passkey-policy'] }); toast({ kind: 'success', text: 'Saved' }); },
+    onError: (e: ApiError) => toast({ kind: 'error', text: e.message }),
+  });
+  const resetKeys = useMutation({
+    mutationFn: (id: string) => api('POST', `/admin/users/${id}/reset-passkeys`, { body: {} }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin'] }); toast({ kind: 'success', text: 'Passkeys removed. They have a fresh grace period to add a new one.' }); },
+    onError: (e: ApiError) => toast({ kind: 'error', text: e.message }),
+  });
   const alerts = useQuery({ enabled: on('security'), queryKey: ['admin', 'alerts'], queryFn: () => api<{ data: Alert[] }>('GET', '/admin/security/alerts').then((r) => r.data), refetchInterval: 60_000 });
   const [alertNote, setAlertNote] = useState<Record<string, string>>({});
   const setAlert = useMutation({
@@ -385,6 +397,24 @@ export function AdminPage() {
         </section>)}
 
         {page === 'security' && (
+        <section className="admin-section" aria-labelledby="h-passkeys">
+          <h2 id="h-passkeys">Passkeys</h2>
+          {!policy.data ? <p className="hint">Loading…</p> : (
+            <>
+              <p className="hint">When on, you and every business admin must confirm with a passkey (on a computer or a phone, by QR code) to use the app. Admins without one get {policy.data.graceDays} days to add it. Staff are never required.</p>
+              <ul className="list" aria-label="Passkey status">
+                <li><span>Required now<div className="time">{policy.data.on ? 'Yes' : 'No'}</div></span></li>
+                <li><span>Your own passkey<div className="time">{policy.data.ownerHasPasskey ? 'Added' : 'None yet. Add one first, otherwise you cannot turn this on.'}</div></span>{!policy.data.ownerHasPasskey && <a className="btn btn-outline" href="/passkey">Add a passkey</a>}</li>
+                <li><span>Business admins with a passkey<div className="time">{policy.data.admins.withPasskey} of {policy.data.admins.total}</div></span></li>
+              </ul>
+              {policy.data.on
+                ? <button className="btn btn-outline" disabled={setPolicy.isPending} onClick={() => setPolicy.mutate(false)}>Stop requiring passkeys</button>
+                : <button className="btn btn-primary" disabled={setPolicy.isPending || !policy.data.ownerHasPasskey} onClick={() => setPolicy.mutate(true)}>Require passkeys for owner and admins</button>}
+            </>
+          )}
+        </section>
+      )}
+      {page === 'security' && (
         <section className="admin-section" aria-labelledby="h-alerts">
           <h2 id="h-alerts">Alerts</h2>
           {alerts.isError ? <p className="hint">Could not load alerts.</p> : !alerts.data ? <p className="hint">Loading…</p> : !alerts.data.length ? <p className="hint">No alerts. They appear here when the sign-in log shows something worth a look.</p> : (
@@ -547,6 +577,7 @@ export function AdminPage() {
                 {userDetail.data.sessions.map((x, i) => <li key={i}><span>{x.userAgent?.slice(0, 60) ?? 'Unknown device'}<div className="time">{x.country ?? '—'} · via {x.via} · {when(x.lastSeenAt)}</div></span></li>)}
               </ul>
               {userDetail.data.sessions.length > 0 && <button className="btn btn-outline" onClick={() => signOutUser.mutate(userDetail.data!.user.id)}>Sign out everywhere</button>}
+              <button className="btn btn-outline" disabled={resetKeys.isPending} onClick={() => { if (confirm(`Remove all passkeys for ${userDetail.data!.user.email}? They will have ${policy.data?.graceDays ?? 7} days to add a new one.`)) resetKeys.mutate(userDetail.data!.user.id); }}>Reset passkeys</button>
             </div>
           )}
         </section>)}

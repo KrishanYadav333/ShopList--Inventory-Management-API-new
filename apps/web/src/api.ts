@@ -69,6 +69,13 @@ export async function api<T>(method: string, path: string, opts: RequestOptions 
   } catch {
     /* non-JSON body */
   }
-  if (!res.ok) throw new ApiError((json as ProblemBody | null) ?? { status: res.status, detail: res.statusText });
+  if (!res.ok) {
+    const err = new ApiError((json as ProblemBody | null) ?? { status: res.status, detail: res.statusText });
+    // The owner and admins may be asked to add or tap a passkey before the app opens: send them to that screen once.
+    if ((err.code === 'passkey-required' || err.code === 'passkey-setup-required') && !location.pathname.startsWith('/passkey')) {
+      location.assign(`/passkey?next=${encodeURIComponent(location.pathname + location.search)}`);
+    }
+    throw err;
+  }
   return json as T;
 }

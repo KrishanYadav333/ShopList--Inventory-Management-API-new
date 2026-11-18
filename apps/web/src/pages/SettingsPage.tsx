@@ -48,7 +48,7 @@ export function SettingsPage() {
   const endGrant = useMutation({ mutationFn: (id: string) => api('DELETE', `/orgs/${org.id}/support-grants/${id}`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['org', org.id, 'support-grants'] }); toast({ text: 'Support access ended' }); }, onError: fail });
   const [pkName, setPkName] = useState('');
   const addPk = useMutation({
-    mutationFn: () => addPasskey(pkName.trim() || 'Passkey'),
+    mutationFn: (where: 'device' | 'phone') => addPasskey(pkName.trim() || (where === 'phone' ? 'My phone' : 'This device'), where),
     onSuccess: () => { setPkName(''); qc.invalidateQueries({ queryKey: ['passkeys'] }); toast({ kind: 'success', text: 'Passkey added' }); },
     onError: (e) => { if (!wasCancelled(e)) toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Could not add the passkey.' }); },
   });
@@ -535,7 +535,7 @@ export function SettingsPage() {
         {passkeysSupported() && (
           <section className="card">
             <h2>Passkeys</h2>
-            <p className="hint">Sign in with your fingerprint, face or device PIN instead of an email code. Passkeys sign you in as a normal user; the owner’s admin access always needs GitHub.</p>
+            <p className="hint">Sign in with your fingerprint, face or device PIN. Your passkey can live on this computer or on your phone: choose the phone option and scan the QR code your browser shows. {admin ? 'Business admins are required to have a passkey. Add two, for example your phone and your computer, so losing one never locks you out.' : 'Passkeys are optional for you but recommended.'}</p>
             {passkeys.data?.data.length ? (
               <ul className="list">
                 {passkeys.data.data.map((k) => (
@@ -546,9 +546,10 @@ export function SettingsPage() {
                 ))}
               </ul>
             ) : <p className="hint">No passkeys yet.</p>}
-            <form className="hook-form" onSubmit={submit(() => addPk.mutate())}>
+            <form className="hook-form" onSubmit={(e) => e.preventDefault()}>
               <div className="field"><label htmlFor="pk-name">Name</label><input id="pk-name" maxLength={60} placeholder="e.g. MacBook Touch ID" value={pkName} onChange={(e) => setPkName(e.target.value)} /></div>
-              <button className="btn btn-primary" disabled={addPk.isPending}>{addPk.isPending ? 'Waiting for your device…' : 'Add a passkey'}</button>
+              <button type="button" className="btn btn-primary" disabled={addPk.isPending} onClick={() => addPk.mutate('phone')}>{addPk.isPending ? 'Waiting…' : 'Add a passkey on my phone (QR code)'}</button>
+              <button type="button" className="btn btn-outline" disabled={addPk.isPending} onClick={() => addPk.mutate('device')}>Add a passkey on this device</button>
             </form>
           </section>
         )}

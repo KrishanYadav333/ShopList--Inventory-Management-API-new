@@ -273,9 +273,39 @@ const requireAuth: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> = 
   return next();
 };
 
+// ------------------------------------------------------------------ passkeys required for the owner and admins (A3)
+const PASSKEY_CHECK_MS = 12 * 3600_000;
+const PASSKEY_GRACE_DAYS = 7;
+const passkeyEnforced = async (env: Bindings): Promise<boolean> => (await env.DB.prepare(`SELECT value FROM platform_settings WHERE key = 'passkey_enforce'`).first<{ value: string }>())?.value === 'on';
+const passkeyFresh = (u: AuthUser): boolean => !!u.passkeyAt && Date.now() - Date.parse(u.passkeyAt) < PASSKEY_CHECK_MS;
+
+/**
+ * When enforcement is on, the owner and business admins must have proved a passkey recently (a passkey sign-in counts).
+ * An admin with no passkey at all gets a 7-day grace period from the first time this is checked; the owner gets none,
+ * unless OWNER_PASSKEY_OPTIONAL is set. 403 `passkey_setup_required` means add one; `passkey_required` means tap one.
+ */
+async function requirePasskey(c: Ctx, who: 'owner' | 'admin'): Promise<void> {
+  const user = c.get('user');
+  if (user.id.startsWith('key_') || !(await passkeyEnforced(c.env))) return;
+  if (who === 'owner' && c.env.OWNER_PASSKEY_OPTIONAL === 'true') return;
+  if (passkeyFresh(user)) return;
+  const n = (await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?`).bind(user.id).first<{ n: number }>())?.n ?? 0;
+  if (n > 0) throw new AppError(403, 'passkey_required', 'Confirm with your passkey to continue.');
+  if (who === 'admin') {
+    const row = await c.env.DB.prepare(`SELECT passkey_grace_until AS g FROM users WHERE id = ?`).bind(user.id).first<{ g: string | null }>();
+    if (!row?.g) {
+      await c.env.DB.prepare(`UPDATE users SET passkey_grace_until = ? WHERE id = ? AND passkey_grace_until IS NULL`).bind(new Date(Date.now() + PASSKEY_GRACE_DAYS * 86400_000).toISOString(), user.id).run();
+      return;
+    }
+    if (Date.parse(row.g) > Date.now()) return;
+  }
+  throw new AppError(403, 'passkey_setup_required', 'Add a passkey to continue. You can scan a QR code with your phone.');
+}
+
 /** Platform administration. Anyone else gets 404 so the admin area is not discoverable. */
 const requireSuper: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> = async (c, next) => {
   if (!c.get('user').isSuperAdmin) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  await requirePasskey(c, 'owner');
   return next();
 };
 
@@ -300,6 +330,7 @@ const SUPPORT_ACTOR = 'support:shoplist';
 const SUPPORT_AREAS = ['products', 'locations', 'stock', 'orders', 'dashboard', 'reports', 'customers', 'purchase-orders', 'suppliers', 'purchasing', 'count-tasks', 'plan'];
 
 async function supportAccess(c: Ctx, orgId: string, grantId: string, permission: Permission, next: () => Promise<void>) {
+  await requirePasskey(c, 'owner');
   const gone = () => new AppError(404, 'org_not_found', 'That organization does not exist.');
   const now = nowIso();
   const g = await c.env.DB.prepare(
@@ -368,6 +399,7 @@ const orgAccess = (permission: Permission): MiddlewareHandler<{ Bindings: Bindin
     throw new AppError(404, 'org_not_found', 'That organization does not exist.');
   }
   if (!can(row.role, permission)) throw new AppError(403, 'forbidden', `Your role (${row.role}) cannot do this. Ask your admin for access.`);
+  if (row.role === 'admin') await requirePasskey(c, 'admin');
   let locationIds: string[] | null = null;
   try { locationIds = row.locationIds ? (JSON.parse(row.locationIds) as string[]) : null; } catch { locationIds = []; }
   readOnlyWhenDeleting(c, row.deleteAfter);
@@ -544,6 +576,7 @@ async function openChallenge(c: Ctx, token: string, purpose: 'register' | 'login
 
 route('post', '/auth/passkeys/register/options', 'user', async (c) => {
   const user = c.get('user');
+  const where = z.object({ where: z.enum(['device', 'phone']).optional() }).safeParse(await c.req.json().catch(() => ({}))).data?.where;
   const { challenge, token } = await issueChallenge(c, 'register', user.id);
   const { results } = await c.env.DB.prepare(`SELECT id FROM passkeys WHERE user_id = ?`).bind(user.id).all<{ id: string }>();
   return c.json({
@@ -557,6 +590,8 @@ route('post', '/auth/passkeys/register/options', 'user', async (c) => {
       authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
       attestation: 'none',
       timeout: 60000,
+      // 'hybrid' asks the browser to show a QR code so a phone can be the passkey; 'client-device' prefers this computer.
+      ...(where ? { hints: [where === 'phone' ? 'hybrid' : 'client-device'] } : {}),
     },
   });
 });
@@ -569,6 +604,7 @@ route('post', '/auth/passkeys/register', 'user', async (c) => {
   const { credentialId, publicKey, counter } = await verifyRegistration(data, { challenge: ch.challenge, origin: rp(c.env).origin, rpId: rp(c.env).id });
   const count = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?`).bind(user.id).first<{ n: number }>();
   if ((count?.n ?? 0) >= 10) throw new AppError(409, 'too_many_passkeys', 'You can register up to 10 passkeys. Remove one first.');
+  const first = (count?.n ?? 0) === 0;
   try {
     await c.env.DB.prepare(`INSERT INTO passkeys(id, user_id, public_key, sign_count, transports, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
       .bind(credentialId, user.id, publicKey, counter, JSON.stringify(data.transports ?? []), data.name ?? 'Passkey', nowIso())
@@ -576,6 +612,9 @@ route('post', '/auth/passkeys/register', 'user', async (c) => {
   } catch {
     throw new AppError(409, 'passkey_exists', 'That passkey is already registered.');
   }
+  // The very first passkey completes a ceremony with the person's fingerprint, face or PIN, so it confirms this session.
+  // Later ones do not: otherwise a stolen session could add its own passkey and pass the check.
+  if (first) await c.env.DB.prepare(`UPDATE sessions SET passkey_at = ? WHERE token_hash = ?`).bind(nowIso(), await sha256Hex(readSessionCookie(c) ?? '')).run();
   await authEvent(c, 'passkey_added', { userId: user.id });
   return c.json({ id: credentialId, name: data.name ?? 'Passkey' }, 201);
 });
@@ -614,6 +653,81 @@ route('post', '/auth/passkeys/login', 'public', async (c) => {
   await c.env.DB.prepare(`UPDATE passkeys SET sign_count = ?, last_used_at = ? WHERE id = ?`).bind(counter, nowIso(), data.id).run();
   setSessionCookie(c, await createSession(c.env, row.user_id, c.req.raw, 'passkey'));
   await authEvent(c, 'signin_ok', { userId: row.user_id, door: 'passkey' });
+  return c.json({ ok: true });
+});
+
+/** Prove a passkey for the current session (the owner and admins need this when passkeys are required). */
+route('post', '/auth/passkeys/verify/options', 'user', async (c) => {
+  const user = c.get('user');
+  const { results } = await c.env.DB.prepare(`SELECT id, transports FROM passkeys WHERE user_id = ?`).bind(user.id).all<{ id: string; transports: string | null }>();
+  if (!results.length) throw new AppError(409, 'no_passkey', 'Add a passkey first.');
+  const { challenge, token } = await issueChallenge(c, 'login', user.id);
+  return c.json({ token, publicKey: { challenge, rpId: rp(c.env).id, userVerification: 'required', timeout: 60000, allowCredentials: results.map((r) => ({ type: 'public-key', id: r.id, transports: r.transports ? (JSON.parse(r.transports) as string[]) : [] })) } });
+});
+
+route('post', '/auth/passkeys/verify', 'user', async (c) => {
+  const user = c.get('user');
+  const { data } = await readJson(c, z.object({ token: z.string().max(2000), id: b64, clientDataJSON: b64, authenticatorData: b64, signature: b64 }).strict());
+  const ch = await openChallenge(c, data.token, 'login');
+  if (ch.userId !== user.id) throw new AppError(400, 'passkey_invalid', 'The passkey response was rejected (user).');
+  // Only a passkey that belongs to the signed-in person counts.
+  const row = await c.env.DB.prepare(`SELECT public_key, sign_count FROM passkeys WHERE id = ? AND user_id = ?`).bind(data.id, user.id).first<{ public_key: ArrayBuffer | number[]; sign_count: number }>();
+  if (!row) throw new AppError(400, 'passkey_invalid', 'The passkey response was rejected (unknown passkey).');
+  const counter = await verifyAssertion(data, { publicKey: new Uint8Array(row.public_key), counter: row.sign_count }, { challenge: ch.challenge, origin: rp(c.env).origin, rpId: rp(c.env).id });
+  const now = nowIso();
+  await c.env.DB.batch([
+    c.env.DB.prepare(`UPDATE passkeys SET sign_count = ?, last_used_at = ? WHERE id = ?`).bind(counter, now, data.id),
+    c.env.DB.prepare(`UPDATE sessions SET passkey_at = ? WHERE token_hash = ?`).bind(now, await sha256Hex(readSessionCookie(c) ?? '')),
+  ]);
+  return c.json({ ok: true });
+});
+
+/** What this person needs to do about passkeys, so the web app can show the right screen. */
+route('get', '/auth/passkey-status', 'user', async (c) => {
+  const user = c.get('user');
+  const [enforced, n, adminOf, g] = await Promise.all([
+    passkeyEnforced(c.env),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?`).bind(user.id).first<{ n: number }>(),
+    c.env.DB.prepare(`SELECT 1 AS x FROM memberships WHERE user_id = ? AND role = 'admin' AND deactivated_at IS NULL LIMIT 1`).bind(user.id).first(),
+    c.env.DB.prepare(`SELECT passkey_grace_until AS g FROM users WHERE id = ?`).bind(user.id).first<{ g: string | null }>(),
+  ]);
+  const applies = user.isSuperAdmin ? 'owner' : adminOf ? 'admin' : null;
+  return c.json({ enforced, applies, hasPasskey: (n?.n ?? 0) > 0, verified: passkeyFresh(user), graceUntil: applies === 'admin' ? g?.g ?? null : null, optionalOwner: c.env.OWNER_PASSKEY_OPTIONAL === 'true' });
+});
+
+/** The switch for requiring passkeys. It cannot be turned on by an owner who has none, so it cannot lock the owner out. */
+route('get', '/admin/passkey-enforcement', 'super', async (c) => {
+  const [on, owner, admins] = await Promise.all([
+    passkeyEnforced(c.env),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?`).bind(c.get('user').id).first<{ n: number }>(),
+    c.env.DB.prepare(`SELECT COUNT(DISTINCT m.user_id) AS total, COUNT(DISTINCT CASE WHEN EXISTS (SELECT 1 FROM passkeys p WHERE p.user_id = m.user_id) THEN m.user_id END) AS withPasskey FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.role = 'admin' AND m.deactivated_at IS NULL AND o.deleted_at IS NULL`).first<{ total: number; withPasskey: number }>(),
+  ]);
+  return c.json({ on, ownerHasPasskey: (owner?.n ?? 0) > 0, admins: admins ?? { total: 0, withPasskey: 0 }, graceDays: PASSKEY_GRACE_DAYS });
+});
+
+route('post', '/admin/passkey-enforcement', 'super', async (c) => {
+  const { data } = await readJson(c, z.object({ on: z.boolean() }).strict());
+  if (data.on) {
+    const own = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?`).bind(c.get('user').id).first<{ n: number }>();
+    if (!(own?.n)) throw new AppError(409, 'owner_needs_passkey', 'Add your own passkey first, so you cannot lock yourself out.');
+  }
+  await c.env.DB.prepare(`INSERT INTO platform_settings(key, value, updated_at, updated_by) VALUES ('passkey_enforce', ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`).bind(data.on ? 'on' : 'off', nowIso(), c.get('user').id).run();
+  await platformAudit(c, 'passkeys.enforcement', null, { on: data.on });
+  return c.json({ on: data.on });
+});
+
+/** A locked-out admin starts again: their passkeys are removed and they get a fresh grace period to add a new one. */
+route('post', '/admin/users/:id/reset-passkeys', 'super', async (c) => {
+  const id = c.req.param('id') ?? '';
+  const u = await c.env.DB.prepare(`SELECT 1 AS x FROM users WHERE id = ?`).bind(id).first();
+  if (!u) throw new AppError(404, 'not_found', 'There is nothing at this address.');
+  await c.env.DB.batch([
+    c.env.DB.prepare(`DELETE FROM passkeys WHERE user_id = ?`).bind(id),
+    c.env.DB.prepare(`UPDATE users SET passkey_grace_until = ? WHERE id = ?`).bind(new Date(Date.now() + PASSKEY_GRACE_DAYS * 86400_000).toISOString(), id),
+    c.env.DB.prepare(`UPDATE sessions SET passkey_at = NULL WHERE user_id = ?`).bind(id),
+  ]);
+  await authEvent(c, 'passkey_removed', { userId: id });
+  await platformAudit(c, 'passkeys.reset', id);
   return c.json({ ok: true });
 });
 

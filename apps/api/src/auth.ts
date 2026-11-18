@@ -16,6 +16,8 @@ export interface AuthUser {
   avatarUrl: string | null;
   /** True only for the account linked to SUPER_ADMIN_GITHUB_ID. Computed per request, never stored. */
   isSuperAdmin: boolean;
+  /** When this session last proved a passkey (a passkey sign-in counts), or null. */
+  passkeyAt?: string | null;
 }
 
 export type SigninMode = 'admin-only' | 'invite' | 'open';
@@ -51,7 +53,7 @@ export async function createSession(env: Bindings, userId: string, req: Request,
   const token = randomToken(32);
   const now = Date.now();
   await env.DB.prepare(
-    `INSERT INTO sessions(token_hash, user_id, created_at, expires_at, last_seen_at, user_agent, ip_country, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO sessions(token_hash, user_id, created_at, expires_at, last_seen_at, user_agent, ip_country, provider, passkey_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       await sha256Hex(token),
@@ -62,6 +64,8 @@ export async function createSession(env: Bindings, userId: string, req: Request,
       (req.headers.get('user-agent') ?? '').slice(0, 200) || null,
       (req.headers.get('cf-ipcountry') ?? '').slice(0, 2) || null,
       provider,
+      // A passkey sign-in already proved a passkey (it needs the person's fingerprint, face or PIN).
+      provider === 'passkey' ? new Date(now).toISOString() : null,
     )
     .run();
   return token;
@@ -71,13 +75,13 @@ export async function userFromSession(env: Bindings, token: string | undefined):
   if (!token || token.length > 100) return null;
   const hash = await sha256Hex(token);
   const row = await env.DB.prepare(
-    `SELECT u.id, u.email, u.name, u.avatar_url, s.expires_at, s.last_seen_at,
+    `SELECT u.id, u.email, u.name, u.avatar_url, s.expires_at, s.last_seen_at, s.passkey_at,
             (s.provider IN ('github', 'dev') AND EXISTS (SELECT 1 FROM oauth_accounts o WHERE o.user_id = u.id AND o.provider = 'github' AND o.provider_user_id = ?)) AS is_super
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ? AND u.disabled_at IS NULL`,
   )
     .bind(env.SUPER_ADMIN_GITHUB_ID ?? '', hash)
-    .first<{ id: string; email: string; name: string; avatar_url: string | null; expires_at: string; last_seen_at: string; is_super: number }>();
+    .first<{ id: string; email: string; name: string; avatar_url: string | null; expires_at: string; last_seen_at: string; passkey_at: string | null; is_super: number }>();
   if (!row) return null;
   const now = Date.now();
   if (Date.parse(row.expires_at) <= now || Date.parse(row.last_seen_at) + IDLE_MS <= now) {
@@ -88,7 +92,7 @@ export async function userFromSession(env: Bindings, token: string | undefined):
   if (Date.parse(row.last_seen_at) + SLIDE_AFTER_MS <= now) {
     await env.DB.prepare(`UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?`).bind(nowIso(), hash).run();
   }
-  return { id: row.id, email: row.email, name: row.name, avatarUrl: row.avatar_url, isSuperAdmin: row.is_super === 1 };
+  return { id: row.id, email: row.email, name: row.name, avatarUrl: row.avatar_url, isSuperAdmin: row.is_super === 1, passkeyAt: row.passkey_at };
 }
 
 export async function destroySession(env: Bindings, token: string | undefined): Promise<void> {

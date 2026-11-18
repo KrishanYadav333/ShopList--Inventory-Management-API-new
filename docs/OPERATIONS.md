@@ -242,3 +242,15 @@ Customer sign-in runs through Clerk (a development instance for now). Settings t
 Sign-out does a full page load to `/login`, so the next person starts clean without a hard reload. The owner is the exception to all of this: the owner signs in only at `/owner` with GitHub.
 
 Before real customers use it, move Clerk to a production instance, which needs your own domain.
+
+## Requiring passkeys (owner and admins)
+
+Owner console, Security, Passkeys. The switch is **off** until you turn it on, and you cannot turn it on until you have added a passkey of your own (Add a passkey opens `/passkey`; choose "on my phone" to scan a QR code, and add a second one on your computer). When it is on:
+
+- Your owner session needs a passkey confirmation (12 hours) before any `/admin` page works. Signing in at `/owner` with GitHub still comes first; the passkey screen then appears.
+- Every business admin must confirm with a passkey too. An admin without one has 7 days from the first time it is checked, then the business app is closed to them until they add one. Staff are never required.
+- Signing in with a passkey already counts. The first passkey a person adds confirms that session; later ones do not.
+
+**Locked-out admin:** Owner console, People, open the person, Reset passkeys. Their passkeys are removed and they get 7 more days to add a new one.
+
+**Owner lost every passkey:** in `apps/api/wrangler.jsonc` set `"OWNER_PASSKEY_OPTIONAL": "true"` under `vars`, deploy, sign in at `/owner`, add a new passkey, then remove the setting and deploy again. As a last resort, turn the switch off directly: `npx wrangler d1 execute shoplist-control --remote --command "UPDATE platform_settings SET value = 'off' WHERE key = 'passkey_enforce'"`.

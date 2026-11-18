@@ -10,6 +10,8 @@ export interface Bindings {
   SUPER_ADMIN_GITHUB_ID?: string;
   /** "admin-only" (default): only the super admin can sign in. "open": anyone with a verified GitHub email can. */
   SIGNIN_MODE?: string;
+  /** "true" lets the owner in with GitHub alone even when passkeys are required. Emergency use only (lost every passkey); remove it afterwards. */
+  OWNER_PASSKEY_OPTIONAL?: string;
   /** "true" enables /auth/dev/login. Must never be set in production. */
   DEV_AUTH?: string;
   /** "true" (together with DEV_AUTH) drops the Secure/__Host- cookie so a browser can sign in over plain http://localhost. Local use only. */
