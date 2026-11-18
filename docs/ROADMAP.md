@@ -113,3 +113,11 @@ Measured on the live site: axe reports 0 violations on login, owner, orders, pro
 Also built: the session list with sign-out and "sign out everywhere else", a load test and a 20,000-row import check (results in OPERATIONS.md).
 
 Not built: Google sign-in outside Clerk, Turnstile, nightly R2 backups and a restore rehearsal (they need your R2 bucket), automated preview deployments, the v1 to v2 cutover (see OPERATIONS.md), and checks on a physical phone and with VoiceOver, which need a person with the device.
+
+## Status, 2026-11-18
+
+The access-level plan ([plan/README.md](plan/README.md), one-file copy in [PLAN.md](PLAN.md)) is built and live, with 296 tests and CI green: Phase 1 (F1 to F7), Phase 2a (F8 to F18), and F19 to F30 with two exceptions below. That adds job roles and the accountant, business settings, location scoping, approvals, notifications and email (Brevo), reports, purchasing, count tasks, customers and invoices, support access, plans and limits, usage and security pages for the owner, share links for customers and suppliers, restore from a backup file, scheduled deletion, announcements and maintenance, nightly backups, and audit export and retention.
+
+Checked in a real browser on 2026-11-18: axe reports 0 violations on Settings, Purchasing, Reports, Approvals, Counts, Customers, Products, Orders, the owner console and both public share pages; no sideways scroll at 390 px.
+
+Open, each blocked on something outside the code: nightly backups are kept in D1 until R2 is enabled; the per-business half of the usage page needs Workers Analytics Engine enabled (code is ready; add the binding line described in OPERATIONS.md); Lighthouse was not re-run on the new pages; checks on a physical phone and with VoiceOver; the v1 to v2 cutover; and the owner-only steps in [HANDOFF.md](HANDOFF.md).
