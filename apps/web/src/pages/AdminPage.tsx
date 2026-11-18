@@ -73,7 +73,7 @@ export function AdminPage() {
   const runBackup = useMutation({ mutationFn: (orgId?: string) => api('POST', '/admin/backups/run', { body: orgId ? { orgId } : {} }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin', 'backups'] }); toast({ kind: 'success', text: 'Backup finished' }); }, onError: (e) => toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Backup failed.' }) });
   const restoreCopy = useMutation({
     mutationFn: (r: { orgId: string; day: string; email: string }) => api<{ organization: { id: string; name: string }; invitation: { link: string } | null }>('POST', `/admin/backups/${r.orgId}/${r.day}/restore`, { body: r.email ? { adminEmail: r.email } : {} }),
-    onSuccess: (r) => { setRehearse(null); qc.invalidateQueries({ queryKey: ['admin'] }); toast({ kind: 'success', text: `Created “${r.organization.name}”.${r.invitation ? ' Send its admin the invitation link from the business details.' : ''}` }); },
+    onSuccess: (r) => { setRehearse(null); qc.invalidateQueries({ queryKey: ['admin'] }); toast({ kind: 'success', text: `Created “${r.organization.name}”.${r.invitation ? ' The invitation was emailed to its admin.' : ''}` }); },
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Restore failed.' }),
   });
   const health = useQuery({ enabled: on('operations'), queryKey: ['admin', 'health'], queryFn: () => api<{ data: HealthRow[]; weights: Record<string, number> }>('GET', '/admin/health'), staleTime: 300_000 });
@@ -107,12 +107,12 @@ export function AdminPage() {
   const [link, setLink] = useState('');
   const onboardMut = useMutation({
     mutationFn: () => api<{ invitation: { link: string } }>('POST', '/admin/orgs', { body: onboard }),
-    onSuccess: (r) => { setLink(r.invitation.link); setOnboard({ name: '', adminEmail: '', currency: 'USD' }); qc.invalidateQueries({ queryKey: ['admin'] }); toast({ kind: 'success', text: 'Business created. Send the admin their link.' }); },
+    onSuccess: (r) => { setLink(r.invitation.link); setOnboard({ name: '', adminEmail: '', currency: 'USD' }); qc.invalidateQueries({ queryKey: ['admin'] }); toast({ kind: 'success', text: 'Business created. The invitation was emailed to its admin.' }); },
     onError: (e: ApiError) => toast({ kind: 'error', text: e.message }),
   });
   const resend = useMutation({
     mutationFn: (id: string) => api<{ link: string }>('POST', `/admin/orgs/${id}/resend-invitation`, { body: {} }),
-    onSuccess: (r) => { setLink(r.link); toast({ kind: 'success', text: 'New link created' }); },
+    onSuccess: (r) => { setLink(r.link); toast({ kind: 'success', text: 'New invitation emailed' }); },
     onError: (e: ApiError) => toast({ kind: 'error', text: e.message }),
   });
   const transfer = useMutation({
@@ -419,7 +419,7 @@ export function AdminPage() {
           </form>
           {link && (
             <div className="invite-link" role="status">
-              <p>Send this link to the admin. It works once, for their email only, and expires in 7 days. They can also just sign in with that email.</p>
+              <p>The invitation was emailed to the admin. If it does not arrive (check spam), send them this link. It works once, for their email only, and expires in 7 days. They can also just sign in with that email.</p>
               <input readOnly value={link} onFocus={(e) => e.target.select()} aria-label="Admin invitation link" />
               <button className="btn btn-outline" onClick={() => navigator.clipboard.writeText(link).then(() => toast({ kind: 'success', text: 'Link copied' }))}>Copy</button>
             </div>

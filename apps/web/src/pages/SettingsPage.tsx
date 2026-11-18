@@ -115,7 +115,7 @@ export function SettingsPage() {
   });
   const pending = useQuery({ enabled: admin, queryKey: ['org', org.id, 'invitations'], queryFn: () => api<{ data: Pending[] }>('GET', `/orgs/${org.id}/invitations`).then((r) => r.data) });
   const refreshTeam = () => { qc.invalidateQueries({ queryKey: ['org', org.id, 'members'] }); qc.invalidateQueries({ queryKey: ['org', org.id, 'invitations'] }); };
-  const resendInv = useMutation({ mutationFn: (id: string) => api<{ link: string }>('POST', `/orgs/${org.id}/invitations/${id}/resend`, { body: {} }), onSuccess: (r) => { setLink(r.link); refreshTeam(); toast({ kind: 'success', text: 'New link created' }); }, onError: fail });
+  const resendInv = useMutation({ mutationFn: (id: string) => api<{ link: string }>('POST', `/orgs/${org.id}/invitations/${id}/resend`, { body: {} }), onSuccess: (r) => { setLink(r.link); refreshTeam(); toast({ kind: 'success', text: 'New invitation emailed' }); }, onError: fail });
   const revokeInv = useMutation({ mutationFn: (id: string) => api('DELETE', `/orgs/${org.id}/invitations/${id}`), onSuccess: () => { refreshTeam(); toast({ text: 'Invitation revoked' }); }, onError: fail });
   const setActive = useMutation({ mutationFn: (v: { id: string; on: boolean }) => api('POST', `/orgs/${org.id}/members/${v.id}/${v.on ? 'reactivate' : 'deactivate'}`, { body: {} }), onSuccess: (_r, v) => { refreshTeam(); toast({ text: v.on ? 'Member reactivated' : 'Member deactivated' }); }, onError: fail });
   const handover = useMutation({ mutationFn: (v: { userId: string; confirmName: string }) => api('POST', `/orgs/${org.id}/admin-handover`, { body: v }), onSuccess: () => { qc.invalidateQueries(); toast({ kind: 'success', text: 'Admin role handed over' }); }, onError: fail });
@@ -263,7 +263,7 @@ export function SettingsPage() {
           )}
           {link && (
             <div className="invite-link" role="status">
-              <p>Send this link to them. It works once, for that email address only, and expires in 7 days.</p>
+              <p>The invitation was emailed to them. If it does not arrive (check spam), send them this link. It works once, for that email address only, and expires in 7 days.</p>
               <input readOnly value={link} onFocus={(e) => e.target.select()} aria-label="Invitation link" />
               <button className="btn btn-outline" onClick={() => navigator.clipboard.writeText(link).then(() => toast({ kind: 'success', text: 'Link copied' }))}>Copy</button>
             </div>
