@@ -1,8 +1,8 @@
-# ShopList v2: Engineering Documentation
+# ShopList: Documentation
 
-ShopList is a multi-tenant inventory management system that runs entirely on Cloudflare and can be operated on the **Workers Free plan**. These documents are the specification for v2. They describe the target system, the reasoning behind each decision, and the order to build it in.
+ShopList is a multi-tenant inventory and order management system that runs entirely on Cloudflare and can be operated on the **Workers Free plan**. These documents describe the system as built, the reasoning behind each decision, and how to run it.
 
-> **Status:** v2 is built and live at https://shoplist-v2.technology1.workers.dev. [ROADMAP.md](ROADMAP.md) shows what is done.
+> **Status (2026-11-19):** built and live at https://shoplist-v2.technology1.workers.dev, with 361 tests and CI green. [ROADMAP.md](ROADMAP.md) shows what is done and what is open. The project README, with screenshots, is at the [repository root](../README.md).
 
 ## Documents
 
@@ -14,11 +14,16 @@ ShopList is a multi-tenant inventory management system that runs entirely on Clo
 | [SECURITY.md](SECURITY.md) | Threat model, authentication, authorization, tenant isolation |
 | [UX.md](UX.md) | Screens, flows, design system, accessibility and performance budgets |
 | [OPERATIONS.md](OPERATIONS.md) | Deploying for free, CI/CD, free-tier budget, backups, monitoring, runbooks |
-| [ROADMAP.md](ROADMAP.md) | Build phases with acceptance criteria |
+| [ROADMAP.md](ROADMAP.md) | What is built and what is open |
+| [HANDOFF.md](HANDOFF.md) | The few things only the owner can do |
+| [DEMO.md](DEMO.md) | Demo data, test accounts, regenerating the screenshots |
+| [PLAN.md](PLAN.md) | The access-level feature plan in one file; the same plan is split across [plan/](plan/README.md) |
+| [plan/09-owner-console.md](plan/09-owner-console.md) | The owner console: status, alerts, health, dashboard |
+| [plan/10-access-requests-and-passkeys.md](plan/10-access-requests-and-passkeys.md) | Access requests, the write tick, view-as-admin, passkeys with QR |
 
 ## The system in one paragraph
 
-A single Cloudflare Worker serves the React app as static assets (free and unmetered) and the `/api/v1` routes. Accounts, organizations, memberships and sessions live in one **D1** database, the *control plane*. Each organization's inventory (products, stock levels, the stock ledger, audit log and search index) lives in its **own Durable Object with SQLite storage**, the *data plane*. Tenants therefore never share a database, never contend for the same write lock, and cannot read each other's data even if application code has a bug. Slow work such as CSV imports, low-stock alerts and webhooks runs on **Queues**. Sign-in uses **OAuth (GitHub, Google) and passkeys**, so ShopList never stores a password.
+A single Cloudflare Worker serves the React app as static assets (free and unmetered) and the `/api/v1` routes. Accounts, organizations, memberships and sessions live in one **D1** database, the *control plane*. Each organization's inventory (products, stock levels, the stock ledger, audit log and search index) lives in its **own Durable Object with SQLite storage**, the *data plane*. Tenants therefore never share a database, never contend for the same write lock, and cannot read each other's data even if application code has a bug. Slow work such as CSV imports, low-stock alerts and webhooks runs on **Queues**. Sign-in uses **Clerk** for customers (email and password, an emailed code, or Google), **GitHub** for the owner, and **passkeys** (on a device or a phone by QR code), so ShopList itself never stores a password.
 
 ## Design principles
 

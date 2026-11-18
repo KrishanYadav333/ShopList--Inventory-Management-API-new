@@ -26,14 +26,16 @@ flowchart LR
 
 | Component | Technology | Responsibility |
 |---|---|---|
-| Web app | React 19, TypeScript, Vite, React Router, TanStack Query; plain CSS that extends the original orders-dashboard stylesheet | All UI. Served as static assets from the Worker. |
-| API Worker | Hono, Zod, `@hono/zod-openapi` | Routing, validation, authentication, authorization, request shaping. Stateless. |
-| Control plane | D1 (one database) | Users, OAuth links, passkeys, sessions, organizations, memberships, invitations, API keys. |
-| Data plane | One SQLite-backed Durable Object per organization (`InventoryDO`) | Products, locations, stock levels, ledger, reservations, audit log, full-text index, idempotency records. |
-| Async jobs | Queues + consumer Worker | CSV import and export, low-stock alerts, outbound webhooks, nightly backups. |
-| Blob storage | R2 | Export files, product images, nightly backups. |
-| Bot protection | Turnstile | Sign-in, sign-up and invitation acceptance. |
-| Scheduling | Cron Triggers | Nightly backup, expiring reservations, cleaning old idempotency keys and sessions. |
+| Web app | React 19, TypeScript, Vite, React Router, TanStack Query; plain CSS that extends the original orders-dashboard stylesheet | All UI, in two shells: the business app and the owner console. Served as static assets from the Worker. |
+| API Worker | Hono, Zod | Routing, validation, authentication, authorization, request shaping. Stateless. |
+| Control plane | D1 (one database) | Users, OAuth links, passkeys, sessions, organizations, memberships, invitations, API keys, plans, support windows and requests, alerts, job runs, backups, platform audit. |
+| Data plane | One SQLite-backed Durable Object per organization (`InventoryDO`) | Products, locations, stock levels, ledger, reservations, orders, purchasing, counts, approvals, audit log, full-text index, idempotency records. |
+| Async jobs | Queues + the same Worker as consumer | Outbound webhooks with retries and a delivery log. |
+| Scheduling | One hourly Cron Trigger (`15 * * * *`) | Every hour: morning summaries, usage check, security alerts. At 03:00 UTC: reminders, nightly backups, business health, deletion of businesses past their 14 days, retention. |
+| Email | Brevo (HTTP API) | Invitations and notices, capped per business and per platform each day; a signed one-click unsubscribe. |
+| Customer sign-in | Clerk (development instance for now) | Proves who a person is (email and password, code, Google); ShopList then owns the session. |
+| Owner sign-in | GitHub OAuth with PKCE, plus a passkey when required | The one super admin. |
+| Not used | R2, Turnstile, Analytics Engine | Backups are kept in D1 until R2 is enabled; the per-business usage code is ready for Analytics Engine. |
 
 There is **one deployable Worker** for the API and app, plus one consumer Worker. Splitting further adds latency and operational cost without a benefit at this scale.
 
@@ -121,3 +123,16 @@ Each level is triggered by a measured signal, not by anticipation.
 | Own small `Modal` with focus trap | Dialogs are the only complex widget; ~50 lines covers Escape, focus return and Tab trapping | Radix primitives: reconsider if more complex widgets (menus, comboboxes) appear. |
 | OAuth + passkeys, no passwords | Workers caps PBKDF2 at 100,000 iterations (below OWASP's 600,000) and the free plan allows 10 ms CPU per request, so strong password hashing is not available. No passwords also means none to leak. | Email and password: weak hashing on this platform. Magic links: needs a paid email service. |
 | Prefixed random ids (`prd_`, `loc_`, `mov_`) | Readable in logs, safe in URLs, cannot be guessed or enumerated | Auto-increment integers (v1): leak volume and invite enumeration. |
+
+
+## 8. Access: three levels and support windows
+
+- **Owner (super admin).** Set in configuration (`SUPER_ADMIN_GITHUB_ID`), never stored as a role, never a member of any business. Reaches only `/api/v1/admin/*` and, inside a window, one business.
+- **Business admin.** The one or two people who run a business. Everything inside it.
+- **Staff roles** (manager, sales, stock keeper, accountant, viewer) come from `ROLE_PERMISSIONS` in `packages/shared`; every route declares the permission it needs, and a test proves no route was forgotten.
+- **Support windows.** The owner reaches a business only with a window its admin opened or approved (an access request). A window is read-only unless the admin ticked changes, is time-limited, never deletes, and is recorded in the platform audit and in the business's own log. A second kind, "view as the admin", opens the admin's own screens with extra limits. See [SECURITY.md](SECURITY.md).
+- **Plans** (free, standard, custom) set limits and switch features on or off per business; a limit answers 403, a switched-off feature answers 404.
+
+## 9. Scheduled jobs
+
+One cron entry runs hourly. Each step records its result in `cron_runs`, never lets a failure stop the next step, and tells the owner after two failures in a row. The owner console shows the last run of every job. Steps that run only at 03:00 UTC are guarded by the hour, so tests call `dailyJob(env, 3)` to run them.

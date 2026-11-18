@@ -1,8 +1,8 @@
 # ShopList: access levels and feature plan (complete document)
 
-**Status (2026-11-18): Phase 1 (F1–F7), Phase 2a (F8–F18), F19, F20, F22, F27, F28 and F30 are built and deployed. Still to build: F21 (needs a read-only Cloudflare API token), F23 (needs an email provider and domain), F24, F25, F26, F29 (needs an R2 bucket).**
+**Status (2026-11-19): everything in this plan is built and deployed (F1 to F30). Backups (F29) are kept in D1 until R2 is enabled, and the per-business half of usage (F21) waits for Analytics Engine. The follow-on plans are in [plan/09-owner-console.md](plan/09-owner-console.md) and [plan/10-access-requests-and-passkeys.md](plan/10-access-requests-and-passkeys.md). See [ROADMAP.md](ROADMAP.md).**
 The plan was approved with the defaults listed in the "Decisions needed before building" section.
-Written 2026-11-16. Build starts after you approve it (see the "Decisions needed before building" section).
+Written 2026-11-16 and approved the same week; built by 2026-11-18.
 
 ## What this plan is for
 

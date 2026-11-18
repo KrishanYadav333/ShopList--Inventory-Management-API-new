@@ -36,22 +36,39 @@ New components (dialogs, toasts, forms) are styled to match it. Where this docum
 
 ## Information architecture
 
+Two shells share one sidebar design: a labelled list of pages on top, filters only where they apply (Orders and Products), and account actions at the bottom.
+
 ```
-Sign in
-└── Organization switcher
-    ├── Dashboard        totals, low stock, recent activity
-    ├── Products         table and grid, filters, bulk actions
-    │   └── Product      details, stock per location, history, audit
-    ├── Stock
-    │   ├── Adjust       scan or search, enter quantity and reason
-    │   ├── Receive      multi-line intake
-    │   ├── Transfer     between locations
-    │   ├── Count        cycle count with variance review
-    │   └── History      full ledger with filters
-    ├── Locations
-    ├── Import / Export
-    └── Settings         organization, members, API keys, webhooks, audit log, my sessions and passkeys
+Sign in                      /login      email + password, emailed code, Google, passkey
+                             /owner      GitHub, then a passkey when required
+└── Business app             /o/<business>
+    ├── Work
+    │   ├── Orders           status filters with counts, reservations, invoices, share link
+    │   ├── Products         table, search, filters, bulk actions, import and export
+    │   ├── Stock history    full ledger with filters
+    │   ├── Customers
+    │   ├── Counts           blind counts, variances
+    │   └── Purchasing       suppliers, purchase orders, what to reorder
+    ├── Review
+    │   ├── Reports
+    │   └── Approvals
+    └── Account (bottom)
+        ├── Settings         business, locations, team, plan, support access, API keys, webhooks,
+        │                    notifications, password, sessions, passkeys, activity log, backup
+        ├── Notifications
+        └── Sign out
+└── Owner console            /admin
+    ├── Overview             counters and a "needs attention" list
+    ├── Businesses           onboard, plan, suspend, scheduled deletion
+    ├── People               users, disable, sign out everywhere, reset passkeys
+    ├── Security             passkey requirement, alerts with states and notes, sign-in summary
+    ├── Operations           system status, business health, usage, nightly backups
+    ├── Notices              announcements and maintenance
+    ├── Support              ask a business for access, open windows
+    └── Activity             platform audit
 ```
+
+Inside a support window the owner sees the business app with a red banner (read-only or can make changes; "acting as the admin" for view-as). Personal pages (sessions, passkeys, password, notification preferences) are hidden there.
 
 ## Key screens
 

@@ -1,8 +1,8 @@
 # ShopList: access levels and feature plan
 
-**Status (2026-11-18): Phase 1 (F1–F7), Phase 2a (F8–F18), F19, F20, F22, F21 (platform totals), F23, F24, F25, F26, F27, F28 and F30 are built and deployed. F29 is built in an interim form (copies in D1, not R2). Still open: moving F29 to R2 (needs R2 enabled) and the per-business half of F21 (needs Analytics Engine enabled).**
+**Status (2026-11-19): everything in this plan is built and deployed (F1 to F30), plus the follow-on plans: [09-owner-console.md](09-owner-console.md) and [10-access-requests-and-passkeys.md](10-access-requests-and-passkeys.md). Backups (F29) are kept in D1 until R2 is enabled, and the per-business half of usage (F21) waits for Analytics Engine. See [../ROADMAP.md](../ROADMAP.md).**
 The plan was approved with the defaults listed in [08-decisions.md](08-decisions.md).
-Written 2026-11-16. Build starts after you approve it (see [08-decisions.md](08-decisions.md)).
+Written 2026-11-16 and approved the same week; built by 2026-11-18.
 
 ## What this plan is for
 

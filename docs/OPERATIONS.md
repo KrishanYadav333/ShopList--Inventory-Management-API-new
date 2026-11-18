@@ -56,6 +56,8 @@ npx wrangler dev --var APP_ORIGIN:http://localhost:5173 --var DEV_AUTH:true --va
 cd ../web && npx vite
 ```
 
+To fill a local server with a believable shop, and to take the README screenshots, see [DEMO.md](DEMO.md).
+
 Open **http://localhost:5173** (not 127.0.0.1; the Origin check allows only the configured origin). The login page shows a development-only email sign-in. `DEV_AUTH` enables it and `INSECURE_DEV_COOKIES` relaxes the `__Host-` Secure cookie so a browser accepts it over plain http; neither is ever set in production or in tests, so the tests exercise the real production cookie.
 
 Load and correctness check against a running local server (400 parallel sales of 10 units must sell exactly 10; 100 identical retries must create one movement; counters must match a recount): `node apps/api/scripts/loadtest.mjs`.

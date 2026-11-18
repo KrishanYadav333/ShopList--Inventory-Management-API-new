@@ -242,3 +242,32 @@ D1 and Durable Object SQLite bill by **rows read**, and `SELECT COUNT(*)` reads 
 | Idempotency keys | 24 hours | Deleted by cron |
 | Expired sessions | 7 days after expiry | Deleted by cron |
 | Backups | 30 nightly snapshots in R2 | Oldest deleted |
+
+## Control plane additions (migrations 0002 to 0026)
+
+The first design above has grown. Everything below is in `apps/api/migrations/control/`, applied in order.
+
+| Table | Migration | Holds |
+|---|---|---|
+| `platform_audit` | 0002 | Every owner action, with the owner's real id |
+| `passkeys` | 0003 | WebAuthn credentials per user (public key, sign count, transports) |
+| `webhooks`, `webhook_deliveries` | 0004 | Endpoints, signing secrets, and one row per delivery attempt |
+| `invitations` (lifecycle columns) | 0005, 0006 | Roles by job, revoked and resent invitations, location scope |
+| `notifications`, `notification_prefs` | 0010 | In-app notices per person, with an optional `_platform` scope for the owner |
+| `auth_events` | 0011 | Sign-in history without IP addresses or raw emails (hashes only) |
+| `plans`, `organizations.plan_id`, `plan_overrides` | 0012 | Free, Standard and Custom limits and feature switches, with per-business overrides |
+| `support_grants` | 0013, 0021, 0025 | A support window: who opened it, until when, `mode` (`view` or `assist`), customer details, counts of pages viewed and changes made, `impersonate_user_id` for "view as the admin" |
+| `organizations.delete_after` | 0014 | Scheduled deletion (14 days, read-only, cancellable) |
+| `announcements`, `maintenance` | 0015 | Notices and maintenance mode (writes answer 503 outside `/admin` and `/auth`) |
+| `email_prefs`, `email_counts` | 0016 | Per-person email choices; a daily send counter per business and for the platform, plus `_failed` |
+| `share_links` | 0017 | Hashed 32-byte tokens for customer order links and supplier purchase-order links |
+| `usage_alerts` | 0019 | One row per metric per day, so the owner is told once; also used to limit job-failure alerts |
+| `backups`, `backup_runs` | 0020 | Gzip copies of each business in parts (kept 30 days) and the result of each night |
+| `cron_runs` | 0022 | One row per housekeeping job per run |
+| `security_alerts` | 0023 | Sign-in patterns with a state (`open`, `investigating`, `resolved`, `dismissed`), note and dedupe key |
+| `org_health` | 0024 | A score and its four parts per business per day |
+| `access_requests` | 0025 | Requests for access in either direction, with state, reason, minutes, write tick and expiry |
+| `platform_settings` | 0026 | Key-value switches, currently `passkey_enforce` |
+| `sessions.passkey_at`, `users.passkey_grace_until` | 0026 | When a session last proved a passkey; the grace period for an admin without one |
+
+The Durable Object schema grew by steps inside `inventory-do.ts` (orders, customers, suppliers, purchase orders, counts, approvals, per-product tax, staff activity); each step runs once per business on first use after a deploy.

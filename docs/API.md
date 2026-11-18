@@ -21,6 +21,8 @@ https://<host>/api/v1
 
 Browser requests that change data must also send `Origin` matching the app's host (browsers do this automatically). See [SECURITY.md](SECURITY.md).
 
+The owner uses the same cookie, obtained through the GitHub door, and may also need a recent passkey confirmation (`403 passkey_required` or `passkey_setup_required`). Inside a support window the owner adds `X-Support-Grant: <window id>` to requests for that business; a window is read-only unless the admin allowed changes, and never deletes.
+
 ## Resources are scoped to an organization
 
 ```
