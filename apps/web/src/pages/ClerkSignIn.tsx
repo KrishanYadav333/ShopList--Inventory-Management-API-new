@@ -65,6 +65,15 @@ function Bridge() {
   return isSignedIn ? <p className="hint" role="status">Signing you in…</p> : null;
 }
 
+/**
+ * While Clerk already holds a session, its own sign-in form redirects away at once, which bounced people straight
+ * back to the login page. So the form is shown only when nobody is signed in; otherwise only the bridge is.
+ */
+function Gate() {
+  const { isSignedIn } = useAuth();
+  return isSignedIn ? <Bridge /> : <Widget />;
+}
+
 /** Path routing: /sign-in/... and /sign-up/... are real addresses, which is what Clerk's components expect. */
 function Widget() {
   const looks = { elements: { rootBox: { width: '100%' }, card: { boxShadow: 'none', border: 0, width: '100%' } } };
@@ -87,8 +96,7 @@ export default function ClerkSignIn() {
         <ClerkProvider publishableKey={KEY} signInUrl="/sign-in" signUpUrl="/sign-up" afterSignOutUrl="/sign-in">
           <ClerkLoading><p className="hint" role="status">Loading sign-in…</p></ClerkLoading>
           <ClerkLoaded>
-            <Bridge />
-            <Widget />
+            <Gate />
           </ClerkLoaded>
         </ClerkProvider>
         <a className="fine" href="/login">Back to the main sign-in</a>
