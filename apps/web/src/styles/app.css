@@ -389,3 +389,11 @@ a.btn { text-decoration: none; }
 .alert-actions input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; min-width: 160px; }
 /* Clerk's card has a fixed 25rem width, wider than this card's content box, so it overhung on the right. Fit it instead. */
 .clerk-card .cl-rootBox, .clerk-card .cl-cardBox { width: 100% !important; max-width: 100% !important; box-sizing: border-box; }
+
+/* A form that reads top to bottom: used where options and tick boxes would be crushed into a row. */
+.stack-form { display: grid; gap: 14px; max-width: 560px; }
+.stack-form fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; min-width: 0; }
+.stack-form legend { padding: 0; margin-bottom: 6px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+.stack-form .check { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; font-weight: 400; color: var(--ink); text-transform: none; letter-spacing: 0; }
+.stack-form input[type="radio"], .stack-form input[type="checkbox"] { width: 18px; height: 18px; flex: none; margin: 2px 0 0; padding: 0; }
+.stack-form .btn { justify-self: start; }

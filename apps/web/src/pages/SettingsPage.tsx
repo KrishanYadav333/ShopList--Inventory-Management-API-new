@@ -321,7 +321,7 @@ export function SettingsPage() {
                 </div>
               );
             })() : (
-              <form className="settings-grid" onSubmit={submit(() => allow.mutate())}>
+              <form className="stack-form" onSubmit={submit(() => allow.mutate())}>
                 <div className="field"><label htmlFor="sup-min">For how long</label>
                   <select id="sup-min" value={sup.minutes} onChange={(e) => setSup({ ...sup, minutes: Number(e.target.value) })}><option value={30}>30 minutes</option><option value={60}>1 hour</option><option value={240}>4 hours</option></select></div>
                 <div className="field"><label htmlFor="sup-note">{sup.write ? 'What should support help with?' : 'What is the problem? (optional)'}</label><input id="sup-note" maxLength={300} required={sup.write} minLength={sup.write ? 3 : undefined} value={sup.note} onChange={(e) => setSup({ ...sup, note: e.target.value })} /></div>
@@ -337,7 +337,7 @@ export function SettingsPage() {
                 <div key={r.id} className="card" role="group" aria-label="Support request" style={{ borderColor: '#f39c12' }}>
                   <p><strong>{r.kind === 'impersonate' ? 'ShopList support asks to see your business as you see it (including team, settings and activity).' : 'ShopList support asks to look at your business.'}</strong> Reason: {r.kind === 'impersonate' && r.reasonCode ? `${IMPERSONATION_REASONS[r.reasonCode as ImpersonationReason] ?? r.reasonCode}. ` : ''}{r.reason}</p>{r.kind === 'impersonate' && <p className="hint">They act as you, read-only unless you allow changes below. They can never delete, change people or invitations, or see API keys. It shows in your activity log as ShopList support acting as you.</p>}
                   <p className="hint">Asked for {r.minutes} minutes, {r.write ? 'with changes allowed' : 'read-only'}{r.includeCustomers ? ', with customer details' : ''}. Waiting until {dateParts(r.expiresAt).date} {dateParts(r.expiresAt).time}.</p>
-                  <div className="settings-grid">
+                  <div className="stack-form">
                     <div className="field"><label htmlFor={`rq-min-${r.id}`}>Allow for</label>
                       <select id={`rq-min-${r.id}`} value={e.minutes} onChange={(ev) => set({ minutes: Number(ev.target.value) })}>{[30, 60, 240].filter((m) => m <= r.minutes).map((m) => <option key={m} value={m}>{m === 240 ? '4 hours' : m === 60 ? '1 hour' : '30 minutes'}</option>)}</select></div>
                     {r.write && <label className="check"><input type="checkbox" checked={e.write} onChange={(ev) => set({ write: ev.target.checked })} /> Allow changes (untick to let them look only)</label>}

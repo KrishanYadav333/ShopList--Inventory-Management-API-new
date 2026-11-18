@@ -355,7 +355,7 @@ export function AdminPage() {
         <section className="admin-section" aria-labelledby="h-request">
           <h2 id="h-request">Ask a business for access</h2>
           <p className="hint">The business admin must approve. Access is read-only unless you tick the box, and the admin can narrow it. A request left unanswered ends after 48 hours.</p>
-          <form className="settings-grid" onSubmit={(e) => { e.preventDefault(); sendReq.mutate(); }}>
+          <form className="stack-form" onSubmit={(e) => { e.preventDefault(); sendReq.mutate(); }}>
             <div className="field"><label htmlFor="rq-org">Business</label>
               <select id="rq-org" required value={rq.orgId} onChange={(e) => setRq({ ...rq, orgId: e.target.value })}><option value="">Choose…</option>{orgs.data?.filter((x) => x.status === 'active').map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></div>
             <fieldset className="field"><legend>What do you need?</legend>
