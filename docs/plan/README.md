@@ -25,6 +25,7 @@ works. It also fixes five gaps found while mapping the current routes.
 | [06-data-and-api.md](06-data-and-api.md) | Every table, column, migration and endpoint in one place | The technical reference |
 | [07-testing-and-rollout.md](07-testing-and-rollout.md) | How each phase is tested, released safely, and kept on the free plan | How we avoid breaking production |
 | [09-owner-console.md](09-owner-console.md) | The owner's console: structure, system status, security alerts, business health, dashboard, test business (planned, not built) | What the developer's side gets next |
+| [10-access-requests-and-passkeys.md](10-access-requests-and-passkeys.md) | Access requests in both directions, the write tick, impersonation with approval, passkeys with QR required for owner and admins (planned, not built) | The next round of access features |
 | [08-decisions.md](08-decisions.md) | The questions only you can answer, with the default this plan assumes | What you need to decide before we start |
 
 Every feature has the same sections: **Why**, **Who**, **How it works** (user flow), **Screens**,
