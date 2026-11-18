@@ -42,12 +42,11 @@ export function Login({ owner = false }: { owner?: boolean }) {
           <>
             <p>Inventory you can trust: every change is recorded.</p>
             {health.data?.signin === 'owner-only' && <p className="notice" role="note">This ShopList is private right now.</p>}
-            {health.data?.signin === 'invite-only' && <p className="notice" role="note">Access is by invitation. Use the email address your invitation was sent to.</p>}
             {health.data?.signin !== 'owner-only' && import.meta.env.VITE_CLERK_PUBLISHABLE_KEY && (
-              <a className="btn btn-primary full" href="/sign-in">Sign in with email or Google</a>
+              <a className="btn btn-primary full" href="/sign-in">Sign in</a>
             )}
             {health.data?.signin !== 'owner-only' && import.meta.env.VITE_CLERK_PUBLISHABLE_KEY && (
-              <a className="fine" href="/sign-up">Invited? Create your account and choose a password</a>
+              <p className="fine">Use your email and password, an emailed code, or Google.</p>
             )}
             {health.data?.signin !== 'owner-only' && passkeysSupported() && (
               <button type="button" className="btn btn-outline full" disabled={passkey.isPending} onClick={() => { setError(''); passkey.mutate(); }}>
@@ -65,7 +64,10 @@ export function Login({ owner = false }: { owner?: boolean }) {
           </form>
         )}
         {error && <div className="field-error" role="alert">{error}</div>}
-        <p className="fine">We never see or store a password.</p>
+        {!owner && health.data?.signin !== 'owner-only' && import.meta.env.VITE_CLERK_PUBLISHABLE_KEY && (
+          <p className="fine">First time here? Access is by invitation. <a href="/sign-up">Create your account</a> with the email your invitation was sent to.</p>
+        )}
+        <p className="fine">ShopList never sees or stores your password; our sign-in service handles it.</p>
       </div>
     </main>
   );
