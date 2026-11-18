@@ -1,6 +1,5 @@
 import { ClerkLoaded, ClerkLoading, ClerkProvider, SignIn, UserProfile, useAuth } from '@clerk/react';
-import { Navigate, NavLink } from 'react-router-dom';
-import { useMe } from '../queries';
+import { NavLink } from 'react-router-dom';
 
 const KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
 
@@ -29,9 +28,6 @@ function Inner() {
 }
 
 export default function AccountPassword() {
-  const me = useMe();
-  if (me.isLoading) return <div className="boot">Loading…</div>;
-  if (!me.data) return <Navigate to="/login" replace />;
   if (!KEY) return <main className="auth"><div className="auth-card"><h1>Not set up</h1><p>This deployment has no sign-in service key.</p></div></main>;
   return (
     <main className="auth">
