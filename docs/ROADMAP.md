@@ -125,3 +125,7 @@ Open, each blocked on something outside the code: nightly backups are kept in D1
 Also built 2026-11-18: per-product tax rates, receiving up to 10% over on a purchase order, a staff-activity report, daily overdue-count reminders, and per-location restore (backups now include stock per location). 306 tests.
 
 v1 was retired on 2026-11-18 (see OPERATIONS.md, "v1 retired").
+
+## Planned next: owner console
+
+Planned 2026-11-18, not built. See [plan/09-owner-console.md](plan/09-owner-console.md): O5 console structure, O4 system status, O2 security alerts, O3 business health, O1 owner dashboard, O6 test business and runbook.
