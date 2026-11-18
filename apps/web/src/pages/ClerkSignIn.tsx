@@ -93,7 +93,8 @@ export default function ClerkSignIn() {
       <div className="auth-card clerk-card">
         <img className="brand-lockup" src="/logo-lockup.png" alt="ShopList" width="280" height="83" />
         {error && <div className="notice" role="alert">{error}{/owner/i.test(error) && <> <a href="/owner">Go to the owner sign-in</a>.</>}</div>}
-        <ClerkProvider publishableKey={KEY} signInUrl="/sign-in" signUpUrl="/sign-up" afterSignOutUrl="/sign-in">
+        {/* Finishing a sign-in or sign-up always lands on /sign-in, where the bridge trades the Clerk session for a ShopList one. Without this, Clerk sent people to "/" first and they had to click Sign in a second time. */}
+        <ClerkProvider publishableKey={KEY} signInUrl="/sign-in" signUpUrl="/sign-up" signInForceRedirectUrl="/sign-in" signUpForceRedirectUrl="/sign-in" afterSignOutUrl="/sign-in">
           <ClerkLoading><p className="hint" role="status">Loading sign-in…</p></ClerkLoading>
           <ClerkLoaded>
             <Gate />
