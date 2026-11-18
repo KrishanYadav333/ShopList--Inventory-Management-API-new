@@ -3,6 +3,8 @@
 The code is finished for everything the plan describes. These steps need your accounts or your decision.
 
 ## Secrets to rotate (they were pasted into a chat)
+Decision 2026-11-18: the owner chose not to rotate these for now. The Brevo key and Cloudflare token are in a chat transcript; revisit if the transcript is ever shared.
+
 Create a new one, set it with `npx wrangler secret put NAME` (from `apps/api`), then delete the old one at the provider.
 
 | Secret | Where to make a new one |
@@ -13,7 +15,7 @@ Create a new one, set it with `npx wrangler secret put NAME` (from `apps/api`), 
 | `CLERK_SECRET_KEY` | Clerk dashboard → API keys |
 
 ## Clerk dashboard
-Turn off phone number and username as sign-up requirements, so clients sign in with email only.
+Done: phone number and username are off, so clients sign in with email only.
 
 ## Test a real client
 1. As owner, onboard a business or invite an email in Settings.
