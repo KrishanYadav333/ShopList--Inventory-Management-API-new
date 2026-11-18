@@ -9,7 +9,7 @@ const KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
  * where they add one. It does not hand a session to ShopList; it only edits the sign-in account.
  */
 function Inner() {
-  const { isSignedIn, signOut } = useAuth();
+  const { isSignedIn } = useAuth();
   if (!isSignedIn) {
     return (
       <>
@@ -22,7 +22,8 @@ function Inner() {
     <>
       <p className="hint">Open <strong>Security</strong>, then <strong>Set password</strong> (or <strong>Update password</strong>).</p>
       <UserProfile routing="hash" />
-      <button className="btn btn-primary full" onClick={() => { void signOut({ redirectUrl: '/' }); }}>Done, back to ShopList</button>
+      {/* The sign-in page hands this Clerk session to ShopList (and ends the Clerk one), so this works whether or not ShopList was signed in before. */}
+      <a className="btn btn-primary full" href="/sign-in">Done, continue to ShopList</a>
     </>
   );
 }
