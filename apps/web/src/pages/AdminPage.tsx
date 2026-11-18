@@ -34,6 +34,8 @@ interface Usage { days: UsageDay[]; limits: Record<string, number>; cpuLimitUs: 
 interface BackupRow { orgId: string; name: string; day: string | null; ok: boolean | null; sizeBytes: number | null; rows: number | null; error: string | null; at: string | null; days: string[] }
 interface Ann { id: string; message: string; severity: string; audience: string; orgId: string | null; startsAt: string; endsAt: string | null; endedAt: string | null }
 interface Maint { id: string; orgId: string | null; orgName: string | null; message: string; startedAt: string }
+interface JobStatus { job: string; every: 'hourly' | 'daily'; state: 'ok' | 'failed' | 'not running' | 'no runs yet'; lastAt: string | null; error: string | null; detail: Record<string, number> | null; failures7d: number }
+interface SystemStatus { jobs: JobStatus[]; lastBackup: { day: string; ok: number; failed: number } | null; email: { sentToday: number; failedToday: number; dailyCap: number; configured: boolean }; healthUrl: string }
 interface AuditRow { id: string; action: string; target: string | null; createdAt: string; requestId: string }
 
 const PAGES = [
@@ -72,6 +74,7 @@ export function AdminPage() {
     onSuccess: (r) => { setRehearse(null); qc.invalidateQueries({ queryKey: ['admin'] }); toast({ kind: 'success', text: `Created “${r.organization.name}”.${r.invitation ? ' Send its admin the invitation link from the business details.' : ''}` }); },
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Restore failed.' }),
   });
+  const status = useQuery({ enabled: on('operations'), queryKey: ['admin', 'status'], queryFn: () => api<SystemStatus>('GET', '/admin/status'), refetchInterval: 60_000 });
   const security = useQuery({ enabled: on('security'), queryKey: ['admin', 'security'], queryFn: () => api<Security>('GET', '/admin/security') });
   const support = useQuery({ enabled: on('support'), queryKey: ['admin', 'support'], queryFn: () => api<{ data: { id: string; orgId: string; orgName: string; note: string | null; includeCustomers: boolean; mode: 'view' | 'assist'; expiresAt: string }[] }>('GET', '/admin/support').then((r) => r.data), refetchInterval: 30_000 });
   const anns = useQuery({ enabled: on('notices'), queryKey: ['admin', 'announcements'], queryFn: () => api<{ data: Ann[] }>('GET', '/admin/announcements').then((r) => r.data) });
@@ -155,6 +158,30 @@ export function AdminPage() {
         </section>)}
 
         {page === 'operations' && (
+        <section className="admin-section" aria-labelledby="h-status">
+          <h2 id="h-status">System status</h2>
+          {status.isError ? <p className="hint">Could not load the status.</p> : !status.data ? <p className="hint">Loading…</p> : (
+            <>
+              <div className="orders-table-container"><table className="orders-table">
+                <thead><tr><th>Job</th><th>Runs</th><th>Last run</th><th>Result</th><th>Failures in 7 days</th></tr></thead>
+                <tbody>{status.data.jobs.map((j) => (
+                  <tr key={j.job}>
+                    <td>{j.job}</td><td>{j.every}</td><td>{j.lastAt ? when(j.lastAt) : 'never'}</td>
+                    <td><span className={`pill ${j.state === 'ok' ? 'ok' : j.state === 'no runs yet' ? '' : 'bad'}`}>{j.state}</span>{j.error ? <div className="time">{j.error}</div> : null}</td>
+                    <td>{j.failures7d}</td>
+                  </tr>
+                ))}</tbody>
+              </table></div>
+              <ul className="list" aria-label="Other checks">
+                <li><span>Last nightly backup<div className="time">{status.data.lastBackup ? `${status.data.lastBackup.day}: ${status.data.lastBackup.ok} saved, ${status.data.lastBackup.failed} failed` : 'No backup has run yet.'}</div></span></li>
+                <li><span>Email today<div className="time">{status.data.email.configured ? `${status.data.email.sentToday} of ${status.data.email.dailyCap} sent, ${status.data.email.failedToday} failed` : 'Email is not set up (no key).'}</div></span></li>
+                <li><span>Is the whole site up?<div className="time">Only an outside checker can tell you when the site itself is down. Point a free uptime checker at {status.data.healthUrl}</div></span></li>
+              </ul>
+            </>
+          )}
+        </section>
+      )}
+      {page === 'operations' && (
         <section className="admin-section" aria-labelledby="h-backups">
           <h2 id="h-backups">Nightly backups</h2>
           <p className="hint">Each business is copied every night at 03:00 UTC and kept 30 days. You see when and how big, never the contents. To rehearse or recover, load a copy into a new business.</p>

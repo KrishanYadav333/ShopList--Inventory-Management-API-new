@@ -228,3 +228,9 @@ Secrets for the usage page: `CF_ANALYTICS_TOKEN` (read-only), `CF_ACCOUNT_ID`. T
 ## v1 retired
 
 2026-11-18: v1 (`shoplist.technology1.workers.dev`) was deleted at the owner's request: the Worker, its D1 database `shoplist-db` (2 demo products), and its code (`backend/`, `frontend/`, `worker/`, root `wrangler.jsonc`, `migrations/`, `SETUP.md`) and the `migrate-v1.mjs` script. Git history still has all of it.
+
+## System status
+
+Owner console, Operations, System status. Every housekeeping job (usage, digests, count reminders, backups, purge, retention, prune) records each run. A job shows `failed` when its last run failed, `not running` when it has not run for 26 hours (hourly jobs) or 50 hours (daily jobs), and `no runs yet` right after a deploy. Two failures in a row send you one notice and one email per day for that job.
+
+If a job fails: read the error under it, fix the cause. The hourly cron retries by itself, so the card turns green after the next successful run. The card also shows the last nightly backup, email sent and failed today against the 250 daily cap, and the health URL to give an outside uptime checker. Only an outside checker can tell you the whole site is down.

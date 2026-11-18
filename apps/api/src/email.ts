@@ -5,7 +5,7 @@ import { nowIso } from './util';
 export type MailEnv = Pick<Bindings, 'DB' | 'APP_ORIGIN' | 'COOKIE_SIGNING_KEY'> & Partial<Pick<Bindings, 'BREVO_API_KEY' | 'EMAIL_FROM'>>;
 
 /** Which notification kinds are emailed unless the person switches them off. Everything else is in-app only until they opt in. */
-export const EMAIL_DEFAULT_ON = new Set(['approval.requested', 'approval.decided', 'security.not_me', 'support.granted', 'usage.alert', 'backup.failed', 'count.overdue']);
+export const EMAIL_DEFAULT_ON = new Set(['approval.requested', 'approval.decided', 'security.not_me', 'support.granted', 'usage.alert', 'backup.failed', 'count.overdue', 'system.alert']);
 export const DIGEST_KIND = 'digest';
 
 export const ORG_DAILY_CAP = 50;
@@ -30,6 +30,11 @@ async function reserve(env: MailEnv, scope: string): Promise<boolean> {
   return take('_all', PLATFORM_DAILY_CAP);
 }
 
+/** Failed sends are counted per day under the scope '_failed', so the owner's status card can show them. */
+async function countFailure(env: MailEnv): Promise<void> {
+  try { await env.DB.prepare(`INSERT INTO email_counts(day, scope, n) VALUES (?, '_failed', 1) ON CONFLICT(day, scope) DO UPDATE SET n = n + 1`).bind(nowIso().slice(0, 10)).run(); } catch { /* counting must never break sending */ }
+}
+
 /** Sends one email through Brevo. Never throws: email is a convenience, never a reason for a request to fail. */
 export async function sendMail(env: MailEnv, scope: string, m: Mail): Promise<boolean> {
   if (!env.BREVO_API_KEY || !env.EMAIL_FROM) return false;
@@ -48,10 +53,11 @@ export async function sendMail(env: MailEnv, scope: string, m: Mail): Promise<bo
         ...(m.unsubscribe ? { headers: { 'List-Unsubscribe': `<${m.unsubscribe}>` } } : {}),
       }),
     });
-    if (!res.ok) console.error(JSON.stringify({ level: 'error', message: 'email refused', status: res.status }));
+    if (!res.ok) { console.error(JSON.stringify({ level: 'error', message: 'email refused', status: res.status })); await countFailure(env); }
     return res.ok;
   } catch (e) {
     console.error(JSON.stringify({ level: 'error', message: 'email failed', error: (e as Error).message }));
+    await countFailure(env);
     return false;
   }
 }

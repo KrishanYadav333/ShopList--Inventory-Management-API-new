@@ -3,7 +3,7 @@ import type { Bindings } from './env';
 import { sendMail, unsubscribeUrl, wantsEmail, type MailEnv } from './email';
 import { newId, nowIso } from './util';
 
-export const NOTIFICATION_KINDS = ['stock.low', 'stock.out', 'order.created', 'approval.requested', 'approval.decided', 'count.assigned', 'security.not_me', 'support.granted', 'po.supplier', 'usage.alert', 'backup.failed', 'count.overdue'] as const;
+export const NOTIFICATION_KINDS = ['stock.low', 'stock.out', 'order.created', 'approval.requested', 'approval.decided', 'count.assigned', 'security.not_me', 'support.granted', 'po.supplier', 'usage.alert', 'backup.failed', 'count.overdue', 'system.alert'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 export const KIND_LABELS: Record<NotificationKind, string> = {
@@ -19,6 +19,7 @@ export const KIND_LABELS: Record<NotificationKind, string> = {
   'usage.alert': 'The platform is close to a free-plan limit',
   'backup.failed': 'A nightly backup failed',
   'count.overdue': 'A stock count assigned to me is overdue',
+  'system.alert': 'A platform job keeps failing',
 };
 
 /** Which roles hear about which event by default. */

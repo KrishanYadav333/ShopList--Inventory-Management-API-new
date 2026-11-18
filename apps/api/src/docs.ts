@@ -153,6 +153,7 @@ export const DOCS: Record<string, Doc> = {
   'POST /admin/backups/:orgId/:day/restore': { tag: 'Platform admin', summary: 'Load a nightly copy into a new business and invite its admin (restore rehearsal or recovery)' },
   'GET /admin/usage': { tag: 'Platform admin', summary: 'Platform usage against the free-plan limits: 30 days, today\'s warnings, busiest businesses' },
   'GET /admin/security': { tag: 'Platform admin', summary: 'Sign-in counts, refusals, rate limits and notable events' },
+  'GET /admin/status': { tag: 'Platform admin', summary: 'Last result of every housekeeping job, recent failures, last backup and email sent today' },
   'GET /admin/orgs': { tag: 'Platform admin', summary: 'All organizations with status', query: pageQuery },
   'POST /admin/orgs': { tag: 'Platform admin', summary: 'Onboard a business: create it with no members and invite its admin' },
   'POST /admin/orgs/:id/resend-invitation': { tag: 'Platform admin', summary: "Send a fresh link to a business's pending admin" },

@@ -81,7 +81,7 @@ import { checkWebhookUrl, flushEvents, forgetHooks, handleQueue, sendTestEvent, 
 import { verifyAssertion, verifyRegistration } from './webauthn';
 import { backupOrg, readBackup, runBackups } from './backups';
 import { fetchUsage, foldUsage, overLine, topBusinesses, FREE_LIMITS, CPU_LIMIT_US, METRIC_LABEL } from './usage';
-import { sendMail, unsubscribeUrl, DIGEST_KIND, EMAIL_DEFAULT_ON, wantsEmail } from './email';
+import { sendMail, unsubscribeUrl, DIGEST_KIND, EMAIL_DEFAULT_ON, PLATFORM_DAILY_CAP, wantsEmail } from './email';
 import { KIND_LABELS, NOTIFICATION_KINDS, notify, notifyForEvent, recipients } from './notify';
 import { pruneAuthEvents, recordAuthEvent, recordRateLimited, type AuthEventKind } from './authevents';
 import { clerkConfigured, fetchClerkProfile, verifyClerkToken } from './clerk';
@@ -1692,7 +1692,7 @@ route('post', '/orgs/:orgId/support-grants', 'settings:manage', async (c) => {
   const dev = await c.env.DB.prepare(`SELECT user_id AS id FROM oauth_accounts WHERE provider = 'github' AND provider_user_id = ?`).bind(c.env.SUPER_ADMIN_GITHUB_ID ?? '').first<{ id: string }>();
   const name = (await c.env.DB.prepare(`SELECT name FROM organizations WHERE id = ?`).bind(org.id).first<{ name: string }>())?.name ?? 'A business';
   // The owner belongs to no business, so platform notices use the '_platform' scope.
-  if (dev) await notify(c.env, '_platform', [dev.id], { kind: 'support.granted', title: `${name} opened ${data.mode === 'assist' ? 'hands-on ' : ''}support access for ${data.minutes} minutes${data.note ? `: ${data.note}` : ''}`, link: '/admin' });
+  if (dev) await notify(c.env, '_platform', [dev.id], { kind: 'support.granted', title: `${name} opened ${data.mode === 'assist' ? 'hands-on ' : ''}support access for ${data.minutes} minutes${data.note ? `: ${data.note}` : ''}`, link: '/admin/support' });
   return c.json({ id, expiresAt, mode: data.mode ?? 'view', includeCustomers: !!data.includeCustomers }, 201);
 });
 
@@ -1720,6 +1720,27 @@ route('get', '/admin/support', 'super', async (c) => {
       WHERE g.ended_at IS NULL AND g.expires_at > ? AND o.deleted_at IS NULL AND o.suspended_at IS NULL ORDER BY g.created_at DESC`,
   ).bind(nowIso()).all<{ includeCustomers: number }>();
   return c.json({ data: results.map((g) => ({ ...g, includeCustomers: g.includeCustomers === 1 })) });
+});
+
+// ------------------------------------------------------------------ system status (O4)
+/** Is the housekeeping really running? Last result of every job, recent failures, last backups, and today's email. */
+route('get', '/admin/status', 'super', async (c) => {
+  const now = Date.now();
+  const since = new Date(now - 7 * 86400_000).toISOString();
+  const today = nowIso().slice(0, 10);
+  const jobs = await Promise.all(JOBS.map(async ({ job, every }) => {
+    const [last, fails] = await Promise.all([
+      c.env.DB.prepare(`SELECT started_at AS at, ok, error, detail FROM cron_runs WHERE job = ? ORDER BY started_at DESC LIMIT 1`).bind(job).first<{ at: string; ok: number; error: string | null; detail: string | null }>(),
+      c.env.DB.prepare(`SELECT COUNT(*) AS n FROM cron_runs WHERE job = ? AND ok = 0 AND started_at >= ?`).bind(job, since).first<{ n: number }>(),
+    ]);
+    const limitH = every === 'hourly' ? 26 : 50;
+    const ageH = last ? (now - Date.parse(last.at)) / 3600_000 : null;
+    const state = !last ? 'no runs yet' : !last.ok ? 'failed' : ageH! > limitH ? 'not running' : 'ok';
+    return { job, every, state, lastAt: last?.at ?? null, error: last?.error ?? null, detail: last?.detail ? (JSON.parse(last.detail) as unknown) : null, failures7d: fails?.n ?? 0 };
+  }));
+  const backup = await c.env.DB.prepare(`SELECT day, SUM(ok) AS ok, COUNT(*) - SUM(ok) AS failed FROM backup_runs GROUP BY day ORDER BY day DESC LIMIT 1`).first<{ day: string; ok: number; failed: number }>();
+  const { results: mail } = await c.env.DB.prepare(`SELECT scope, n FROM email_counts WHERE day = ? AND scope IN ('_all', '_failed')`).bind(today).all<{ scope: string; n: number }>();
+  return c.json({ jobs, lastBackup: backup ?? null, email: { sentToday: mail.find((m) => m.scope === '_all')?.n ?? 0, failedToday: mail.find((m) => m.scope === '_failed')?.n ?? 0, dailyCap: PLATFORM_DAILY_CAP, configured: !!c.env.BREVO_API_KEY }, healthUrl: `${c.env.APP_ORIGIN}/api/v1/health` });
 });
 
 // ------------------------------------------------------------------ announcements and maintenance (F28)
@@ -2091,7 +2112,7 @@ export async function checkUsage(env: Bindings): Promise<number> {
     const first = await env.DB.prepare(`INSERT OR IGNORE INTO usage_alerts(day, metric) VALUES (?, ?)`).bind(today!.date, w.metric).run();
     if (!first.meta.changes) continue;
     const owner = await env.DB.prepare(`SELECT user_id AS id FROM oauth_accounts WHERE provider = 'github' AND provider_user_id = ?`).bind(env.SUPER_ADMIN_GITHUB_ID ?? '').first<{ id: string }>();
-    if (owner) await notify(env, '_platform', [owner.id], { kind: 'usage.alert', title: `${METRIC_LABEL[w.metric]} is at ${Math.round(w.pct * 100)}% of today's free allowance (${w.used.toLocaleString()} of ${w.limit.toLocaleString()})`, link: '/admin' });
+    if (owner) await notify(env, '_platform', [owner.id], { kind: 'usage.alert', title: `${METRIC_LABEL[w.metric]} is at ${Math.round(w.pct * 100)}% of today's free allowance (${w.used.toLocaleString()} of ${w.limit.toLocaleString()})`, link: '/admin/operations' });
     told++;
   }
   return told;
@@ -2108,19 +2129,58 @@ export async function remindOverdueCounts(env: Bindings): Promise<number> {
   return sent;
 }
 
+/** The housekeeping jobs, with how often each is expected to run (used by the status card). */
+const JOBS = [
+  { job: 'usage', every: 'hourly' }, { job: 'digests', every: 'hourly' },
+  { job: 'count-reminders', every: 'daily' }, { job: 'backups', every: 'daily' }, { job: 'purge', every: 'daily' }, { job: 'retention', every: 'daily' }, { job: 'prune', every: 'daily' },
+] as const;
+
+/** Runs one job, records how it went, and never lets a failure (or a failure to record) stop the next job. */
+async function step(env: Bindings, job: (typeof JOBS)[number]['job'], hourUtc: number, fn: () => Promise<unknown>): Promise<void> {
+  const started = nowIso();
+  let ok = 1, error: string | null = null, detail: string | null = null;
+  try {
+    const r = await fn();
+    if (r && typeof r === 'object') detail = JSON.stringify(r).slice(0, 300);
+  } catch (e) {
+    ok = 0; error = ((e as Error).message ?? 'failed').slice(0, 200);
+    console.error(JSON.stringify({ level: 'error', message: `${job} failed`, error }));
+  }
+  try {
+    await env.DB.prepare(`INSERT INTO cron_runs(id, job, hour_utc, started_at, finished_at, ok, error, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(newId('run'), job, hourUtc, started, nowIso(), ok, error, detail).run();
+    if (!ok) await alertIfRepeated(env, job);
+  } catch (e) { console.error(JSON.stringify({ level: 'error', message: 'run record failed', error: (e as Error).message })); }
+}
+
+/** Two failures in a row tell the owner once a day per job. */
+async function alertIfRepeated(env: Bindings, job: string): Promise<void> {
+  const { results } = await env.DB.prepare(`SELECT ok FROM cron_runs WHERE job = ? ORDER BY started_at DESC LIMIT 2`).bind(job).all<{ ok: number }>();
+  if (results.length < 2 || results.some((r) => r.ok)) return;
+  const first = await env.DB.prepare(`INSERT OR IGNORE INTO usage_alerts(day, metric) VALUES (?, ?)`).bind(nowIso().slice(0, 10), `job:${job}`).run();
+  if (!first.meta.changes) return;
+  const owner = await env.DB.prepare(`SELECT user_id AS id FROM oauth_accounts WHERE provider = 'github' AND provider_user_id = ?`).bind(env.SUPER_ADMIN_GITHUB_ID ?? '').first<{ id: string }>();
+  if (owner) await notify(env, '_platform', [owner.id], { kind: 'system.alert', title: `The "${job}" job failed twice in a row`, link: '/admin/operations' });
+}
+
 export async function dailyJob(env: Bindings, hourUtc = new Date().getUTCHours()): Promise<void> {
-  await checkUsage(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'usage check failed', error: (e as Error).message })));
-  await sendDigests(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'digest failed', error: (e as Error).message })));
+  await step(env, 'usage', hourUtc, () => checkUsage(env));
+  await step(env, 'digests', hourUtc, () => sendDigests(env));
   if (hourUtc !== 3) return; // the rest runs once a day
-  await remindOverdueCounts(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'count reminders failed', error: (e as Error).message })));
-  await runBackups(env).then(async (r) => {
-    if (!r.failed) return;
-    const owner = await env.DB.prepare(`SELECT user_id AS id FROM oauth_accounts WHERE provider = 'github' AND provider_user_id = ?`).bind(env.SUPER_ADMIN_GITHUB_ID ?? '').first<{ id: string }>();
-    if (owner) await notify(env, '_platform', [owner.id], { kind: 'backup.failed', title: `Nightly backup: ${r.failed} business${r.failed === 1 ? '' : 'es'} failed, ${r.ok} saved`, link: '/admin' });
-  }).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'backups failed', error: (e as Error).message })));
-  await purgeDueOrgs(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'purge failed', error: (e as Error).message })));
-  await pruneRetention(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'retention failed', error: (e as Error).message })));
-  await pruneAuthEvents(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'prune auth events failed', error: (e as Error).message })));
+  await step(env, 'count-reminders', hourUtc, () => remindOverdueCounts(env));
+  await step(env, 'backups', hourUtc, async () => {
+    const r = await runBackups(env);
+    if (r.failed) {
+      const owner = await env.DB.prepare(`SELECT user_id AS id FROM oauth_accounts WHERE provider = 'github' AND provider_user_id = ?`).bind(env.SUPER_ADMIN_GITHUB_ID ?? '').first<{ id: string }>();
+      if (owner) await notify(env, '_platform', [owner.id], { kind: 'backup.failed', title: `Nightly backup: ${r.failed} business${r.failed === 1 ? '' : 'es'} failed, ${r.ok} saved`, link: '/admin/operations' });
+    }
+    return { ok: r.ok, failed: r.failed };
+  });
+  await step(env, 'purge', hourUtc, () => purgeDueOrgs(env));
+  await step(env, 'retention', hourUtc, () => pruneRetention(env));
+  await step(env, 'prune', hourUtc, async () => {
+    await pruneAuthEvents(env);
+    await env.DB.prepare(`DELETE FROM cron_runs WHERE started_at < ?`).bind(new Date(Date.now() - 30 * 86400_000).toISOString()).run();
+  });
 }
 
 export default {
