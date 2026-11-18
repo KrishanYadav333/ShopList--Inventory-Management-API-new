@@ -74,6 +74,7 @@ export function Shell() {
   }
 
   const isOrders = location.pathname.endsWith('/orders');
+  const showFilters = isOrders || location.pathname.endsWith('/products');
   const stock = params.get('stock');
   const setFilter = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
@@ -104,7 +105,20 @@ export function Shell() {
           </div>
         </div>
 
-        <div className="sidebar-filters">
+        <nav className="side-nav" aria-label="Main">
+          <p className="nav-group">Work</p>
+          {feat('orders') && <NavLink to={`/o/${orgId}/orders`} className="nav-item"><Icon name="cart" size={18} /><span className="nav-label">Orders</span></NavLink>}
+          <NavLink to={`/o/${orgId}/products`} className="nav-item"><Icon name="grid" size={18} /><span className="nav-label">Products</span></NavLink>
+          <NavLink to={`/o/${orgId}/history`} className="nav-item"><Icon name="clock" size={18} /><span className="nav-label">Stock history</span></NavLink>
+          {canDo(org.role, 'customers:read') && <NavLink to={`/o/${orgId}/customers`} className="nav-item"><Icon name="users" size={18} /><span className="nav-label">Customers</span></NavLink>}
+          {canDo(org.role, 'stock:write') && <NavLink to={`/o/${orgId}/counts`} className="nav-item"><Icon name="scan" size={18} /><span className="nav-label">Counts</span></NavLink>}
+          {feat('purchasing') && <NavLink to={`/o/${orgId}/purchasing`} className="nav-item"><Icon name="truck" size={18} /><span className="nav-label">Purchasing</span></NavLink>}
+          {(feat('reports') && (supportOrg || canDo(org.role, 'reports:read')) || (feat('approvals') && !supportOrg)) && <p className="nav-group">Review</p>}
+          {feat('reports') && (supportOrg || canDo(org.role, 'reports:read')) && <NavLink to={`/o/${orgId}/reports`} className="nav-item"><Icon name="chart" size={18} /><span className="nav-label">Reports</span></NavLink>}
+          {feat('approvals') && !supportOrg && <NavLink to={`/o/${orgId}/approvals`} className="nav-item"><Icon name="check" size={18} /><span className="nav-label">Approvals</span></NavLink>}
+        </nav>
+
+        {showFilters && <div className="sidebar-filters">
           {isOrders ? (
             <div className="filter-section">
               <h3>Orders</h3>
@@ -175,24 +189,13 @@ export function Shell() {
           )}
                     </>
           )}
+        </div>}
+        <div className="side-foot">
+          {!supportOrg && <NavLink to={`/o/${orgId}/settings`} className="nav-item"><Icon name="cog" size={18} /><span className="nav-label">Settings</span></NavLink>}
+          {!supportOrg && <NotificationBell />}
+          {me.data?.user.isSuperAdmin && <NavLink to="/admin" className="nav-item"><Icon name="shield" size={18} /><span className="nav-label">Platform admin</span></NavLink>}
+          <button className="nav-item" onClick={async () => { await api('POST', '/auth/logout', { body: {} }).catch(() => {}); qc.clear(); nav('/login'); }}><Icon name="logout" size={18} /><span className="nav-label">Sign out</span></button>
         </div>
-
-        <nav className="sidebar-nav" aria-label="Main">
-          <div className="nav-icons">
-            {feat('orders') && <NavLink to={`/o/${orgId}/orders`} className="nav-icon" title="Orders" aria-label="Orders"><Icon name="cart" size={18} /></NavLink>}
-            <NavLink to={`/o/${orgId}/products`} className="nav-icon" title="Products" aria-label="Products"><Icon name="grid" size={18} /></NavLink>
-            <NavLink to={`/o/${orgId}/history`} className="nav-icon" title="Stock history" aria-label="Stock history"><Icon name="clock" size={18} /></NavLink>
-            {org && canDo(org.role, 'customers:read') && <NavLink to={`/o/${orgId}/customers`} className="nav-icon" title="Customers" aria-label="Customers"><Icon name="users" size={18} /></NavLink>}
-            {org && canDo(org.role, 'stock:write') && <NavLink to={`/o/${orgId}/counts`} className="nav-icon" title="Counts" aria-label="Counts"><Icon name="scan" size={18} /></NavLink>}
-            {feat('purchasing') && <NavLink to={`/o/${orgId}/purchasing`} className="nav-icon" title="Purchasing" aria-label="Purchasing"><Icon name="truck" size={18} /></NavLink>}
-            {org && feat('reports') && (supportOrg || canDo(org.role, 'reports:read')) && <NavLink to={`/o/${orgId}/reports`} className="nav-icon" title="Reports" aria-label="Reports"><Icon name="chart" size={18} /></NavLink>}
-            {feat('approvals') && !supportOrg && <NavLink to={`/o/${orgId}/approvals`} className="nav-icon" title="Approvals" aria-label="Approvals"><Icon name="check" size={18} /></NavLink>}
-            {!supportOrg && <NavLink to={`/o/${orgId}/settings`} className="nav-icon" title="Settings" aria-label="Settings"><Icon name="cog" size={18} /></NavLink>}
-            {!supportOrg && <NotificationBell />}
-            {me.data?.user.isSuperAdmin && <NavLink to="/admin" className="nav-icon" title="Platform admin" aria-label="Platform admin"><Icon name="shield" size={18} /></NavLink>}
-            <button className="nav-icon" title="Sign out" aria-label="Sign out" onClick={async () => { await api('POST', '/auth/logout', { body: {} }).catch(() => {}); qc.clear(); nav('/login'); }}><Icon name="logout" size={18} /></button>
-          </div>
-        </nav>
       </aside>
       {menuOpen && <div className="scrim" onClick={() => setMenuOpen(false)} />}
 

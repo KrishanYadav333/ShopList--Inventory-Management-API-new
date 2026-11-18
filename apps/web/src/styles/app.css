@@ -362,3 +362,20 @@ a.btn { text-decoration: none; }
 .invoice h2 { margin: 20px 0 6px; }
 .invoice h3 { margin: 20px 0 8px; }
 .invoice table, .invoice section { margin-top: 12px; }
+
+/* Sidebar v2: labelled navigation on top, filters only where they apply, account actions at the bottom. */
+.sidebar-header { padding: 16px 16px 12px; }
+.side-nav { padding: 12px 10px 4px; display: grid; gap: 2px; }
+.nav-group { margin: 12px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #aebcc9; }
+.nav-group:first-child { margin-top: 4px; }
+.nav-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 40px; padding: 8px 12px; border: 0; border-radius: 8px; background: none; color: #dfe6ec; font: inherit; font-size: 14px; font-weight: 500; text-align: left; text-decoration: none; cursor: pointer; position: relative; }
+.nav-item:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.nav-item.active { background: var(--blue); color: #fff; }
+.nav-item svg { flex: none; }
+.sidebar-filters { border-top: 1px solid #34495e; margin-top: 8px; padding: 16px; }
+.side-foot { margin-top: auto; padding: 8px 10px 12px; border-top: 1px solid #34495e; display: grid; gap: 2px; }
+.side-foot .bell { display: block; }
+.nav-item .bell-badge { top: 50%; right: 10px; transform: translateY(-50%); }
+.side-foot .bell-panel { left: 292px; bottom: 12px; }
+@media (max-width: 1200px) { .side-foot .bell-panel { left: 252px; } }
+@media (max-width: 768px) { .side-foot .bell-panel { left: 12px; bottom: 72px; } }

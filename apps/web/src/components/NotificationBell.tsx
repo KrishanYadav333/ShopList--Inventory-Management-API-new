@@ -37,8 +37,9 @@ export function NotificationBell() {
   const n = count.data ?? 0;
   return (
     <div className="bell" ref={box}>
-      <button className="nav-icon" title="Notifications" aria-label={n ? `Notifications, ${n} unread` : 'Notifications'} aria-expanded={open} onClick={() => setOpen(!open)}>
+      <button className="nav-item" title="Notifications" aria-label={n ? `Notifications, ${n} unread` : 'Notifications'} aria-expanded={open} onClick={() => setOpen(!open)}>
         <Icon name="bell" size={18} />
+        <span className="nav-label">Notifications</span>
         {n > 0 && <span className="bell-badge" aria-hidden="true">{n > 9 ? '9+' : n}</span>}
       </button>
       {open && (
