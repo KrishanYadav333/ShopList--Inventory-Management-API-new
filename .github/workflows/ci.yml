@@ -26,6 +26,8 @@ jobs:
       - run: npm ci --legacy-peer-deps
       - name: Build the web app (the Worker's static assets directory must exist for tests)
         run: npm run build -w @shoplist/web
+      - name: Generate Worker types (the file is not committed)
+        run: npm run types -w @shoplist/api
       - name: Typecheck
         run: |
           npm run typecheck -w @shoplist/api
