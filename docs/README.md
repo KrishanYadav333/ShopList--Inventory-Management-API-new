@@ -40,3 +40,7 @@ A single Cloudflare Worker serves the React app as static assets (free and unmet
 | Movement | One immutable ledger entry that changes stock at a location |
 | Control plane | D1 database holding identities, orgs and sessions |
 | Data plane | Per-org Durable Object holding that org's inventory |
+
+## Style
+
+No emojis anywhere: code, UI text, docs, commit messages. Use words ("Yes") and plain text in tables and status lines.

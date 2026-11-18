@@ -17,7 +17,7 @@ const LABEL: Record<OrderState, [string, string]> = {
   cancelled: ['warn', 'Cancelled'],
 };
 const ICON: Record<string, [string, string]> = {
-  shopify: ['shopify', 'S'], amazon: ['amazon', 'a'], ebay: ['ebay', 'e'], woocommerce: ['woocommerce', 'W'], magento: ['magento', 'M'], phone: ['phone', '☎'], manual: ['phone', 'M'], other: ['phone', '?'],
+  shopify: ['shopify', 'S'], amazon: ['amazon', 'a'], ebay: ['ebay', 'e'], woocommerce: ['woocommerce', 'W'], magento: ['magento', 'M'], phone: ['phone', 'P'], manual: ['phone', 'M'], other: ['phone', '?'],
 };
 const TITLE: Record<string, string> = { payment_required: 'Payment required', waiting_for_stock: 'Waiting for stock', ready_to_ship: 'Ready to ship', shipped: 'Shipped', cancelled: 'Cancelled' };
 
@@ -165,7 +165,7 @@ export function OrdersPage() {
             <section key={o.id}>
               <h2>{o.number} · {o.customerName}{o.country ? ` (${o.country})` : ''}</h2>
               <table><thead><tr><th>SKU</th><th>Item</th><th>Qty</th><th>Packed</th></tr></thead>
-                <tbody>{o.lines.map((l) => <tr key={l.id}><td>{l.sku}</td><td>{l.name}</td><td>{l.quantity}</td><td>☐</td></tr>)}</tbody></table>
+                <tbody>{o.lines.map((l) => <tr key={l.id}><td>{l.sku}</td><td>{l.name}</td><td>{l.quantity}</td><td>[ ]</td></tr>)}</tbody></table>
               {o.note && <p>Note: {o.note}</p>}
             </section>
           ))}

@@ -101,19 +101,19 @@ Access is in three levels, the same idea as a clinic ERP.
 
 | Permission | viewer | sales | stock keeper | accountant | manager | admin |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|
-| Read products, stock, orders, history, dashboard | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Cost price, margin, inventory value (`cost:read`) | | | | ✓ | ✓ | ✓ |
-| Customer contact details (`customers:read`) | | ✓ | | ✓ | ✓ | ✓ |
-| Create, edit, delete products; CSV import | | | | | ✓ | ✓ |
-| Receive, adjust, transfer and count stock | | | ✓ | | ✓ | ✓ |
-| Create, pay, ship and cancel orders; add customers | | ✓ | | | ✓ | ✓ |
-| Suppliers and purchase orders; reorder suggestions | | | receive only | | ✓ | ✓ |
-| Create and assign count tasks | | | | | ✓ | ✓ |
-| Approve or reject requests | | | | | ✓ | ✓ |
-| Reports and their CSV export | | | | ✓ | ✓ | ✓ |
-| Activity log | | | | ✓ | | ✓ |
-| Team, invitations, locations, API keys, webhooks, business settings | | | | | | ✓ |
-| Delete the organization | | | | | | ✓ |
+| Read products, stock, orders, history, dashboard | Yes | Yes | Yes | Yes | Yes | Yes |
+| Cost price, margin, inventory value (`cost:read`) | | | | Yes | Yes | Yes |
+| Customer contact details (`customers:read`) | | Yes | | Yes | Yes | Yes |
+| Create, edit, delete products; CSV import | | | | | Yes | Yes |
+| Receive, adjust, transfer and count stock | | | Yes | | Yes | Yes |
+| Create, pay, ship and cancel orders; add customers | | Yes | | | Yes | Yes |
+| Suppliers and purchase orders; reorder suggestions | | | receive only | | Yes | Yes |
+| Create and assign count tasks | | | | | Yes | Yes |
+| Approve or reject requests | | | | | Yes | Yes |
+| Reports and their CSV export | | | | Yes | Yes | Yes |
+| Activity log | | | | Yes | | Yes |
+| Team, invitations, locations, API keys, webhooks, business settings | | | | | | Yes |
+| Delete the organization | | | | | | Yes |
 
 Some actions need a second person even when the permission allows them (approval rules, admin-configured, off by default): damage write-offs, large stock reductions, large count variances, cancelling a paid order, large price drops. The request waits as the exact validated input and is applied once, against current data, when a manager or the admin approves.
 

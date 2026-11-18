@@ -187,20 +187,20 @@ A **permission** is one capability. Routes declare exactly one. Roles are lists 
 
 | Permission | viewer | sales | stock | accountant | manager | admin |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|
-| inventory:read | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| cost:read | | | | ✓ | ✓ | ✓ |
-| customers:read | | ✓ | | ✓ | ✓ | ✓ |
-| products:write | | | | | ✓ | ✓ |
-| stock:write | | | ✓ | | ✓ | ✓ |
-| orders:write | | ✓ | | | ✓ | ✓ |
-| purchasing:write | | | | | ✓ | ✓ |
-| counts:assign | | | | | ✓ | ✓ |
-| approvals:decide | | | | | ✓ | ✓ |
-| reports:read | | | | ✓ | ✓ | ✓ |
-| audit:read | | | | ✓ | | ✓ |
-| team:manage | | | | | | ✓ |
-| settings:manage | | | | | | ✓ |
-| org:delete | | | | | | ✓ |
+| inventory:read | Yes | Yes | Yes | Yes | Yes | Yes |
+| cost:read | | | | Yes | Yes | Yes |
+| customers:read | | Yes | | Yes | Yes | Yes |
+| products:write | | | | | Yes | Yes |
+| stock:write | | | Yes | | Yes | Yes |
+| orders:write | | Yes | | | Yes | Yes |
+| purchasing:write | | | | | Yes | Yes |
+| counts:assign | | | | | Yes | Yes |
+| approvals:decide | | | | | Yes | Yes |
+| reports:read | | | | Yes | Yes | Yes |
+| audit:read | | | | Yes | | Yes |
+| team:manage | | | | | | Yes |
+| settings:manage | | | | | | Yes |
+| org:delete | | | | | | Yes |
 
 Notes on choices that are not obvious:
 - **Accountant gets `audit:read`, the manager does not.** The activity log shows who changed what,
@@ -225,22 +225,22 @@ The sidebar and buttons follow the matrix. Hidden items are also refused by the 
 
 | Screen / item | viewer | sales | stock | accountant | manager | admin |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|
-| Orders list and detail | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| "New order", pay, ship, cancel | | ✓ | | | ✓ | ✓ |
-| Customer email, phone, address on orders | | ✓ | | ✓ | ✓ | ✓ |
-| Products list | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Cost, margin, inventory value | | | | ✓ | ✓ | ✓ |
-| New, edit, delete, import products | | | | | ✓ | ✓ |
-| Adjust, receive, transfer, count | | | ✓ | | ✓ | ✓ |
-| Stock history | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Purchasing (suppliers, POs, reorder) | | | view POs to receive | ✓ view | ✓ | ✓ |
+| Orders list and detail | Yes | Yes | Yes | Yes | Yes | Yes |
+| "New order", pay, ship, cancel | | Yes | | | Yes | Yes |
+| Customer email, phone, address on orders | | Yes | | Yes | Yes | Yes |
+| Products list | Yes | Yes | Yes | Yes | Yes | Yes |
+| Cost, margin, inventory value | | | | Yes | Yes | Yes |
+| New, edit, delete, import products | | | | | Yes | Yes |
+| Adjust, receive, transfer, count | | | Yes | | Yes | Yes |
+| Stock history | Yes | Yes | Yes | Yes | Yes | Yes |
+| Purchasing (suppliers, POs, reorder) | | | view POs to receive | Yes view | Yes | Yes |
 | Count tasks | | | my tasks | | assign and review | assign and review |
 | Approvals queue | | my requests | my requests | | decide | decide |
-| Reports | | | | ✓ | ✓ | ✓ |
-| Activity log | | | | ✓ | | ✓ |
-| Settings: my profile, sessions, passkeys, notifications | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Settings: team, invitations | | | | | | ✓ |
-| Settings: business, locations, API keys, webhooks, backup, support access, delete | | | | | | ✓ |
+| Reports | | | | Yes | Yes | Yes |
+| Activity log | | | | Yes | | Yes |
+| Settings: my profile, sessions, passkeys, notifications | Yes | Yes | Yes | Yes | Yes | Yes |
+| Settings: team, invitations | | | | | | Yes |
+| Settings: business, locations, API keys, webhooks, backup, support access, delete | | | | | | Yes |
 | Platform console (`/admin`) | Developer only, through `/owner` | | | | | |
 
 ## 5. How enforcement works (and stays correct)

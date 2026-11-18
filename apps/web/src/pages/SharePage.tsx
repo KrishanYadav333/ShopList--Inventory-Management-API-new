@@ -69,8 +69,8 @@ export default function SharePage() {
             <p><strong>Total {money(p.totalMinor)}</strong></p>
             <section aria-labelledby="h-reply">
               <h3 id="h-reply">Your reply</h3>
-              {p.confirmedAt && <p role="status">✓ Confirmed {day(p.confirmedAt)}</p>}
-              {p.dispatchedAt && <p role="status">✓ Dispatched {day(p.dispatchedAt)}{p.supplierNote ? ` · ${p.supplierNote}` : ''}</p>}
+              {p.confirmedAt && <p role="status">Confirmed {day(p.confirmedAt)}</p>}
+              {p.dispatchedAt && <p role="status">Dispatched {day(p.dispatchedAt)}{p.supplierNote ? ` · ${p.supplierNote}` : ''}</p>}
               {open && !(p.confirmedAt && p.dispatchedAt) ? (
                 <>
                   <div className="field"><label htmlFor="sh-note">Note for the buyer (optional, for example a tracking number)</label><input id="sh-note" maxLength={300} value={note} onChange={(e) => setNote(e.target.value)} /></div>
