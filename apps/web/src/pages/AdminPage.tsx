@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Navigate, NavLink, useNavigate } from 'react-router-dom';
+import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PLAN_FEATURE_KEYS, PLAN_FEATURE_LABELS, PLAN_LIMIT_KEYS, PLAN_LIMIT_LABELS, type PlanFeatureKey, type PlanLimitKey } from '@shoplist/shared';
 import { api, ApiError } from '../api';
@@ -36,6 +36,17 @@ interface Ann { id: string; message: string; severity: string; audience: string;
 interface Maint { id: string; orgId: string | null; orgName: string | null; message: string; startedAt: string }
 interface AuditRow { id: string; action: string; target: string | null; createdAt: string; requestId: string }
 
+const PAGES = [
+  { key: 'overview', label: 'Overview', icon: 'grid' },
+  { key: 'businesses', label: 'Businesses', icon: 'cart' },
+  { key: 'people', label: 'People', icon: 'users' },
+  { key: 'security', label: 'Security', icon: 'shield' },
+  { key: 'operations', label: 'Operations', icon: 'chart' },
+  { key: 'notices', label: 'Notices', icon: 'bell' },
+  { key: 'support', label: 'Support', icon: 'sliders' },
+  { key: 'activity', label: 'Activity', icon: 'clock' },
+] as const;
+
 const when = (iso: string | null) => { if (!iso) return '—'; const { date, time } = dateParts(iso); return `${date} ${time}`; };
 
 /** Platform administration for the one super admin. It manages accounts and organizations only; it never shows inventory. */
@@ -46,11 +57,14 @@ export function AdminPage() {
   const toast = useToast();
   const isAdmin = !!me.data?.user.isSuperAdmin;
   const enabled = isAdmin;
+  const { page: pageParam } = useParams();
+  const page = PAGES.some((x) => x.key === pageParam) ? pageParam! : 'overview';
+  const on = (...pages: string[]) => enabled && pages.includes(page);
   const overview = useQuery({ enabled, queryKey: ['admin', 'overview'], queryFn: () => api<Overview>('GET', '/admin/overview') });
-  const orgs = useQuery({ enabled, queryKey: ['admin', 'orgs'], queryFn: () => api<{ data: AdminOrg[] }>('GET', '/admin/orgs?limit=100').then((r) => r.data) });
-  const users = useQuery({ enabled, queryKey: ['admin', 'users'], queryFn: () => api<{ data: AdminUser[] }>('GET', '/admin/users?limit=100').then((r) => r.data) });
-  const usage = useQuery({ enabled, queryKey: ['admin', 'usage'], queryFn: () => api<Usage>('GET', '/admin/usage'), retry: false, staleTime: 120_000 });
-  const backups = useQuery({ enabled, queryKey: ['admin', 'backups'], queryFn: () => api<{ data: BackupRow[] }>('GET', '/admin/backups').then((r) => r.data) });
+  const orgs = useQuery({ enabled: on('businesses', 'notices'), queryKey: ['admin', 'orgs'], queryFn: () => api<{ data: AdminOrg[] }>('GET', '/admin/orgs?limit=100').then((r) => r.data) });
+  const users = useQuery({ enabled: on('people', 'businesses'), queryKey: ['admin', 'users'], queryFn: () => api<{ data: AdminUser[] }>('GET', '/admin/users?limit=100').then((r) => r.data) });
+  const usage = useQuery({ enabled: on('operations'), queryKey: ['admin', 'usage'], queryFn: () => api<Usage>('GET', '/admin/usage'), retry: false, staleTime: 120_000 });
+  const backups = useQuery({ enabled: on('operations'), queryKey: ['admin', 'backups'], queryFn: () => api<{ data: BackupRow[] }>('GET', '/admin/backups').then((r) => r.data) });
   const [rehearse, setRehearse] = useState<{ orgId: string; day: string; email: string } | null>(null);
   const runBackup = useMutation({ mutationFn: (orgId?: string) => api('POST', '/admin/backups/run', { body: orgId ? { orgId } : {} }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin', 'backups'] }); toast({ kind: 'success', text: 'Backup finished' }); }, onError: (e) => toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Backup failed.' }) });
   const restoreCopy = useMutation({
@@ -58,10 +72,10 @@ export function AdminPage() {
     onSuccess: (r) => { setRehearse(null); qc.invalidateQueries({ queryKey: ['admin'] }); toast({ kind: 'success', text: `Created “${r.organization.name}”.${r.invitation ? ' Send its admin the invitation link from the business details.' : ''}` }); },
     onError: (e) => toast({ kind: 'error', text: e instanceof ApiError ? e.message : 'Restore failed.' }),
   });
-  const security = useQuery({ enabled, queryKey: ['admin', 'security'], queryFn: () => api<Security>('GET', '/admin/security') });
-  const support = useQuery({ enabled, queryKey: ['admin', 'support'], queryFn: () => api<{ data: { id: string; orgId: string; orgName: string; note: string | null; includeCustomers: boolean; mode: 'view' | 'assist'; expiresAt: string }[] }>('GET', '/admin/support').then((r) => r.data), refetchInterval: 30_000 });
-  const anns = useQuery({ enabled, queryKey: ['admin', 'announcements'], queryFn: () => api<{ data: Ann[] }>('GET', '/admin/announcements').then((r) => r.data) });
-  const maint = useQuery({ enabled, queryKey: ['admin', 'maintenance'], queryFn: () => api<{ data: Maint[] }>('GET', '/admin/maintenance').then((r) => r.data) });
+  const security = useQuery({ enabled: on('security'), queryKey: ['admin', 'security'], queryFn: () => api<Security>('GET', '/admin/security') });
+  const support = useQuery({ enabled: on('support'), queryKey: ['admin', 'support'], queryFn: () => api<{ data: { id: string; orgId: string; orgName: string; note: string | null; includeCustomers: boolean; mode: 'view' | 'assist'; expiresAt: string }[] }>('GET', '/admin/support').then((r) => r.data), refetchInterval: 30_000 });
+  const anns = useQuery({ enabled: on('notices'), queryKey: ['admin', 'announcements'], queryFn: () => api<{ data: Ann[] }>('GET', '/admin/announcements').then((r) => r.data) });
+  const maint = useQuery({ enabled: on('notices'), queryKey: ['admin', 'maintenance'], queryFn: () => api<{ data: Maint[] }>('GET', '/admin/maintenance').then((r) => r.data) });
   const [ann, setAnn] = useState({ message: '', severity: 'info', audience: 'everyone', orgId: '' });
   const [mnt, setMnt] = useState({ orgId: '', message: '' });
   const refreshNotices = () => { qc.invalidateQueries({ queryKey: ['admin', 'announcements'] }); qc.invalidateQueries({ queryKey: ['admin', 'maintenance'] }); qc.invalidateQueries({ queryKey: ['announcements'] }); };
@@ -70,7 +84,7 @@ export function AdminPage() {
   const endAnn = useMutation({ mutationFn: (id: string) => api('DELETE', `/admin/announcements/${id}`), onSuccess: refreshNotices, onError: failMsg });
   const startMnt = useMutation({ mutationFn: () => api('POST', '/admin/maintenance', { body: { orgId: mnt.orgId || undefined, message: mnt.message || undefined } }), onSuccess: () => { setMnt({ orgId: '', message: '' }); refreshNotices(); toast({ text: 'Maintenance is on: writes are refused, reads work' }); }, onError: failMsg });
   const stopMnt = useMutation({ mutationFn: (id: string) => api('DELETE', `/admin/maintenance/${id}`), onSuccess: () => { refreshNotices(); toast({ text: 'Maintenance is off' }); }, onError: failMsg });
-  const audit = useQuery({ enabled, queryKey: ['admin', 'audit'], queryFn: () => api<{ data: AuditRow[] }>('GET', '/admin/audit?limit=20').then((r) => r.data) });
+  const audit = useQuery({ enabled: on('activity'), queryKey: ['admin', 'audit'], queryFn: () => api<{ data: AuditRow[] }>('GET', '/admin/audit?limit=20').then((r) => r.data) });
 
   const [orgId, setOrgId] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
@@ -111,43 +125,36 @@ export function AdminPage() {
   if (!isAdmin) return <Navigate to="/" replace />;
 
   const o = overview.data;
-  const home = me.data.organizations[0] ? `/o/${me.data.organizations[0].id}/products` : '/';
   const failed = [overview, orgs, users].find((q) => q.isError);
+  const title = PAGES.find((x) => x.key === page)!.label;
 
   return (
     <div className="dashboard">
       <a className="skip" href="#main">Skip to content</a>
       <aside className="sidebar open">
         <div className="sidebar-header"><div className="logo"><img className="brand-mark" src="/logo-symbol-white.png" alt="ShopList" width="40" height="43" /><strong>Platform admin</strong></div></div>
-        <div className="sidebar-filters">
-          <div className="filter-section">
-            <h3>Sign-in</h3>
-            <div className="side-value" style={{ fontSize: 16 }}>{o ? ({ 'owner-only': 'Owner only', 'invite-only': 'By invitation', open: 'Open to anyone' }[o.signin]) : '–'}</div>
-          </div>
-          <div className="filter-section">
-            <h3>Scope</h3>
-            <p style={{ fontSize: 12, color: '#bdc3c7' }}>You manage accounts and organizations. You cannot open any organization’s products or stock.</p>
-          </div>
-        </div>
-        <nav className="sidebar-nav" aria-label="Main">
-          <div className="nav-icons">
-            <NavLink to={home} className="nav-icon" title="Back to inventory" aria-label="Back to inventory"><Icon name="grid" size={18} /></NavLink>
-            <button className="nav-icon" title="Sign out" aria-label="Sign out" onClick={async () => { await api('POST', '/auth/logout', { body: {} }).catch(() => {}); qc.clear(); nav('/login'); }}><Icon name="logout" size={18} /></button>
-          </div>
+        <nav className="side-nav" aria-label="Platform">
+          {PAGES.map((x) => <NavLink key={x.key} to={x.key === 'overview' ? '/admin' : `/admin/${x.key}`} end className={() => `nav-item${x.key === page ? ' active' : ''}`} aria-current={x.key === page ? 'page' : undefined}><Icon name={x.icon} size={18} /><span className="nav-label">{x.label}</span></NavLink>)}
         </nav>
+        <div className="side-foot">
+          <p className="side-note">Sign-in: {o ? ({ 'owner-only': 'owner only', 'invite-only': 'by invitation', open: 'open to anyone' }[o.signin]) : '...'}</p>
+          <button className="nav-item" onClick={async () => { await api('POST', '/auth/logout', { body: {} }).catch(() => {}); qc.clear(); nav('/login'); }}><Icon name="logout" size={18} /><span className="nav-label">Sign out</span></button>
+        </div>
       </aside>
 
       <main className="main-content" id="main" tabIndex={-1}>
-        <header className="top-header"><div className="breadcrumb"><span>Platform</span><Icon name="chevron" size={12} /><h1 className="current">Overview</h1></div></header>
+        <header className="top-header"><div className="breadcrumb"><span>Platform</span><Icon name="chevron" size={12} /><h1 className="current">{title}</h1></div></header>
         <Announcements />
         {failed && <div className="banner banner-warn" role="alert">Could not load some data: {(failed.error as ApiError).message}</div>}
 
+        {page === 'overview' && (
         <section className="tiles" aria-label="Totals">
           {[['Users', o?.users], ['Organizations', o?.organizations], ['Suspended orgs', o?.suspendedOrganizations], ['Disabled users', o?.disabledUsers], ['Active sessions', o?.activeSessions]].map(([label, n]) => (
             <div className="tile" key={label as string}><div className="num">{n ?? '–'}</div><div className="lbl">{label}</div></div>
           ))}
-        </section>
+        </section>)}
 
+        {page === 'operations' && (
         <section className="admin-section" aria-labelledby="h-backups">
           <h2 id="h-backups">Nightly backups</h2>
           <p className="hint">Each business is copied every night at 03:00 UTC and kept 30 days. You see when and how big, never the contents. To rehearse or recover, load a copy into a new business.</p>
@@ -180,8 +187,9 @@ export function AdminPage() {
               <button type="button" className="btn btn-outline" onClick={() => setRehearse(null)}>Cancel</button>
             </form>
           )}
-        </section>
+        </section>)}
 
+        {page === 'operations' && (
         <section className="admin-section" aria-labelledby="h-usage">
           <h2 id="h-usage">Usage against the free limits</h2>
           {usage.data ? (() => {
@@ -222,8 +230,9 @@ export function AdminPage() {
               </>
             );
           })() : <p className="hint">{usage.isLoading ? 'Loading…' : (usage.error as ApiError)?.message ?? 'Could not load.'}</p>}
-        </section>
+        </section>)}
 
+        {page === 'notices' && (
         <section className="admin-section" aria-labelledby="h-notices">
           <h2 id="h-notices">Announcements and maintenance</h2>
           <form className="inline-form" onSubmit={(e) => { e.preventDefault(); addAnn.mutate(); }}>
@@ -250,8 +259,9 @@ export function AdminPage() {
             <div className="field"><label htmlFor="mn-msg">Message (optional)</label><input id="mn-msg" maxLength={300} value={mnt.message} onChange={(e) => setMnt({ ...mnt, message: e.target.value })} /></div>
             <button className="btn btn-danger" disabled={startMnt.isPending}>Turn maintenance on</button>
           </form>
-        </section>
+        </section>)}
 
+        {page === 'support' && (
         <section className="admin-section" aria-labelledby="h-support">
           <h2 id="h-support">Support</h2>
           {support.data?.length ? (
@@ -268,8 +278,9 @@ export function AdminPage() {
               ))}
             </ul>
           ) : <p className="hint">No business has opened a support window. When one does, it appears here.</p>}
-        </section>
+        </section>)}
 
+        {page === 'security' && (
         <section className="admin-section" aria-labelledby="h-sec">
           <h2 id="h-sec">Security</h2>
           {security.data ? (() => {
@@ -299,8 +310,9 @@ export function AdminPage() {
               </>
             );
           })() : <p className="hint">{security.isLoading ? 'Loading…' : 'Could not load.'}</p>}
-        </section>
+        </section>)}
 
+        {page === 'businesses' && (
         <section className="admin-section" aria-labelledby="h-onboard">
           <h2 id="h-onboard">Onboard a business</h2>
           <p className="hint">Creates the business with no members and invites its admin. You never become a member of it.</p>
@@ -317,8 +329,9 @@ export function AdminPage() {
               <button className="btn btn-outline" onClick={() => navigator.clipboard.writeText(link).then(() => toast({ kind: 'success', text: 'Link copied' }))}>Copy</button>
             </div>
           )}
-        </section>
+        </section>)}
 
+        {page === 'businesses' && (
         <section className="admin-section" aria-labelledby="h-orgs">
           <h2 id="h-orgs">Organizations</h2>
           <div className="orders-table-container">
@@ -366,8 +379,9 @@ export function AdminPage() {
               </ul>
             </div>
           )}
-        </section>
+        </section>)}
 
+        {page === 'people' && (
         <section className="admin-section" aria-labelledby="h-users">
           <h2 id="h-users">Users</h2>
           <div className="orders-table-container">
@@ -405,15 +419,16 @@ export function AdminPage() {
               {userDetail.data.sessions.length > 0 && <button className="btn btn-outline" onClick={() => signOutUser.mutate(userDetail.data!.user.id)}>Sign out everywhere</button>}
             </div>
           )}
-        </section>
+        </section>)}
 
+        {page === 'activity' && (
         <section className="admin-section" aria-labelledby="h-audit">
           <h2 id="h-audit">Platform activity</h2>
           <p><a className="btn btn-outline" href="/api/v1/admin/audit?format=csv" download>Download everything as CSV</a></p>
           {!audit.data?.length ? <p className="hint">No platform actions yet.</p> : (
             <ul className="list">{audit.data.map((a) => <li key={a.id}><span><strong>{a.action}</strong><div className="time">{a.target}</div></span><span className="time">{when(a.createdAt)}</span></li>)}</ul>
           )}
-        </section>
+        </section>)}
       </main>
     </div>
   );

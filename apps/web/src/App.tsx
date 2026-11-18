@@ -29,7 +29,7 @@ export function App() {
       <Route path="/o/:orgId/orders/:orderId/print" element={<Suspense fallback={<div className="boot">Loading…</div>}><InvoicePage /></Suspense>} />
       <Route path="/s/:kind/:token" element={<Suspense fallback={<div className="boot">Loading…</div>}><SharePage /></Suspense>} />
       <Route path="/invite/:token" element={<Invite />} />
-      <Route path="/admin" element={<Suspense fallback={<div className="boot">Loading…</div>}><AdminPage /></Suspense>} />
+      <Route path="/admin/:page?" element={<Suspense fallback={<div className="boot">Loading…</div>}><AdminPage /></Suspense>} />
       <Route path="/" element={<Home />} />
       <Route path="/o/:orgId" element={<Shell />}>
         <Route index element={<Navigate to="orders" replace />} />

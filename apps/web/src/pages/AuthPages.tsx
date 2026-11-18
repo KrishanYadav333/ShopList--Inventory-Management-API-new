@@ -83,6 +83,8 @@ export function Home() {
   const health = useQuery({ queryKey: ['health'], queryFn: () => api<{ signin: 'open' | 'owner-only' | 'invite-only' }>('GET', '/health'), staleTime: 300_000 });
   if (me.isLoading || health.isLoading) return <div className="boot">Loading…</div>;
   if (me.isError || !me.data) return <Navigate to="/login" replace />;
+  // The owner runs the platform and belongs to no business.
+  if (me.data.user.isSuperAdmin) return <Navigate to="/admin" replace />;
   const orgs = me.data.organizations;
   if (orgs.length && !location.search.includes('new')) return <Navigate to={`/o/${orgs[0].id}/orders`} replace />;
   if (health.data?.signin !== 'open') {

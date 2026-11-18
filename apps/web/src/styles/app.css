@@ -379,3 +379,4 @@ a.btn { text-decoration: none; }
 .side-foot .bell-panel { left: 292px; bottom: 12px; }
 @media (max-width: 1200px) { .side-foot .bell-panel { left: 252px; } }
 @media (max-width: 768px) { .side-foot .bell-panel { left: 12px; bottom: 72px; } }
+.side-note { margin: 0 12px 8px; font-size: 12px; color: #aebcc9; }
