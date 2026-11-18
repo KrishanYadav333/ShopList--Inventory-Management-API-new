@@ -4,6 +4,9 @@ import { api, ApiError } from '../api';
 
 const KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
 const ERROR_KEY = 'sl_signin_error';
+const TRY_KEY = 'sl_bridge_try';
+/** A failed attempt must never retry on its own: if Clerk still looks signed in right after one, stop and let the person choose. */
+const RETRY_AFTER_MS = 20_000;
 
 /** Where to go after sign-in. Only same-site invitation and organization paths, so this cannot become an open redirect. */
 function returnPath(): string {
@@ -28,10 +31,16 @@ function readError(): string {
 function Bridge() {
   const { isSignedIn, getToken, signOut } = useAuth();
   const started = useRef(false);
+  const [stuck, setStuck] = useState(false);
 
   useEffect(() => {
     if (!isSignedIn || started.current) return;
     started.current = true;
+    try {
+      const last = Number(sessionStorage.getItem(TRY_KEY) ?? 0);
+      if (Date.now() - last < RETRY_AFTER_MS) { setStuck(true); return; }
+      sessionStorage.setItem(TRY_KEY, String(Date.now()));
+    } catch { /* storage unavailable: fall through and try once */ }
     (async () => {
       try {
         const token = await getToken();
@@ -45,6 +54,14 @@ function Bridge() {
     })();
   }, [isSignedIn]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  if (stuck) {
+    return (
+      <div role="status">
+        <p className="hint">The last attempt did not finish. You are still signed in to the sign-in service, but ShopList did not accept this account.</p>
+        <button className="btn btn-outline full" onClick={() => { try { sessionStorage.removeItem(TRY_KEY); } catch { /* ignore */ } void signOut({ redirectUrl: '/sign-in' }); }}>Use a different account</button>
+      </div>
+    );
+  }
   return isSignedIn ? <p className="hint" role="status">Signing you in…</p> : null;
 }
 
@@ -66,7 +83,7 @@ export default function ClerkSignIn() {
     <main className="auth">
       <div className="auth-card clerk-card">
         <img className="brand-lockup" src="/logo-lockup.png" alt="ShopList" width="280" height="83" />
-        {error && <div className="notice" role="alert">{error}</div>}
+        {error && <div className="notice" role="alert">{error}{/owner/i.test(error) && <> <a href="/owner">Go to the owner sign-in</a>.</>}</div>}
         <ClerkProvider publishableKey={KEY} signInUrl="/sign-in" signUpUrl="/sign-up" afterSignOutUrl="/sign-in">
           <ClerkLoading><p className="hint" role="status">Loading sign-in…</p></ClerkLoading>
           <ClerkLoaded>

@@ -498,7 +498,7 @@ route('post', '/auth/clerk/session', 'public', async (c) => {
     }
     // The owner's account is reachable only through the owner's door. A customer-door identity must never attach to it.
     const owner = await c.env.DB.prepare(`SELECT 1 AS x FROM users u JOIN oauth_accounts o ON o.user_id = u.id WHERE u.email = ? AND o.provider = 'github' LIMIT 1`).bind(profile.email.toLowerCase()).first();
-    if (owner) throw new AppError(409, 'email_in_use', 'That email belongs to a different kind of account. Use the other sign-in.');
+    if (owner) throw new AppError(409, 'email_in_use', 'That email is the site owner\u2019s account. The owner signs in with GitHub on the owner page.');
     const user = await upsertUser(c.env, profile, { provider: 'clerk', providerUserId: sub });
     // Clerk verified this email, so any invitation sent to it is accepted now.
     await acceptPendingInvitations(c.env, { id: user.id, email: profile.email });
