@@ -43,11 +43,18 @@ function Bridge() {
     } catch { /* storage unavailable: fall through and try once */ }
     (async () => {
       try {
-        const token = await getToken();
+        // Right after a Google sign-in the token can take a moment to appear, so ask a few times before giving up.
+        let token = await getToken();
+        for (let i = 0; i < 5 && !token; i++) { await new Promise((r) => setTimeout(r, 600)); token = await getToken({ skipCache: true }); }
+        console.info('[sign-in] token', token ? 'ready' : 'missing');
         if (!token) throw new ApiError({ status: 401, detail: 'Could not read your sign-in. Please try again.' });
         await api('POST', '/auth/clerk/session', { body: { token } });
+        console.info('[sign-in] ShopList session created');
+        // Succeeded: forget this attempt, so signing out and straight back in is never treated as a stuck retry.
+        try { sessionStorage.removeItem(TRY_KEY); } catch { /* ignore */ }
         await signOut({ redirectUrl: returnPath() });
       } catch (e) {
+        console.info('[sign-in] failed:', e instanceof Error ? e.message : e);
         try { sessionStorage.setItem(ERROR_KEY, e instanceof ApiError ? e.message : 'Sign-in failed. Please try again.'); } catch { /* storage unavailable */ }
         await signOut({ redirectUrl: '/sign-in' }); // lets them try another account, and brings the message back
       }
