@@ -234,3 +234,11 @@ Secrets for the usage page: `CF_ANALYTICS_TOKEN` (read-only), `CF_ACCOUNT_ID`. T
 Owner console, Operations, System status. Every housekeeping job (usage, digests, count reminders, backups, purge, retention, prune) records each run. A job shows `failed` when its last run failed, `not running` when it has not run for 26 hours (hourly jobs) or 50 hours (daily jobs), and `no runs yet` right after a deploy. Two failures in a row send you one notice and one email per day for that job.
 
 If a job fails: read the error under it, fix the cause. The hourly cron retries by itself, so the card turns green after the next successful run. The card also shows the last nightly backup, email sent and failed today against the 250 daily cap, and the health URL to give an outside uptime checker. Only an outside checker can tell you the whole site is down.
+
+## Passwords and sign-in
+
+Customer sign-in runs through Clerk (a development instance for now). Settings that matter in its dashboard (User & authentication): email on with code and link, username on but optional, password on and required at sign-up, Google on. Password sign-in is offered only to an account that has a password. Someone who joined with Google or an emailed code has none, so Settings has a Password card that opens `/account/password`: they sign in once more, then add a password under Security. That page loads Clerk's scripts, so it has the same wider security policy as `/sign-in` and `/sign-up` in `apps/web/public/_headers`. Any new page that shows a Clerk widget needs the same entry, or the widget will not load.
+
+Sign-out does a full page load to `/login`, so the next person starts clean without a hard reload. The owner is the exception to all of this: the owner signs in only at `/owner` with GitHub.
+
+Before real customers use it, move Clerk to a production instance, which needs your own domain.
