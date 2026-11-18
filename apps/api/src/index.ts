@@ -82,7 +82,7 @@ import { verifyAssertion, verifyRegistration } from './webauthn';
 import { backupOrg, readBackup, runBackups } from './backups';
 import { fetchUsage, foldUsage, overLine, topBusinesses, FREE_LIMITS, CPU_LIMIT_US, METRIC_LABEL } from './usage';
 import { sendMail, unsubscribeUrl, DIGEST_KIND, EMAIL_DEFAULT_ON, wantsEmail } from './email';
-import { KIND_LABELS, NOTIFICATION_KINDS, notify, recipients } from './notify';
+import { KIND_LABELS, NOTIFICATION_KINDS, notify, notifyForEvent, recipients } from './notify';
 import { pruneAuthEvents, recordAuthEvent, recordRateLimited, type AuthEventKind } from './authevents';
 import { clerkConfigured, fetchClerkProfile, verifyClerkToken } from './clerk';
 import { AppError, problemResponse, unwrap } from './errors';
@@ -1316,6 +1316,7 @@ route('post', '/orgs/:orgId/orders/:id/cancel', 'orders:write', async (c) => {
   return c.json(out.body, out.status as 200);
 });
 
+route('get', '/orgs/:orgId/stock/levels', 'inventory:read', async (c) => c.json(await inventory(c).listLevels(parse(pageQuery, c.req.query()))));
 route('get', '/orgs/:orgId/stock/movements', 'inventory:read', async (c) => c.json(await inventory(c).listMovements(parse(movementListQuery, c.req.query()))));
 
 // ----------------------------------------------------------------- approvals
@@ -1355,6 +1356,10 @@ route('get', '/orgs/:orgId/reports/:name', 'reports:read', async (c) => {
   const q = parse(reportQuery, c.req.query());
   if (q.from && q.to && (Date.parse(q.to) < Date.parse(q.from) || Date.parse(q.to) - Date.parse(q.from) > 366 * 86400_000)) throw new AppError(400, 'bad_range', 'Choose a range of at most 366 days, with the start before the end.');
   const result = await inventory(c).report(name.data, { from: q.from, to: q.to, location: q.location, days: q.days });
+  if (name.data === 'staff-activity') {
+    const names = await actorNames(c, result.rows.map((r) => String(r.actor ?? '')));
+    result.rows = result.rows.map((r) => ({ ...r, who: names.get(String(r.actor)) ?? (String(r.actor).startsWith('key_') ? 'An API key' : String(r.actor)) }));
+  }
   if (q.format === 'csv') {
     return new Response(toCsv(result), { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${name.data}-${result.from}-${result.to}.csv"` } });
   }
@@ -2086,10 +2091,22 @@ export async function checkUsage(env: Bindings): Promise<number> {
   return told;
 }
 
+/** Once a day, tells each person whose assigned count is past its due date. */
+export async function remindOverdueCounts(env: Bindings): Promise<number> {
+  const { results } = await env.DB.prepare(`SELECT id FROM organizations WHERE deleted_at IS NULL AND suspended_at IS NULL AND delete_after IS NULL LIMIT 500`).all<{ id: string }>();
+  let sent = 0;
+  for (const o of results) {
+    const late = await env.INVENTORY.get(env.INVENTORY.idFromName(o.id)).overdueCounts();
+    for (const t of late) { await notifyForEvent(env, o.id, 'count.overdue', t as unknown as Record<string, unknown>); sent++; }
+  }
+  return sent;
+}
+
 export async function dailyJob(env: Bindings, hourUtc = new Date().getUTCHours()): Promise<void> {
   await checkUsage(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'usage check failed', error: (e as Error).message })));
   await sendDigests(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'digest failed', error: (e as Error).message })));
   if (hourUtc !== 3) return; // the rest runs once a day
+  await remindOverdueCounts(env).catch((e) => console.error(JSON.stringify({ level: 'error', message: 'count reminders failed', error: (e as Error).message })));
   await runBackups(env).then(async (r) => {
     if (!r.failed) return;
     const owner = await env.DB.prepare(`SELECT user_id AS id FROM oauth_accounts WHERE provider = 'github' AND provider_user_id = ?`).bind(env.SUPER_ADMIN_GITHUB_ID ?? '').first<{ id: string }>();

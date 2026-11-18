@@ -121,3 +121,5 @@ The access-level plan ([plan/README.md](plan/README.md), one-file copy in [PLAN.
 Checked in a real browser on 2026-11-18: axe reports 0 violations on Settings, Purchasing, Reports, Approvals, Counts, Customers, Products, Orders, the owner console and both public share pages; no sideways scroll at 390 px.
 
 Open, each blocked on something outside the code: nightly backups are kept in D1 until R2 is enabled; the per-business half of the usage page needs Workers Analytics Engine enabled (code is ready; add the binding line described in OPERATIONS.md); Lighthouse was not re-run on the new pages; checks on a physical phone and with VoiceOver; the v1 to v2 cutover; and the remaining owner-only steps in [HANDOFF.md](HANDOFF.md). A real client invite and sign-in was confirmed working by the owner.
+
+Also built 2026-11-18: per-product tax rates, receiving up to 10% over on a purchase order, a staff-activity report, daily overdue-count reminders, and per-location restore (backups now include stock per location). 306 tests.

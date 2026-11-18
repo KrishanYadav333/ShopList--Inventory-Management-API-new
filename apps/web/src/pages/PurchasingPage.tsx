@@ -99,8 +99,8 @@ export function PurchasingPage() {
               <p><strong>Receive {receiving.number}</strong>: enter how many of each arrived today.</p>
               {receiving.lines.filter((l) => l.received < l.quantity).map((l) => (
                 <div className="field" key={l.id}>
-                  <label htmlFor={`rcv-${l.id}`}>{l.name} <span className="time">({l.sku}) · {l.quantity - l.received} still expected</span></label>
-                  <input id={`rcv-${l.id}`} type="number" min={0} max={l.quantity - l.received} value={qty[l.id] ?? ''} onChange={(e) => setQty({ ...qty, [l.id]: e.target.value })} />
+                  <label htmlFor={`rcv-${l.id}`}>{l.name} <span className="time">({l.sku}) · {Math.max(l.quantity - l.received, 0)} still expected (up to {Math.floor(l.quantity * 1.1) - l.received} accepted)</span></label>
+                  <input id={`rcv-${l.id}`} type="number" min={0} max={Math.max(Math.floor(l.quantity * 1.1) - l.received, 0)} value={qty[l.id] ?? ''} onChange={(e) => setQty({ ...qty, [l.id]: e.target.value })} />
                 </div>
               ))}
               <span className="row">

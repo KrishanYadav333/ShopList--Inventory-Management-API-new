@@ -75,7 +75,7 @@ export function RestoreCard({ orgId, orgName }: { orgId: string; orgName: string
   return (
     <div className="restore" aria-labelledby="h-restore">
       <h3 id="h-restore">Restore from a backup file</h3>
-      <p className="hint">Adds missing products and locations, and updates products with the same code. Nothing is deleted. Stock is set at your default location and recorded in the history. Running it twice is safe.</p>
+      <p className="hint">Adds missing products and locations, and updates products with the same code. Nothing is deleted. Stock is put back at each location it was at (older backups: at your default location) and recorded in the history. Running it twice is safe.</p>
       <div className="field"><label htmlFor="rs-file">Backup file (.json)</label><input id="rs-file" ref={input} type="file" accept="application/json,.json" disabled={!!busy} onChange={(e) => choose(e.target.files?.[0])} /></div>
       {error && <p role="alert" className="field-error">{error}</p>}
       {preview && (

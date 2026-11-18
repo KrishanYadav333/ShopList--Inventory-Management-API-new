@@ -319,6 +319,23 @@ const MIGRATIONS: string[][] = [
     `ALTER TABLE purchase_orders ADD COLUMN supplier_dispatched_at TEXT`,
     `ALTER TABLE purchase_orders ADD COLUMN supplier_note TEXT`,
   ],
+  // Step 11: a product can carry its own tax rate; a purchase-order line may be received up to 10% over (the old CHECK forbade it).
+  [
+    `ALTER TABLE products ADD COLUMN tax_rate_bp INTEGER CHECK (tax_rate_bp IS NULL OR (tax_rate_bp >= 0 AND tax_rate_bp <= 10000))`,
+    `CREATE TABLE po_lines_new (
+       id TEXT PRIMARY KEY,
+       po_id TEXT NOT NULL REFERENCES purchase_orders(id),
+       product_id TEXT NOT NULL,
+       quantity INTEGER NOT NULL CHECK (quantity > 0),
+       received INTEGER NOT NULL DEFAULT 0 CHECK (received >= 0),
+       unit_cost_minor INTEGER NOT NULL
+     )`,
+    `INSERT INTO po_lines_new SELECT id, po_id, product_id, quantity, received, unit_cost_minor FROM po_lines`,
+    `DROP TABLE po_lines`,
+    `ALTER TABLE po_lines_new RENAME TO po_lines`,
+    `CREATE INDEX po_lines_po ON po_lines(po_id)`,
+    `CREATE INDEX po_lines_product ON po_lines(product_id)`,
+  ],
 ];
 
 // ---------------------------------------------------------------------------
@@ -373,6 +390,7 @@ interface ProductRow {
   price_minor: number;
   cost_minor: number | null;
   reorder_point: number | null;
+  tax_rate_bp: number | null;
   on_hand_total: number;
   version: number;
   created_at: string;
@@ -425,6 +443,7 @@ const PATCH_COLUMNS: Record<string, string> = {
   priceMinor: 'price_minor',
   costMinor: 'cost_minor',
   reorderPoint: 'reorder_point',
+  taxRateBp: 'tax_rate_bp',
 };
 
 const isOut = (p: Pick<ProductRow, 'on_hand_total'>) => p.on_hand_total <= 0;
@@ -615,6 +634,7 @@ export class InventoryDO extends DurableObject<Bindings> {
         priceMinor: r.price_minor,
         costMinor: r.cost_minor,
         reorderPoint: r.reorder_point,
+        taxRateBp: r.tax_rate_bp ?? null,
         tags: tags.get(r.id) ?? [],
         onHand: r.on_hand_total,
         reserved: res,
@@ -755,9 +775,9 @@ export class InventoryDO extends DurableObject<Bindings> {
       const id = newId('prd');
       const now = nowIso();
       this.run(
-        `INSERT INTO products(id, sku, name, description, barcode, unit, price_minor, cost_minor, reorder_point, on_hand_total, attention, version, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 1, ?, ?)`,
-        id, input.sku, input.name, input.description ?? null, input.barcode ?? null, input.unit, input.priceMinor, input.costMinor ?? null, input.reorderPoint ?? this.settings().defaultReorderPoint ?? null, now, now,
+        `INSERT INTO products(id, sku, name, description, barcode, unit, price_minor, cost_minor, reorder_point, tax_rate_bp, on_hand_total, attention, version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 1, ?, ?)`,
+        id, input.sku, input.name, input.description ?? null, input.barcode ?? null, input.unit, input.priceMinor, input.costMinor ?? null, input.reorderPoint ?? this.settings().defaultReorderPoint ?? null, input.taxRateBp ?? null, now, now,
       );
       this.setTags(id, input.tags);
       this.reindex({ id, name: input.name, sku: input.sku, barcode: input.barcode ?? null, description: input.description ?? null });
@@ -1177,12 +1197,36 @@ export class InventoryDO extends DurableObject<Bindings> {
   }
 
   /** Brings a product's stock at the default location to `quantity` by recording the difference. */
-  private setImportedQuantity(c: Caller, productId: string, quantity: number): boolean {
-    const loc = this.defaultLocationId();
+  private setImportedQuantity(c: Caller, productId: string, quantity: number, locationId?: string): boolean {
+    const loc = locationId ?? this.defaultLocationId();
     const onHand = this.one<{ on_hand: number }>(`SELECT on_hand FROM stock_levels WHERE product_id = ? AND location_id = ?`, productId, loc)?.on_hand ?? 0;
     if (quantity === onHand) return false;
     this.move(c, productId, loc, quantity - onHand, 'import', 'CSV import', null);
     return true;
+  }
+
+  /** Sets the quantity at each named location. An unknown location stops the row, so nothing is half-restored. */
+  private setImportedLevels(c: Caller, productId: string, levels: { location: string; quantity: number }[]): boolean {
+    let changed = false;
+    for (const l of levels) {
+      const loc = this.one<{ id: string }>(`SELECT id FROM locations WHERE code = ? AND archived_at IS NULL`, l.location);
+      if (!loc) throw new Fail(409, 'unknown_location', `There is no location with code ${l.location}. Add it first.`);
+      if (this.setImportedQuantity(c, productId, l.quantity, loc.id)) changed = true;
+    }
+    return changed;
+  }
+
+  /** Every stock level, for backups: the product code, the location code and the quantity. Paged by product and location. */
+  listLevels(q: { limit: number; cursor?: string }): Page<{ sku: string; location: string; onHand: number }> {
+    const cur = decodeCursor<{ p: string; l: string }>(q.cursor);
+    const rows = this.all<Row>(
+      `SELECT s.product_id, s.location_id, p.sku, l.code, s.on_hand FROM stock_levels s JOIN products p ON p.id = s.product_id AND p.deleted_at IS NULL JOIN locations l ON l.id = s.location_id
+        ${cur ? 'WHERE (s.product_id, s.location_id) > (?, ?)' : ''} ORDER BY s.product_id, s.location_id LIMIT ?`,
+      ...(cur ? [cur.p, cur.l] : []), q.limit + 1);
+    const hasMore = rows.length > q.limit;
+    const page = rows.slice(0, q.limit);
+    const last = page[page.length - 1];
+    return { data: page.map((r) => ({ sku: r.sku as string, location: r.code as string, onHand: r.on_hand as number })), nextCursor: hasMore && last ? encodeCursor({ p: last.product_id, l: last.location_id }) : null, hasMore };
   }
 
   private importRow(c: Caller, mode: 'create' | 'upsert', index: number, row: ImportRow): ImportResult {
@@ -1190,9 +1234,10 @@ export class InventoryDO extends DurableObject<Bindings> {
     if (!existing) {
       const made = this.doCreate(c, {
         sku: row.sku, name: row.name, description: row.description ?? null, barcode: row.barcode ?? null, unit: row.unit ?? 'each', priceMinor: row.priceMinor,
-        costMinor: row.costMinor ?? null, reorderPoint: row.reorderPoint ?? null, tags: row.tags ?? [], initialQuantity: 0,
+        costMinor: row.costMinor ?? null, reorderPoint: row.reorderPoint ?? null, taxRateBp: row.taxRateBp ?? null, tags: row.tags ?? [], initialQuantity: 0,
       }).body.product;
-      if (row.quantity) this.setImportedQuantity(c, made.id, row.quantity);
+      if (row.levels?.length) this.setImportedLevels(c, made.id, row.levels);
+      else if (row.quantity) this.setImportedQuantity(c, made.id, row.quantity);
       return { index, sku: row.sku, status: 'created', id: made.id };
     }
     if (mode === 'create') throw new Fail(409, 'duplicate_sku', `SKU ${row.sku} already exists. Choose "create or update" to change it.`);
@@ -1202,10 +1247,12 @@ export class InventoryDO extends DurableObject<Bindings> {
     if (row.unit !== undefined) patch.unit = row.unit;
     if (row.costMinor !== undefined) patch.costMinor = row.costMinor;
     if (row.reorderPoint !== undefined) patch.reorderPoint = row.reorderPoint;
+    if (row.taxRateBp !== undefined) patch.taxRateBp = row.taxRateBp;
     if (row.tags !== undefined) patch.tags = row.tags;
     const updated = this.doUpdate(c, existing.id, existing.version, patch).body.product;
     let changed = updated.version !== existing.version;
-    if (row.quantity !== undefined && this.setImportedQuantity(c, existing.id, row.quantity)) changed = true;
+    if (row.levels?.length) { if (this.setImportedLevels(c, existing.id, row.levels)) changed = true; }
+    else if (row.quantity !== undefined && this.setImportedQuantity(c, existing.id, row.quantity)) changed = true;
     return { index, sku: row.sku, status: changed ? 'updated' : 'unchanged', id: existing.id };
   }
 
@@ -1301,8 +1348,9 @@ export class InventoryDO extends DurableObject<Bindings> {
         const reserved = this.reserveUpTo(p.id, locationId, line.quantity);
         const lineMinor = line.quantity * p.price_minor;
         subtotal += lineMinor;
-        tax += lineTax(taxMode, taxRateBp, lineMinor);
-        this.run(`INSERT INTO order_lines(id, order_id, product_id, quantity, reserved, unit_price_minor, sku, name, open, tax_rate_bp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`, newId('oln'), id, p.id, line.quantity, reserved, p.price_minor, p.sku, p.name, taxMode === 'none' ? 0 : taxRateBp);
+        const rate = p.tax_rate_bp ?? taxRateBp; // the product's own rate, else the business's
+        tax += lineTax(taxMode, rate, lineMinor);
+        this.run(`INSERT INTO order_lines(id, order_id, product_id, quantity, reserved, unit_price_minor, sku, name, open, tax_rate_bp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`, newId('oln'), id, p.id, line.quantity, reserved, p.price_minor, p.sku, p.name, taxMode === 'none' ? 0 : rate);
         made.push({ quantity: line.quantity, reserved });
       }
       this.run(`UPDATE orders SET state = ?, subtotal_minor = ?, tax_minor = ?, total_minor = ? WHERE id = ?`, openState(input.paid, made), subtotal, tax, taxMode === 'exclusive' ? subtotal + tax : subtotal, id);
@@ -1577,6 +1625,12 @@ export class InventoryDO extends DurableObject<Bindings> {
     try { return ok({ order: this.poViews([this.poRow(id)])[0] }); } catch (e) { if (e instanceof Fail) return { ok: false, status: e.status, code: e.code, detail: e.detail }; throw e; }
   }
 
+  /** Open count tasks that are past their due date and have someone assigned. Titles and dates only. */
+  overdueCounts(): { id: string; title: string | null; assignedTo: string; dueAt: string }[] {
+    return this.all<Row>(`SELECT id, title, assigned_to, due_at FROM count_tasks WHERE state = 'open' AND assigned_to IS NOT NULL AND due_at IS NOT NULL AND due_at < ? ORDER BY due_at`, this.today())
+      .map((r) => ({ id: r.id as string, title: (r.title as string) ?? null, assignedTo: r.assigned_to as string, dueAt: r.due_at as string }));
+  }
+
   /** Exactly what a supplier may see of a purchase order: no internal ids, no staff, no other orders. */
   publicPo(id: string): Result<{ po: { number: string; state: PoState; expectedAt: string | null; note: string | null; supplierName: string; createdAt: string; confirmedAt: string | null; dispatchedAt: string | null; supplierNote: string | null; lines: { sku: string; name: string; quantity: number; received: number; unitCostMinor: number }[]; totalMinor: number } }> {
     const r = this.getPurchaseOrder(id);
@@ -1610,7 +1664,7 @@ export class InventoryDO extends DurableObject<Bindings> {
   /** Units ordered and not yet received, per product, across open purchase orders. */
   onOrder(): Record<string, number> {
     return Object.fromEntries(this.all<{ product_id: string; n: number }>(
-      `SELECT l.product_id, SUM(l.quantity - l.received) AS n FROM po_lines l JOIN purchase_orders po ON po.id = l.po_id WHERE po.state IN ('sent','partially_received') GROUP BY l.product_id`,
+      `SELECT l.product_id, SUM(MAX(l.quantity - l.received, 0)) AS n FROM po_lines l JOIN purchase_orders po ON po.id = l.po_id WHERE po.state IN ('sent','partially_received') GROUP BY l.product_id`,
     ).map((r) => [r.product_id, r.n]));
   }
 
@@ -1680,8 +1734,9 @@ export class InventoryDO extends DurableObject<Bindings> {
         seen.add(r.lineId);
         const line = this.one<Row>(`SELECT * FROM po_lines WHERE id = ? AND po_id = ?`, r.lineId, id);
         if (!line) throw new Fail(404, 'po_line_not_found', 'That line is not on this order.');
-        const left = (line.quantity as number) - (line.received as number);
-        if (r.quantity > left) throw new Fail(409, 'over_receipt', `Only ${left} more ${left === 1 ? 'is' : 'are'} expected on that line.`, { errors: [{ field: 'quantity', code: 'over_receipt' }] });
+        // Suppliers sometimes ship a little extra: up to 10% over the ordered quantity is accepted.
+        const left = Math.floor((line.quantity as number) * 1.1) - (line.received as number);
+        if (r.quantity > left) throw new Fail(409, 'over_receipt', `Only ${Math.max(left, 0)} more ${left === 1 ? 'is' : 'are'} accepted on that line (up to 10% over the order).`, { errors: [{ field: 'quantity', code: 'over_receipt' }] });
         const before = this.liveProduct(line.product_id as string);
         // Cost follows the latest purchase price; keep the value counters exact.
         this.run(`UPDATE products SET cost_minor = ? WHERE id = ?`, line.unit_cost_minor as number, before.id);
@@ -1978,6 +2033,25 @@ export class InventoryDO extends DurableObject<Bindings> {
            FROM products p WHERE p.deleted_at IS NULL AND p.reorder_point IS NOT NULL AND p.on_hand_total <= p.reorder_point ORDER BY p.on_hand_total ASC, p.name LIMIT 1000`, new Date(Date.parse(this.today()) - 29 * 86400_000).toISOString().slice(0, 10))
         .map((r) => ({ sku: r.sku, name: r.name, on_hand: r.on_hand, reorder_point: r.reorder_point, days_of_cover: Number(r.sold_recent) > 0 ? Math.floor(Number(r.on_hand) / (Number(r.sold_recent) / 30)) : null })) as Record<string, string | number | null>[];
       return { ...base, title: 'Low and out of stock', columns: [text('sku', 'SKU'), text('name', 'Product'), int('on_hand', 'On hand'), int('reorder_point', 'Reorder point'), int('days_of_cover', 'Days of cover')], rows, totals: null, note: 'Days of cover uses the last 30 days of sales. Blank means nothing sold.' };
+    }
+    if (name === 'staff-activity') {
+      // Who did what in the range. The actor column holds ids; the Worker swaps them for names.
+      const a = `${from}T00:00:00.000Z`;
+      const b = new Date(Date.parse(`${to}T00:00:00Z`) + 86400_000).toISOString();
+      const rows = this.all<Row>(
+        `WITH x AS (
+           SELECT actor, action, NULL AS reason, created_at FROM audit_log WHERE created_at >= ?1 AND created_at < ?2
+           UNION ALL SELECT actor, NULL, reason, created_at FROM stock_movements WHERE created_at >= ?1 AND created_at < ?2 AND actor NOT IN ('system', 'supplier')
+         )
+         SELECT actor,
+                SUM(action LIKE 'order.%') AS orders,
+                SUM(action LIKE 'product.%') AS products,
+                SUM(reason IS NOT NULL) AS stock_moves,
+                SUM(action LIKE 'po.%') AS purchasing,
+                SUM(action LIKE 'approval.%' OR action LIKE 'count_task.%') AS approvals_counts,
+                COUNT(*) AS total, MAX(created_at) AS last_at
+           FROM x GROUP BY actor ORDER BY total DESC LIMIT 200`, a, b) as Record<string, string | number | null>[];
+      return { ...base, title: 'Staff activity', columns: [text('who', 'Person'), int('orders', 'Order actions'), int('products', 'Product changes'), int('stock_moves', 'Stock movements'), int('purchasing', 'Purchasing'), int('approvals_counts', 'Approvals and counts'), int('total', 'Total'), text('last_at', 'Last action')], rows: rows.map((r) => ({ ...r, who: r.actor })), totals: sum(rows, ['orders', 'products', 'stock_moves', 'purchasing', 'approvals_counts', 'total']), note: 'Counts what each person did in the range, from the activity log and the stock ledger.' };
     }
     if (name === 'dead-stock') {
       const since = new Date(Date.parse(this.today()) - q.days * 86400_000).toISOString().slice(0, 10);

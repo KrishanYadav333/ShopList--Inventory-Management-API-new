@@ -33,7 +33,7 @@ describe('F13 purchasing', () => {
     expect((await stockLevel(p1.id))).toMatchObject({ onHand: 4, costMinor: 120 });
     expect((await call(admin.cookie, 'GET', `${admin.base}/purchase-orders`)).body.onOrder[p1.id]).toBe(6);
 
-    const over = await call(admin.cookie, 'POST', `${admin.base}/purchase-orders/${order.id}/receive`, { lines: [{ lineId: order.lines[0].id, quantity: 7 }] });
+    const over = await call(admin.cookie, 'POST', `${admin.base}/purchase-orders/${order.id}/receive`, { lines: [{ lineId: order.lines[0].id, quantity: 8 }] }); // 4 + 8 = 12 is past 10 ordered + 10%
     expect(over.status).toBe(409);
     expect(over.body.type).toContain('over-receipt');
 
@@ -148,5 +148,22 @@ describe('F14 reorder suggestions', () => {
   it('is for buyers only', async () => {
     const admin = await newOrg();
     for (const role of ['sales', 'stock', 'viewer', 'accountant'] as const) expect((await call((await addMember(admin, role)).cookie, 'GET', `${admin.base}/purchasing/reorder`)).status).toBe(403);
+  });
+
+  it('accepts up to 10% over the ordered quantity, never more, and on-order never goes negative', async () => {
+    const { admin, p1, po, stockLevel } = await setup();
+    const order = await po([{ productId: p1.id, quantity: 10, unitCostMinor: 120 }]);
+    await call(admin.cookie, 'POST', `${admin.base}/purchase-orders/${order.id}/send`, {});
+    const recv = (q: number) => call(admin.cookie, 'POST', `${admin.base}/purchase-orders/${order.id}/receive`, { lines: [{ lineId: order.lines[0].id, quantity: q }] });
+    const twelve = await recv(12);
+    expect(twelve.status).toBe(409);
+    expect(twelve.body.detail).toContain('up to 10% over');
+    const eleven = await recv(11);
+    expect(eleven.status).toBe(200);
+    expect(eleven.body.order.state).toBe('received');
+    expect(eleven.body.order.lines[0].received).toBe(11);
+    expect((await stockLevel(p1.id)).onHand).toBe(11);
+    expect((await call(admin.cookie, 'GET', `${admin.base}/purchase-orders`)).body.onOrder[p1.id] ?? 0).toBe(0);
+    expect((await recv(1)).status).toBe(409); // the order is complete
   });
 });

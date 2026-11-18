@@ -10,12 +10,12 @@ import { Modal } from './Modal';
 const LABELS: Record<string, string> = { sku: 'SKU', name: 'Name', description: 'Description', barcode: 'Barcode', unit: 'Unit', priceMinor: 'Price', costMinor: 'Cost', reorderPoint: 'Reorder point', tags: 'Tags' };
 
 interface FormState {
-  sku: string; name: string; barcode: string; unit: string; price: string; cost: string; reorder: string; tags: string; description: string; initial: string;
+  sku: string; name: string; barcode: string; unit: string; price: string; cost: string; reorder: string; tax: string; tags: string; description: string; initial: string;
 }
-const empty: FormState = { sku: '', name: '', barcode: '', unit: 'each', price: '', cost: '', reorder: '', tags: '', description: '', initial: '' };
+const empty: FormState = { sku: '', name: '', barcode: '', unit: 'each', price: '', cost: '', reorder: '', tax: '', tags: '', description: '', initial: '' };
 const fromProduct = (p: Product): FormState => ({
   sku: p.sku, name: p.name, barcode: p.barcode ?? '', unit: p.unit, price: fromMinor(p.priceMinor), cost: fromMinor(p.costMinor),
-  reorder: p.reorderPoint == null ? '' : String(p.reorderPoint), tags: p.tags.join(', '), description: p.description ?? '', initial: '',
+  reorder: p.reorderPoint == null ? '' : String(p.reorderPoint), tax: p.taxRateBp == null ? '' : String(p.taxRateBp / 100), tags: p.tags.join(', '), description: p.description ?? '', initial: '',
 });
 
 export function ProductDialog({ org, productId, onClose }: { org: OrgSummary; productId?: string; onClose: () => void }) {
@@ -45,6 +45,8 @@ function Form({ org, product, onClose }: { org: OrgSummary; product?: Product; o
     if (f.cost.trim() && cost === null) errs.cost = 'Enter a cost like 7.25';
     const reorder = f.reorder.trim() ? Number(f.reorder) : null;
     if (reorder !== null && (!Number.isInteger(reorder) || reorder < 0)) errs.reorder = 'Whole number, 0 or more';
+    const taxPct = f.tax.trim() ? Number(f.tax) : null;
+    if (taxPct !== null && (!Number.isFinite(taxPct) || taxPct < 0 || taxPct > 100)) errs.tax = 'A percentage from 0 to 100, or leave empty';
     const initial = f.initial.trim() ? Number(f.initial) : 0;
     if (!product && (!Number.isInteger(initial) || initial < 0)) errs.initial = 'Whole number, 0 or more';
     if (Object.keys(errs).length) return { errs, value: null };
@@ -52,7 +54,7 @@ function Form({ org, product, onClose }: { org: OrgSummary; product?: Product; o
       errs,
       value: {
         sku: f.sku.trim(), name: f.name.trim(), barcode: f.barcode.trim() || null, unit: f.unit.trim() || 'each', priceMinor: price!, costMinor: cost,
-        reorderPoint: reorder, description: f.description.trim() || null,
+        reorderPoint: reorder, taxRateBp: taxPct === null ? null : Math.round(taxPct * 100), description: f.description.trim() || null,
         tags: f.tags.split(',').map((t) => t.trim()).filter(Boolean),
         ...(product ? {} : { initialQuantity: initial }),
       },
@@ -75,7 +77,7 @@ function Form({ org, product, onClose }: { org: OrgSummary; product?: Product; o
     },
     onError: (e: ApiError) => {
       if (e.status === 412) return setConflict(e.current as Product);
-      if (e.errors.length) setFieldErrors(Object.fromEntries(e.errors.filter((x) => x.field).map((x) => [({ priceMinor: 'price', costMinor: 'cost', reorderPoint: 'reorder' } as Record<string, string>)[x.field!] ?? x.field!, e.message])));
+      if (e.errors.length) setFieldErrors(Object.fromEntries(e.errors.filter((x) => x.field).map((x) => [({ priceMinor: 'price', costMinor: 'cost', reorderPoint: 'reorder', taxRateBp: 'tax' } as Record<string, string>)[x.field!] ?? x.field!, e.message])));
       if (e.status !== 400 || !e.errors.length) toast({ kind: 'error', text: e.message });
     },
   });
@@ -124,6 +126,7 @@ function Form({ org, product, onClose }: { org: OrgSummary; product?: Product; o
           {field('price', `Price (${org.currency})`, { inputMode: 'decimal', placeholder: '0.00' })}
           {field('cost', `Cost (${org.currency}, optional)`, { inputMode: 'decimal', placeholder: '0.00' })}
           {field('reorder', 'Reorder point', { inputMode: 'numeric', placeholder: 'Alert when stock reaches…' })}
+          {field('tax', 'Tax rate (%) for this product', { inputMode: 'decimal', placeholder: 'Empty = business rate; 0 = no tax' })}
           {field('unit', 'Unit', { maxLength: 20 })}
           {!product && field('initial', 'Starting stock', { inputMode: 'numeric', placeholder: '0' })}
           {field('tags', 'Tags (comma separated)', {}, true)}

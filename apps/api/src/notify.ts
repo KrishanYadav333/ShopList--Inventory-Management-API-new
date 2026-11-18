@@ -3,7 +3,7 @@ import type { Bindings } from './env';
 import { sendMail, unsubscribeUrl, wantsEmail, type MailEnv } from './email';
 import { newId, nowIso } from './util';
 
-export const NOTIFICATION_KINDS = ['stock.low', 'stock.out', 'order.created', 'approval.requested', 'approval.decided', 'count.assigned', 'security.not_me', 'support.granted', 'po.supplier', 'usage.alert', 'backup.failed'] as const;
+export const NOTIFICATION_KINDS = ['stock.low', 'stock.out', 'order.created', 'approval.requested', 'approval.decided', 'count.assigned', 'security.not_me', 'support.granted', 'po.supplier', 'usage.alert', 'backup.failed', 'count.overdue'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 export const KIND_LABELS: Record<NotificationKind, string> = {
@@ -18,6 +18,7 @@ export const KIND_LABELS: Record<NotificationKind, string> = {
   'po.supplier': 'A supplier answers a purchase order',
   'usage.alert': 'The platform is close to a free-plan limit',
   'backup.failed': 'A nightly backup failed',
+  'count.overdue': 'A stock count assigned to me is overdue',
 };
 
 /** Which roles hear about which event by default. */
@@ -84,6 +85,12 @@ export async function notifyForEvent(env: MailEnv, orgId: string, type: string, 
     const who = String(data.assignedTo ?? '');
     const row = await env.DB.prepare(`SELECT 1 AS x FROM memberships m WHERE m.org_id = ? AND m.user_id = ? AND m.deactivated_at IS NULL AND NOT EXISTS (SELECT 1 FROM notification_prefs p WHERE p.user_id = m.user_id AND p.org_id = m.org_id AND p.kind = ? AND p.in_app = 0)`).bind(orgId, who, kind).first();
     if (row) await notify(env, orgId, [who], { kind, title: `Count assigned to you: ${data.title ?? 'stock count'}${data.dueAt ? ` (due ${data.dueAt})` : ''}`, link: `/o/${orgId}/counts` });
+    return;
+  }
+  if (kind === 'count.overdue') {
+    const who = String(data.assignedTo ?? '');
+    const row = await env.DB.prepare(`SELECT 1 AS x FROM memberships m WHERE m.org_id = ? AND m.user_id = ? AND m.deactivated_at IS NULL AND NOT EXISTS (SELECT 1 FROM notification_prefs p WHERE p.user_id = m.user_id AND p.org_id = m.org_id AND p.kind = ? AND p.in_app = 0)`).bind(orgId, who, kind).first();
+    if (row) await notify(env, orgId, [who], { kind, title: `Overdue: ${data.title ?? 'stock count'} was due ${data.dueAt}`, link: `/o/${orgId}/counts` });
     return;
   }
   if (kind === 'approval.decided') {

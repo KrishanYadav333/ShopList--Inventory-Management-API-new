@@ -66,6 +66,8 @@ const productFields = {
   priceMinor: money,
   costMinor: money.nullish(),
   reorderPoint: z.number().int().min(0).max(LIMITS.maxOnHand).nullish(),
+  /** This product's own tax rate in basis points. Empty means the business's rate. */
+  taxRateBp: z.number().int().min(0).max(10_000).nullish(),
   tags: z.array(text(40)).max(20),
 };
 
@@ -99,6 +101,7 @@ export interface Product {
   priceMinor: number;
   costMinor: number | null;
   reorderPoint: number | null;
+  taxRateBp: number | null;
   tags: string[];
   onHand: number;
   reserved: number;
@@ -193,10 +196,13 @@ export const importRow = z
     barcode: text(64).nullish(),
     unit: text(20).optional(),
     reorderPoint: z.number().int().min(0).max(LIMITS.maxOnHand).nullish(),
+    taxRateBp: z.number().int().min(0).max(10_000).nullish(),
     tags: z.array(text(40)).max(20).optional(),
     description: z.string().max(5000).nullish(),
     /** Desired on-hand quantity at the default location. */
     quantity: z.number().int().min(0).max(LIMITS.maxOnHand).optional(),
+    /** Desired on-hand quantity per location, by location code. Wins over `quantity`. */
+    levels: z.array(z.object({ location: text(20).transform((s) => s.toUpperCase()), quantity: z.number().int().min(0).max(LIMITS.maxOnHand) }).strict()).max(50).optional(),
   })
   .strict();
 export type ImportRow = z.infer<typeof importRow>;
@@ -442,7 +448,7 @@ export const SETTINGS_DEFAULTS: OrgSettings = {
 };
 
 // ---------------------------------------------------------------- reports
-export const REPORTS = ['sales', 'sales-by-product', 'valuation', 'movements', 'low-stock', 'dead-stock', 'shrinkage'] as const;
+export const REPORTS = ['sales', 'sales-by-product', 'valuation', 'movements', 'low-stock', 'dead-stock', 'shrinkage', 'staff-activity'] as const;
 export type ReportName = (typeof REPORTS)[number];
 export const REPORT_TITLES: Record<ReportName, string> = {
   sales: 'Sales by day',
@@ -452,6 +458,7 @@ export const REPORT_TITLES: Record<ReportName, string> = {
   'low-stock': 'Low and out of stock',
   'dead-stock': 'Dead stock (not selling)',
   shrinkage: 'Shrinkage and write-offs',
+  'staff-activity': 'Staff activity',
 };
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
 export const reportQuery = z.object({
@@ -616,6 +623,13 @@ export function parseBackup(raw: unknown): { ok: true; backup: ParsedBackup } | 
   if (f.version !== undefined && f.version !== BACKUP_VERSION) return { ok: false, error: 'This backup was made by a newer version of ShopList. Update ShopList, then try again.' };
   if (!Array.isArray(f.products)) return { ok: false, error: 'This file has no products in it.' };
   if (f.products.length > RESTORE_MAX_PRODUCTS) return { ok: false, error: `A backup can hold up to ${RESTORE_MAX_PRODUCTS.toLocaleString()} products.` };
+  // Per-location stock, when the backup has it: { sku, location, onHand }.
+  const stock = new Map<string, { location: string; quantity: number }[]>();
+  for (const s of Array.isArray(f.stock) ? f.stock : []) {
+    const o = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>;
+    if (typeof o.sku !== 'string' || typeof o.location !== 'string' || typeof o.onHand !== 'number') continue;
+    stock.set(o.sku, [...(stock.get(o.sku) ?? []), { location: o.location, quantity: Math.max(0, o.onHand) }]);
+  }
   const org = f.organization && typeof f.organization === 'object' ? (f.organization as Record<string, unknown>) : {};
   const rows: ImportRow[] = [];
   const skipped: { sku: string; reason: string }[] = [];
@@ -627,8 +641,9 @@ export function parseBackup(raw: unknown): { ok: true; backup: ParsedBackup } | 
     if (seen.has(sku)) { skipped.push({ sku, reason: 'The code appears twice in the file.' }); continue; }
     const parsed = importRow.safeParse({
       sku: o.sku, name: o.name, priceMinor: o.priceMinor, costMinor: o.costMinor ?? null, barcode: o.barcode ?? null, unit: o.unit ?? undefined,
-      reorderPoint: o.reorderPoint ?? null, tags: o.tags ?? undefined, description: o.description ?? null,
+      reorderPoint: o.reorderPoint ?? null, taxRateBp: o.taxRateBp ?? null, tags: o.tags ?? undefined, description: o.description ?? null,
       quantity: typeof o.onHand === 'number' ? Math.max(0, o.onHand) : undefined,
+      levels: stock.get(sku),
     });
     if (!parsed.success) { skipped.push({ sku, reason: parsed.error.issues[0]?.message ?? 'Not valid.' }); continue; }
     seen.add(sku);

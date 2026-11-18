@@ -77,7 +77,14 @@ export function SettingsPage() {
         cursor = page.nextCursor ?? undefined;
       } while (cursor);
       const locs = await api<{ data: unknown[] }>('GET', `/orgs/${org.id}/locations`);
-      const file = new Blob([JSON.stringify({ format: BACKUP_FORMAT, version: BACKUP_VERSION, exportedAt: new Date().toISOString(), organization: { id: org.id, name: org.name, currency: org.currency }, locations: locs.data, products }, null, 2)], { type: 'application/json' });
+      const stock: unknown[] = [];
+      let sc: string | undefined;
+      do {
+        const page = await api<{ data: unknown[]; nextCursor?: string | null }>('GET', `/orgs/${org.id}/stock/levels?limit=200${sc ? `&cursor=${encodeURIComponent(sc)}` : ''}`);
+        stock.push(...page.data);
+        sc = page.nextCursor ?? undefined;
+      } while (sc);
+      const file = new Blob([JSON.stringify({ format: BACKUP_FORMAT, version: BACKUP_VERSION, exportedAt: new Date().toISOString(), organization: { id: org.id, name: org.name, currency: org.currency }, locations: locs.data, stock, products }, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(file);
       a.download = `shoplist-backup-${org.name.replace(/[^\w-]+/g, '-')}-${new Date().toISOString().slice(0, 10)}.json`;

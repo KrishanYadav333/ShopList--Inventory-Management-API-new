@@ -31,7 +31,7 @@ export function ReportsPage() {
           <div className="settings-grid">
             <div className="field"><label htmlFor="r-name">Report</label>
               <select id="r-name" value={name} onChange={(e) => setName(e.target.value as ReportName)}>{REPORTS.map((n) => <option key={n} value={n}>{REPORT_TITLES[n]}</option>)}</select></div>
-            {(name === 'sales' || name === 'sales-by-product' || name === 'movements' || name === 'shrinkage') && <>
+            {(name === 'sales' || name === 'sales-by-product' || name === 'movements' || name === 'shrinkage' || name === 'staff-activity') && <>
               <div className="field"><label htmlFor="r-from">From</label><input id="r-from" type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} /></div>
               <div className="field"><label htmlFor="r-to">To</label><input id="r-to" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} /></div>
             </>}
