@@ -10,7 +10,7 @@ import { setSupport } from '../support';
 import { Announcements } from '../components/Announcements';
 import { useToast } from '../toast';
 
-interface Overview { users: number; disabledUsers: number; organizations: number; suspendedOrganizations: number; activeSessions: number; signin: 'open' | 'owner-only' | 'invite-only' }
+interface Overview { users: number; disabledUsers: number; organizations: number; suspendedOrganizations: number; deletingOrganizations: number; newOrganizations: number; activeSessions: number; attention: { kind: string; label: string; count: number; link: string; error?: boolean }[]; signin: 'open' | 'owner-only' | 'invite-only' }
 interface AdminOrg { id: string; name: string; slug: string; createdAt: string; deletedAt: string | null; suspendedAt: string | null; members: number; status: 'pending' | 'active' | 'suspended' | 'deleted' }
 interface AdminUser { id: string; email: string; name: string; createdAt: string; disabledAt: string | null; organizations: number; lastSeenAt: string | null }
 interface OrgDetail {
@@ -161,8 +161,20 @@ export function AdminPage() {
         {failed && <div className="banner banner-warn" role="alert">Could not load some data: {(failed.error as ApiError).message}</div>}
 
         {page === 'overview' && (
+        <section className="admin-section" aria-labelledby="h-attention">
+          <h2 id="h-attention">Needs attention</h2>
+          {!o ? <p className="hint">Loading…</p> : !o.attention.length ? <p className="hint" role="status">Nothing needs you right now. Backups, jobs, security and usage are all fine.</p> : (
+            <ul className="list" aria-label="Items that need attention">
+              {o.attention.map((a) => (
+                <li key={a.kind}><span>{a.error ? <span className="pill warn">unchecked</span> : null} {a.label}</span><NavLink className="btn btn-outline" to={a.link}>Open</NavLink></li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+      {page === 'overview' && (
         <section className="tiles" aria-label="Totals">
-          {[['Users', o?.users], ['Organizations', o?.organizations], ['Suspended orgs', o?.suspendedOrganizations], ['Disabled users', o?.disabledUsers], ['Active sessions', o?.activeSessions]].map(([label, n]) => (
+          {[['Businesses', o?.organizations], ['New in 30 days', o?.newOrganizations], ['Suspended', o?.suspendedOrganizations], ['Scheduled for deletion', o?.deletingOrganizations], ['People', o?.users], ['Disabled people', o?.disabledUsers], ['Active sessions', o?.activeSessions]].map(([label, n]) => (
             <div className="tile" key={label as string}><div className="num">{n ?? '–'}</div><div className="lbl">{label}</div></div>
           ))}
         </section>)}

@@ -1584,14 +1584,35 @@ async function platformAudit(c: Ctx, action: string, target: string | null, deta
 
 route('get', '/admin/overview', 'super', async (c) => {
   const now = nowIso();
+  const month = new Date(Date.now() - 30 * 86400_000).toISOString();
   const counts = await c.env.DB.prepare(
     `SELECT (SELECT COUNT(*) FROM users) AS users,
             (SELECT COUNT(*) FROM users WHERE disabled_at IS NOT NULL) AS disabledUsers,
             (SELECT COUNT(*) FROM organizations WHERE deleted_at IS NULL) AS organizations,
             (SELECT COUNT(*) FROM organizations WHERE deleted_at IS NULL AND suspended_at IS NOT NULL) AS suspendedOrganizations,
+            (SELECT COUNT(*) FROM organizations WHERE deleted_at IS NULL AND suspended_at IS NULL AND delete_after IS NOT NULL) AS deletingOrganizations,
+            (SELECT COUNT(*) FROM organizations WHERE deleted_at IS NULL AND created_at >= ?) AS newOrganizations,
             (SELECT COUNT(*) FROM sessions WHERE expires_at > ?) AS activeSessions`,
-  ).bind(now).first();
-  return c.json({ ...counts, signin: ({ 'admin-only': 'owner-only', invite: 'invite-only', open: 'open' } as const)[signinMode(c.env)] });
+  ).bind(month, now).first();
+
+  // What needs the owner. Each source is checked on its own, so one that cannot be read shows as such and the rest still appear.
+  type Item = { kind: string; label: string; count: number; link: string; error?: boolean };
+  const one = async (kind: string, link: string, label: (n: number) => string, q: () => Promise<number>): Promise<Item | null> => {
+    try { const n = await q(); return n > 0 ? { kind, link, count: n, label: label(n) } : null; }
+    catch { return { kind, link, count: 0, label: `Could not check: ${kind.replace(/_/g, ' ')}`, error: true }; }
+  };
+  const num = async (sql: string, ...b: (string | number)[]) => (await c.env.DB.prepare(sql).bind(...b).first<{ n: number }>())?.n ?? 0;
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const items = (await Promise.all([
+    one('backups', '/admin/operations', (n) => `${plural(n, 'business')} failed the last nightly backup`, () => num(`SELECT COUNT(*) AS n FROM backup_runs WHERE ok = 0 AND day = (SELECT MAX(day) FROM backup_runs)`)),
+    one('jobs', '/admin/operations', (n) => `${plural(n, 'housekeeping job')} failed or not running`, async () => (await jobStatuses(c.env)).filter((j) => j.state === 'failed' || j.state === 'not running').length),
+    one('alerts', '/admin/security', (n) => `${plural(n, 'open security alert')}`, () => num(`SELECT COUNT(*) AS n FROM security_alerts WHERE state IN ('open', 'investigating')`)),
+    one('at_risk', '/admin/operations', (n) => `${plural(n, 'business')} at risk`, () => num(`SELECT COUNT(*) AS n FROM org_health h JOIN organizations o ON o.id = h.org_id WHERE h.label = 'at_risk' AND o.deleted_at IS NULL AND o.suspended_at IS NULL AND o.delete_after IS NULL AND h.day = (SELECT MAX(day) FROM org_health WHERE org_id = h.org_id)`)),
+    one('usage', '/admin/operations', (n) => `${plural(n, 'free allowance')} over 70% today`, () => num(`SELECT COUNT(*) AS n FROM usage_alerts WHERE day = ? AND metric NOT LIKE 'job:%'`, now.slice(0, 10))),
+    one('support', '/admin/support', (n) => `${plural(n, 'support window')} open`, () => num(`SELECT COUNT(*) AS n FROM support_grants g JOIN organizations o ON o.id = g.org_id WHERE g.ended_at IS NULL AND g.expires_at > ? AND o.deleted_at IS NULL`, now)),
+    one('invitations', '/admin/businesses', (n) => `${plural(n, 'invitation')} expired without being accepted`, () => num(`SELECT COUNT(*) AS n FROM invitations i JOIN organizations o ON o.id = i.org_id WHERE i.accepted_at IS NULL AND i.expires_at < ? AND i.expires_at > ? AND o.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = i.org_id AND u.email = i.email)`, now, month)),
+  ])).filter((x): x is Item => !!x);
+  return c.json({ ...counts, signin: ({ 'admin-only': 'owner-only', invite: 'invite-only', open: 'open' } as const)[signinMode(c.env)], attention: items });
 });
 
 route('get', '/admin/orgs', 'super', async (c) => {
@@ -1778,22 +1799,27 @@ route('get', '/admin/health', 'super', async (c) => {
   return c.json({ data, weights: HEALTH_WEIGHTS });
 });
 
-// ------------------------------------------------------------------ system status (O4)
-/** Is the housekeeping really running? Last result of every job, recent failures, last backups, and today's email. */
-route('get', '/admin/status', 'super', async (c) => {
+/** Last result of every housekeeping job. A job is `not running` when it is overdue by more than a run or two. */
+async function jobStatuses(env: Bindings) {
   const now = Date.now();
   const since = new Date(now - 7 * 86400_000).toISOString();
-  const today = nowIso().slice(0, 10);
-  const jobs = await Promise.all(JOBS.map(async ({ job, every }) => {
+  return Promise.all(JOBS.map(async ({ job, every }) => {
     const [last, fails] = await Promise.all([
-      c.env.DB.prepare(`SELECT started_at AS at, ok, error, detail FROM cron_runs WHERE job = ? ORDER BY started_at DESC LIMIT 1`).bind(job).first<{ at: string; ok: number; error: string | null; detail: string | null }>(),
-      c.env.DB.prepare(`SELECT COUNT(*) AS n FROM cron_runs WHERE job = ? AND ok = 0 AND started_at >= ?`).bind(job, since).first<{ n: number }>(),
+      env.DB.prepare(`SELECT started_at AS at, ok, error, detail FROM cron_runs WHERE job = ? ORDER BY started_at DESC LIMIT 1`).bind(job).first<{ at: string; ok: number; error: string | null; detail: string | null }>(),
+      env.DB.prepare(`SELECT COUNT(*) AS n FROM cron_runs WHERE job = ? AND ok = 0 AND started_at >= ?`).bind(job, since).first<{ n: number }>(),
     ]);
     const limitH = every === 'hourly' ? 26 : 50;
     const ageH = last ? (now - Date.parse(last.at)) / 3600_000 : null;
     const state = !last ? 'no runs yet' : !last.ok ? 'failed' : ageH! > limitH ? 'not running' : 'ok';
     return { job, every, state, lastAt: last?.at ?? null, error: last?.error ?? null, detail: last?.detail ? (JSON.parse(last.detail) as unknown) : null, failures7d: fails?.n ?? 0 };
   }));
+}
+
+// ------------------------------------------------------------------ system status (O4)
+/** Is the housekeeping really running? Last result of every job, recent failures, last backups, and today's email. */
+route('get', '/admin/status', 'super', async (c) => {
+  const today = nowIso().slice(0, 10);
+  const jobs = await jobStatuses(c.env);
   const backup = await c.env.DB.prepare(`SELECT day, SUM(ok) AS ok, COUNT(*) - SUM(ok) AS failed FROM backup_runs GROUP BY day ORDER BY day DESC LIMIT 1`).first<{ day: string; ok: number; failed: number }>();
   const { results: mail } = await c.env.DB.prepare(`SELECT scope, n FROM email_counts WHERE day = ? AND scope IN ('_all', '_failed')`).bind(today).all<{ scope: string; n: number }>();
   return c.json({ jobs, lastBackup: backup ?? null, email: { sentToday: mail.find((m) => m.scope === '_all')?.n ?? 0, failedToday: mail.find((m) => m.scope === '_failed')?.n ?? 0, dailyCap: PLATFORM_DAILY_CAP, configured: !!c.env.BREVO_API_KEY }, healthUrl: `${c.env.APP_ORIGIN}/api/v1/health` });
