@@ -9,12 +9,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@clerk/react": "^6.18.8",
+    "@clerk/react": "^6.19.4",
     "@shoplist/shared": "*",
-    "@tanstack/react-query": "^5.107.1",
+    "@tanstack/react-query": "^5.108.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "react-router-dom": "^7.18.5"
+    "react-router-dom": "^7.18.6"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
